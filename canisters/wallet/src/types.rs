@@ -52,6 +52,154 @@ pub enum Chain {
     Evm(u64),
 }
 
+pub type AccountId = u32;
+pub type ActionId = u64;
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub enum Permission {
+    ReadAccounts,
+    ProposeTransfer,
+    SpendSubWallet(Chain),
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct Budget {
+    pub chain: Chain,
+    pub per_day: Nat,
+    pub total: Option<Nat>,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct TransferRequest {
+    pub from: AccountId,
+    pub to: String,
+    pub amount: Nat,
+    pub fee: Option<Nat>,
+    pub memo: Option<ByteBuf>,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub enum Action {
+    Transfer(TransferRequest),
+    AddMember {
+        id: Principal,
+        role: Role,
+        label: String,
+    },
+    RemoveMember(Principal),
+    ChangeRole {
+        id: Principal,
+        role: Role,
+    },
+    InstallExtension {
+        canister: Principal,
+        granted: Vec<Permission>,
+        budgets: Vec<Budget>,
+    },
+    UninstallExtension(Principal),
+    SetPolicy(Policy),
+    Upgrade {
+        version: String,
+        wasm_sha256: ByteBuf,
+    },
+}
+
+#[derive(CandidType, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ActionKind {
+    Transfer,
+    AddMember,
+    RemoveMember,
+    ChangeRole,
+    InstallExtension,
+    UninstallExtension,
+    SetPolicy,
+    Upgrade,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct DailyLimit {
+    pub chain: Chain,
+    pub amount: Nat,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct PolicyRule {
+    pub kind: ActionKind,
+    pub quorum: u8,
+    pub timelock_ns: u64,
+    pub daily_limits: Vec<DailyLimit>,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct Policy {
+    pub rules: Vec<PolicyRule>,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct TxReceipt {
+    pub account: AccountId,
+    pub chain: Chain,
+    pub tx_id: String,
+    pub at_ns: u64,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    Done,
+    Sent(TxReceipt),
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub enum ActionState {
+    Waiting,
+    Ready,
+    Executed(Outcome),
+    Rejected(Principal),
+    Expired,
+    Failed(String),
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct Pending {
+    pub id: ActionId,
+    pub action: Action,
+    pub proposed_by: Principal,
+    pub proposed_at_ns: u64,
+    pub approvals: Vec<Principal>,
+    pub quorum: u8,
+    pub executable_after_ns: u64,
+    pub expires_at_ns: u64,
+    pub state: ActionState,
+}
+
+impl Action {
+    pub fn kind(&self) -> ActionKind {
+        match self {
+            Action::Transfer(_) => ActionKind::Transfer,
+            Action::AddMember { .. } => ActionKind::AddMember,
+            Action::RemoveMember(_) => ActionKind::RemoveMember,
+            Action::ChangeRole { .. } => ActionKind::ChangeRole,
+            Action::InstallExtension { .. } => ActionKind::InstallExtension,
+            Action::UninstallExtension(_) => ActionKind::UninstallExtension,
+            Action::SetPolicy(_) => ActionKind::SetPolicy,
+            Action::Upgrade { .. } => ActionKind::Upgrade,
+        }
+    }
+}
+
+impl ActionKind {
+    pub const ALL: [ActionKind; 8] = [
+        ActionKind::Transfer,
+        ActionKind::AddMember,
+        ActionKind::RemoveMember,
+        ActionKind::ChangeRole,
+        ActionKind::InstallExtension,
+        ActionKind::UninstallExtension,
+        ActionKind::SetPolicy,
+        ActionKind::Upgrade,
+    ];
+}
+
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum WalletError {
     NotClaimed,

@@ -132,14 +132,33 @@ action that the policy module releases only after its quorum and timelock.
    yields the same principals.
 2. A new device or anchor signs in, is not a member yet, and calls
    `request_join` with a label. The wallet creates a pending `AddMember` action
-   and shows a short code on both screens.
+   that adds it as a viewer, open for an hour, and the page shows a short code
+   on both screens. At most eight join requests are open at once, counted
+   apart from the members' proposals.
 3. An owner checks the code and approves. Removing an owner needs the other
    owners' quorum and a timelock, so one stolen device cannot lock the others
    out.
 
+### Approve an action
+
+1. Owners propose and reject; owners and approvers approve and execute;
+   viewers only read. The proposer's approval counts toward the quorum.
+2. An action waits seven days for its quorum. Once it has it, the timelock of
+   its rule starts, and it can be executed from then until seven days after
+   the timelock ends. Past either window it is expired.
+3. The quorum and timelock are fixed when the action is proposed. An approval
+   stops counting while the action waits if its member is removed or becomes
+   a viewer.
+4. `execute` checks the action again against the current members and policy;
+   one that no longer fits ends `Failed` with the reason.
+5. No change may leave the wallet without an owner, or with fewer owners and
+   approvers than a rule's quorum. The `SetPolicy` rule needs at least the
+   quorum and timelock of every other rule, so changing the policy is never
+   the shortcut around a rule.
+
 ### Send a transfer
 
-1. A member calls `propose` with a `Transfer`. Under the daily limit the policy
+1. An owner calls `propose` with a `Transfer`. Under the daily limit the policy
    releases it at once; above it, the action waits for approvals and its
    timelock.
 2. Approvers call `approve` from their own devices; any owner can `reject`.
@@ -201,16 +220,20 @@ is never reused or renumbered, even after its store goes away; the audit log's
 | 1 | Policy | action kind to quorum, daily limit, timelock | `StableCell` | Kept; changed only by a `SetPolicy` action |
 | 2 | Members | principal to role, label, added at, added by | `StableBTreeMap` | Kept |
 | 3 | Accounts | account id to chain, label, derivation index, address | `StableBTreeMap` | Kept; addresses re-derivable from the path |
-| 4 | Pending actions | action id to action, approvals, earliest execution, state | `StableBTreeMap` | Kept; timelocks keep running |
+| 4 | Pending actions | action id to action, approvals, earliest execution, state; never deleted, so an id never names another action | `StableBTreeMap` | Kept; timelocks keep running |
 | 5 | Extensions | extension canister id to origin, permissions, budgets, spent this window | `StableBTreeMap` | Kept |
 | 6 | History | account id and sequence to transfer record | `StableBTreeMap` | Kept |
 | 7 and 8 | Audit log | sequence to entry | `StableLog` | Kept, append-only |
 | 9 | Upgrade state | idle, staged, installing or failed, with the expected hash | `StableCell` | Read first in `post_upgrade` |
+| 10 | Open actions | the ids of the pending actions still waiting or ready | `StableBTreeMap` | Kept |
 
 Every stored value is Candid with optional new fields, so a release can add
-fields without a migration. `post_upgrade` decodes every stored value before
+fields without a migration. A store a release adds is filled in by
+`post_upgrade` first: a wallet from before the policy store gets the default
+policy. `post_upgrade` then decodes every stored value before
 it returns, so a release that cannot read the state traps there and the IC
-keeps the running version. Pages are not state: they are embedded in the
+keeps the running version. CI installs the pull request's base, claims it and
+upgrades it to the change. Pages are not state: they are embedded in the
 Wasm, so they change only with a release. The heap holds only the
 certification tree, rebuilt from them in `post_upgrade`.
 
@@ -239,7 +262,7 @@ exists in canister memory, but whoever can install code can move every fund.
 | Claim link intercepted | Private key only in the fragment; one use; expiry; the signature names the caller | Whoever opens the link first owns the wallet |
 | Injected script or phishing on the wallet's page | Every byte certified; no third-party scripts; CSP `script-src 'self'`, `frame-src 'none'`, `frame-ancestors 'none'`; the UI is prerendered at build and ships inside the signed release, with no per-user data in HTML | Look-alike domains; the browser trusts the HTTP gateway to verify the page |
 | A malicious extension | Own canister and origin, never rendered by the firmware; own sub-wallet path and daily budget; signer window answers only registered origins; ICRC-21 consent for every call | Funds inside its own budget |
-| Strangers calling the wallet | Before the claim only `claim`, `status` and `http_request` answer; after it, also `whoami` and `request_join`. Every other method has a guard that rejects the call before its arguments are decoded unless the caller is a member (for `ext_request`, a registered extension) | Rejected update calls still cost the wallet cycles |
+| Strangers calling the wallet | Before the claim only `claim`, `status` and `http_request` answer; after it, also `whoami` and `request_join`. Every other method has a guard that rejects the call before its arguments are decoded unless the caller is a member (for `ext_request`, a registered extension) | Rejected update calls still cost the wallet cycles. Join requests are stored for good, but at most eight are open at once and each for an hour, so strangers add at most about 200 a day |
 | A dishonest replica answering a query | Every action and balance is an update call; pages are certified | Member lists and history read by query |
 | Node operators reading state | Keys are threshold keys held by the subnet; private notes and labels encrypted with vetKeys | Plaintext state stays readable without SEV |
 | Cycles running out | Long freezing threshold; low-balance banner and audit event; anyone can top up | A wallet nobody tops up is deleted |
@@ -250,8 +273,8 @@ exists in canister memory, but whoever can install code can move every fund.
 | Decision | Options | Recommendation |
 | --- | --- | --- |
 | Rescue path | None, fully self-owned; or a guardian canister that can only reinstall a signed release after a long timelock | None for v0, with upgrade tests as the gate |
-| Upgrade timelock | 48 hours; 7 days | 7 days for upgrades, 24 hours for removing an owner |
-| Default quorum | 1 while there is one owner; 2 once a second owner joins | Start at 1, prompt to raise it when a second owner joins |
+| Upgrade timelock | 48 hours; 7 days | 7 days for upgrades, 24 hours for removing an owner; the default policy uses this, with 24 hours for role changes and 7 days for `SetPolicy` |
+| Default quorum | 1 while there is one owner; 2 once a second owner joins | Start at 1, prompt to raise it when a second owner joins; the default policy starts at 1 |
 | Chains in v0 | ICP and ICRC only; add Bitcoin; add EVM | ICP, ICRC and Bitcoin; EVM in v1 |
 | Release signers | One maintainer key; 2 of 3 team keys; an SNS | 2 of 3 team keys |
 | Fee model | Owners top up cycles; a per-signature fee in tokens | Owners top up in v0 |

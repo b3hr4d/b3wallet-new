@@ -3,7 +3,7 @@
 //! PocketIC uses the server binary named by `POCKET_IC_BIN`.
 
 use candid::types::{FuncMode, TypeInner};
-use candid::{Principal, decode_one, encode_args, encode_one};
+use candid::{CandidType, Deserialize, Principal, decode_one, encode_args, encode_one};
 use candid_parser::utils::CandidSource;
 use ed25519_dalek::{Signer, SigningKey};
 use pocket_ic::{ErrorCode, PocketIc, RejectCode, RejectResponse};
@@ -11,8 +11,9 @@ use serde_bytes::ByteBuf;
 use std::path::Path;
 use std::time::Duration;
 use wallet::{
-    ClaimArgs, InitArgs, Member, NOT_A_MEMBER, NOT_CLAIMED, Role, Status, UpgradeState, WalletArg,
-    WalletError,
+    Action, ActionId, ActionState, ClaimArgs, InitArgs, Member, NOT_A_MEMBER, NOT_AN_APPROVER,
+    NOT_AN_OWNER, NOT_CLAIMED, Outcome, Pending, Policy, Role, Status, TransferRequest,
+    UpgradeState, WalletArg, WalletError,
 };
 
 const DAY_NS: u64 = 24 * 60 * 60 * 1_000_000_000;
@@ -469,7 +470,20 @@ fn before_the_claim_only_the_public_methods_answer() {
 
     for caller in [user(8), Principal::anonymous()] {
         let refused = methods_refused(&pic, id, caller, PUBLIC_BEFORE_CLAIM, NOT_CLAIMED);
-        assert_eq!(refused, ["members", "whoami"]);
+        assert_eq!(
+            refused,
+            [
+                "approve",
+                "execute",
+                "members",
+                "pending",
+                "policy",
+                "propose",
+                "reject",
+                "request_join",
+                "whoami"
+            ]
+        );
     }
 }
 
@@ -482,6 +496,440 @@ fn a_non_member_is_refused_by_every_method_for_members() {
 
     for caller in [user(8), Principal::anonymous()] {
         let refused = methods_refused(&pic, id, caller, PUBLIC_AFTER_CLAIM, NOT_A_MEMBER);
-        assert_eq!(refused, ["members"]);
+        assert_eq!(
+            refused,
+            [
+                "approve", "execute", "members", "pending", "policy", "propose", "reject"
+            ]
+        );
     }
+}
+
+// ---- Step 5: the policy and pending actions ----------------------------------
+
+const HOUR_NS: u64 = 60 * 60 * 1_000_000_000;
+
+fn update<R: CandidType + for<'de> Deserialize<'de>>(
+    pic: &PocketIc,
+    id: Principal,
+    caller: Principal,
+    method: &str,
+    arg: &impl CandidType,
+) -> R {
+    let reply = pic
+        .update_call(id, caller, method, encode_one(arg).unwrap())
+        .unwrap_or_else(|reject| panic!("{method} answers: {reject}"));
+    decode_one(&reply).unwrap()
+}
+
+fn query<R: CandidType + for<'de> Deserialize<'de>>(
+    pic: &PocketIc,
+    id: Principal,
+    caller: Principal,
+    method: &str,
+) -> R {
+    let reply = pic
+        .query_call(id, caller, method, encode_one(()).unwrap())
+        .unwrap_or_else(|reject| panic!("{method} answers: {reject}"));
+    decode_one(&reply).unwrap()
+}
+
+type PendingResult = Result<Pending, WalletError>;
+
+fn propose(pic: &PocketIc, id: Principal, caller: Principal, action: Action) -> PendingResult {
+    update(pic, id, caller, "propose", &action)
+}
+
+/// `approve`, `reject` or `execute`.
+fn act(
+    pic: &PocketIc,
+    id: Principal,
+    caller: Principal,
+    method: &str,
+    action: ActionId,
+) -> PendingResult {
+    update(pic, id, caller, method, &action)
+}
+
+fn pending(pic: &PocketIc, id: Principal, caller: Principal) -> Vec<Pending> {
+    query::<Result<Vec<Pending>, WalletError>>(pic, id, caller, "pending").unwrap()
+}
+
+fn policy(pic: &PocketIc, id: Principal, caller: Principal) -> Policy {
+    query::<Result<Policy, WalletError>>(pic, id, caller, "policy").unwrap()
+}
+
+/// A wallet claimed by `user(7)`.
+fn claimed_wallet(pic: &PocketIc) -> (Principal, Principal) {
+    let id = installed_wallet(pic);
+    let owner = user(7);
+    claim(pic, id, owner, claim_signature(id, owner)).unwrap();
+    (id, owner)
+}
+
+fn add_member_action(id: Principal, role: Role) -> Action {
+    Action::AddMember {
+        id,
+        role,
+        label: "device".to_string(),
+    }
+}
+
+/// Proposes and executes an action whose rule needs one approval and no
+/// timelock.
+fn run_at_once(pic: &PocketIc, id: Principal, owner: Principal, action: Action) {
+    let proposed = propose(pic, id, owner, action).unwrap();
+    assert_eq!(proposed.state, ActionState::Ready);
+    let executed = act(pic, id, owner, "execute", proposed.id).unwrap();
+    assert_eq!(executed.state, ActionState::Executed(Outcome::Done));
+}
+
+#[test]
+fn a_new_wallet_has_the_default_policy() {
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    let policy = policy(&pic, id, owner);
+    assert_eq!(policy.rules.len(), 8);
+    assert!(policy.rules.iter().all(|rule| rule.quorum == 1));
+    let timelock = |kind: &str| {
+        policy
+            .rules
+            .iter()
+            .find(|rule| format!("{:?}", rule.kind) == kind)
+            .unwrap()
+            .timelock_ns
+    };
+    assert_eq!(timelock("AddMember"), 0);
+    assert_eq!(timelock("RemoveMember"), 24 * HOUR_NS);
+    assert_eq!(timelock("SetPolicy"), 7 * DAY_NS);
+    assert_eq!(timelock("Upgrade"), 7 * DAY_NS);
+}
+
+#[test]
+fn an_owner_adds_a_member_at_once() {
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    let laptop = user(8);
+
+    let proposed = propose(&pic, id, owner, add_member_action(laptop, Role::Approver)).unwrap();
+    assert_eq!(proposed.id, 1);
+    assert_eq!(proposed.approvals, [owner]);
+    assert_eq!(proposed.state, ActionState::Ready);
+    assert_eq!(pending(&pic, id, owner), std::slice::from_ref(&proposed));
+
+    let executed = act(&pic, id, owner, "execute", proposed.id).unwrap();
+    assert_eq!(executed.state, ActionState::Executed(Outcome::Done));
+    let member = whoami(&pic, id, laptop).unwrap();
+    assert_eq!(member.role, Role::Approver);
+    assert_eq!(member.added_by, Some(owner));
+    assert_eq!(members(&pic, id, owner).unwrap().len(), 2);
+    assert_eq!(pending(&pic, id, owner), []);
+    assert!(matches!(
+        act(&pic, id, owner, "execute", proposed.id),
+        Err(WalletError::InvalidArgument(reason)) if reason == "action 1 is already executed"
+    ));
+}
+
+#[test]
+fn removing_a_member_waits_for_its_timelock_also_across_an_upgrade() {
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    let laptop = user(8);
+    run_at_once(&pic, id, owner, add_member_action(laptop, Role::Approver));
+
+    let proposed = propose(&pic, id, owner, Action::RemoveMember(laptop)).unwrap();
+    assert_eq!(proposed.state, ActionState::Ready);
+    assert_eq!(
+        proposed.executable_after_ns,
+        proposed.proposed_at_ns + 24 * HOUR_NS
+    );
+    assert_eq!(
+        act(&pic, id, owner, "execute", proposed.id),
+        Err(WalletError::TimelockActive {
+            executable_after_ns: proposed.executable_after_ns
+        })
+    );
+
+    upgrade(&pic, id, &WalletArg::Upgrade).unwrap();
+    assert_eq!(pending(&pic, id, owner), std::slice::from_ref(&proposed));
+    pic.advance_time(Duration::from_nanos(23 * HOUR_NS));
+    assert!(matches!(
+        act(&pic, id, owner, "execute", proposed.id),
+        Err(WalletError::TimelockActive { .. })
+    ));
+
+    pic.advance_time(Duration::from_nanos(HOUR_NS));
+    let executed = act(&pic, id, laptop, "execute", proposed.id).unwrap();
+    assert_eq!(executed.state, ActionState::Executed(Outcome::Done));
+    assert_eq!(whoami(&pic, id, laptop), None);
+}
+
+/// Raises every quorum to two, which needs a second member who can approve
+/// and the SetPolicy timelock of seven days. Returns that member.
+fn quorum_of_two(pic: &PocketIc, id: Principal, owner: Principal) -> Principal {
+    let approver = user(8);
+    run_at_once(pic, id, owner, add_member_action(approver, Role::Approver));
+    let mut policy = policy(pic, id, owner);
+    for rule in &mut policy.rules {
+        rule.quorum = 2;
+    }
+    let proposed = propose(pic, id, owner, Action::SetPolicy(policy.clone())).unwrap();
+    assert_eq!(proposed.state, ActionState::Ready);
+    pic.advance_time(Duration::from_nanos(7 * DAY_NS));
+    let executed = act(pic, id, owner, "execute", proposed.id).unwrap();
+    assert_eq!(executed.state, ActionState::Executed(Outcome::Done));
+    assert_eq!(self::policy(pic, id, owner), policy);
+    approver
+}
+
+#[test]
+fn an_action_waits_for_its_quorum_and_then_expires() {
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    let approver = quorum_of_two(&pic, id, owner);
+
+    let approved = propose(&pic, id, owner, add_member_action(user(9), Role::Viewer)).unwrap();
+    assert_eq!(approved.state, ActionState::Waiting);
+    assert_eq!(approved.executable_after_ns, 0);
+    assert_eq!(
+        act(&pic, id, owner, "execute", approved.id),
+        Err(WalletError::QuorumNotMet {
+            approvals: 1,
+            quorum: 2
+        })
+    );
+    let ready = act(&pic, id, approver, "approve", approved.id).unwrap();
+    assert_eq!(ready.state, ActionState::Ready);
+    assert_eq!(ready.approvals, [owner, approver]);
+    assert!(act(&pic, id, approver, "execute", approved.id).is_ok());
+
+    let left = propose(&pic, id, owner, add_member_action(user(10), Role::Viewer)).unwrap();
+    assert_eq!(pending(&pic, id, approver), std::slice::from_ref(&left));
+    pic.advance_time(Duration::from_nanos(7 * DAY_NS));
+    // Queries read the time of the last round.
+    pic.tick();
+    assert_eq!(pending(&pic, id, approver), []);
+    assert!(matches!(
+        act(&pic, id, approver, "approve", left.id),
+        Err(WalletError::InvalidArgument(reason)) if reason.ends_with("is already expired")
+    ));
+    assert_eq!(whoami(&pic, id, user(10)), None);
+}
+
+#[test]
+fn an_approval_stops_counting_when_its_member_is_removed() {
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    let approver = quorum_of_two(&pic, id, owner);
+    let second = user(9);
+    let added = propose(&pic, id, owner, add_member_action(second, Role::Approver)).unwrap();
+    act(&pic, id, approver, "approve", added.id).unwrap();
+    act(&pic, id, owner, "execute", added.id).unwrap();
+
+    // The approver backs one action, and the others remove the approver.
+    let backed = propose(&pic, id, owner, add_member_action(user(10), Role::Viewer)).unwrap();
+    let mut backed = act(&pic, id, approver, "approve", backed.id).unwrap();
+    assert_eq!(backed.state, ActionState::Ready);
+    let removal = propose(&pic, id, owner, Action::RemoveMember(approver)).unwrap();
+    act(&pic, id, second, "approve", removal.id).unwrap();
+    pic.advance_time(Duration::from_nanos(24 * HOUR_NS));
+
+    // A join request starts with no approvals, so the approver's is its only
+    // one.
+    let request = update::<PendingResult>(&pic, id, user(12), "request_join", &"phone").unwrap();
+    let request = act(&pic, id, approver, "approve", request.id).unwrap();
+    assert_eq!(request.approvals, [approver]);
+    assert_eq!(request.state, ActionState::Waiting);
+
+    act(&pic, id, owner, "execute", removal.id).unwrap();
+
+    // A ready action keeps the quorum it reached; a waiting one loses the
+    // removed approver's approval.
+    let open = pending(&pic, id, owner);
+    assert_eq!(open.len(), 2);
+    backed.expires_at_ns = open[0].expires_at_ns;
+    assert_eq!(open[0], backed);
+    assert_eq!(open[1].id, request.id);
+    assert_eq!(open[1].approvals, []);
+}
+
+#[test]
+fn a_join_request_becomes_a_viewer_once_approved() {
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    let phone = user(8);
+
+    let request: PendingResult = update(&pic, id, phone, "request_join", &"phone");
+    let request = request.unwrap();
+    assert_eq!(request.proposed_by, phone);
+    assert_eq!(request.approvals, []);
+    assert_eq!(request.state, ActionState::Waiting);
+    assert_eq!(request.expires_at_ns, request.proposed_at_ns + HOUR_NS);
+    assert_eq!(
+        request.action,
+        Action::AddMember {
+            id: phone,
+            role: Role::Viewer,
+            label: "phone".to_string()
+        }
+    );
+    let again: PendingResult = update(&pic, id, phone, "request_join", &"other");
+    assert_eq!(again.unwrap(), request);
+    assert_eq!(pending(&pic, id, owner), std::slice::from_ref(&request));
+
+    act(&pic, id, owner, "approve", request.id).unwrap();
+    act(&pic, id, owner, "execute", request.id).unwrap();
+    let member = whoami(&pic, id, phone).unwrap();
+    assert_eq!(member.role, Role::Viewer);
+    assert_eq!(member.added_by, Some(owner));
+    assert_eq!(member.label, "phone");
+}
+
+#[test]
+fn join_requests_are_refused_for_members_and_the_anonymous_principal_and_expire() {
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    for caller in [owner, Principal::anonymous()] {
+        let refused: PendingResult = update(&pic, id, caller, "request_join", &"x");
+        assert!(
+            matches!(refused, Err(WalletError::Forbidden(_))),
+            "{refused:?}"
+        );
+    }
+    let empty: PendingResult = update(&pic, id, user(8), "request_join", &" ");
+    assert!(matches!(empty, Err(WalletError::InvalidArgument(_))));
+
+    let request: PendingResult = update(&pic, id, user(8), "request_join", &"phone");
+    let request = request.unwrap();
+    pic.advance_time(Duration::from_nanos(HOUR_NS));
+    assert!(matches!(
+        act(&pic, id, owner, "approve", request.id),
+        Err(WalletError::InvalidArgument(reason)) if reason.ends_with("is already expired")
+    ));
+    // An expired request does not block a new one.
+    let renewed: PendingResult = update(&pic, id, user(8), "request_join", &"phone");
+    assert_ne!(renewed.unwrap().id, request.id);
+}
+
+#[test]
+fn at_most_eight_join_requests_are_open_at_once() {
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    for seed in 0..8 {
+        let request: PendingResult = update(&pic, id, user(100 + seed), "request_join", &"x");
+        assert!(request.is_ok());
+    }
+    let refused: PendingResult = update(&pic, id, user(120), "request_join", &"x");
+    assert!(matches!(refused, Err(WalletError::Forbidden(reason)) if reason.contains("at most 8")));
+    // Members' proposals are counted apart.
+    assert!(propose(&pic, id, owner, add_member_action(user(9), Role::Viewer)).is_ok());
+}
+
+#[test]
+fn an_owner_rejects_an_action() {
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    let laptop = user(8);
+    run_at_once(&pic, id, owner, add_member_action(laptop, Role::Owner));
+
+    let removal = propose(&pic, id, laptop, Action::RemoveMember(owner)).unwrap();
+    let rejected = act(&pic, id, owner, "reject", removal.id).unwrap();
+    assert_eq!(rejected.state, ActionState::Rejected(owner));
+    pic.advance_time(Duration::from_nanos(24 * HOUR_NS));
+    assert!(matches!(
+        act(&pic, id, laptop, "execute", removal.id),
+        Err(WalletError::InvalidArgument(reason)) if reason.ends_with("is already rejected")
+    ));
+    assert!(whoami(&pic, id, owner).is_some());
+}
+
+#[test]
+fn an_action_that_no_longer_fits_fails() {
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    let phone = user(8);
+    let request: PendingResult = update(&pic, id, phone, "request_join", &"phone");
+    let request = act(&pic, id, owner, "approve", request.unwrap().id).unwrap();
+    run_at_once(&pic, id, owner, add_member_action(phone, Role::Approver));
+
+    let failed = act(&pic, id, owner, "execute", request.id).unwrap();
+    assert!(
+        matches!(&failed.state, ActionState::Failed(reason) if reason.contains("already a member")),
+        "{failed:?}"
+    );
+    assert_eq!(whoami(&pic, id, phone).unwrap().role, Role::Approver);
+}
+
+#[test]
+fn the_last_owner_stays_and_unsupported_actions_are_refused() {
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    assert!(matches!(
+        propose(&pic, id, owner, Action::RemoveMember(owner)),
+        Err(WalletError::PolicyViolation(reason)) if reason.contains("at least one owner")
+    ));
+    let transfer = Action::Transfer(TransferRequest {
+        from: 0,
+        to: "someone".to_string(),
+        amount: 1u8.into(),
+        fee: None,
+        memo: None,
+    });
+    assert!(matches!(
+        propose(&pic, id, owner, transfer),
+        Err(WalletError::InvalidArgument(reason)) if reason.contains("cannot execute Transfer")
+    ));
+    assert_eq!(pending(&pic, id, owner), []);
+}
+
+#[test]
+fn each_role_is_refused_what_it_may_not_do() {
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    let (approver, viewer) = (user(8), user(9));
+    run_at_once(&pic, id, owner, add_member_action(approver, Role::Approver));
+    run_at_once(&pic, id, owner, add_member_action(viewer, Role::Viewer));
+
+    let refusals = [
+        (approver, "propose", NOT_AN_OWNER),
+        (approver, "reject", NOT_AN_OWNER),
+        (viewer, "propose", NOT_AN_OWNER),
+        (viewer, "reject", NOT_AN_OWNER),
+        (viewer, "approve", NOT_AN_APPROVER),
+        (viewer, "execute", NOT_AN_APPROVER),
+    ];
+    for (caller, method, refusal) in refusals {
+        let reject = call_without_arguments(&pic, id, caller, method, false).unwrap_err();
+        assert_eq!(reject.reject_code, RejectCode::CanisterReject, "{method}");
+        assert_eq!(reject.reject_message, refusal, "{method}");
+    }
+    // Viewers read.
+    assert_eq!(pending(&pic, id, viewer), []);
+    assert_eq!(policy(&pic, id, viewer), policy(&pic, id, owner));
+    assert_eq!(members(&pic, id, viewer).unwrap().len(), 3);
+}
+
+/// A wallet that the previous release installed and that its owner claimed
+/// upgrades to this one, keeps its owner, and runs this release's code. CI
+/// builds the previous release from the pull request's base commit (on
+/// `main`, from the commit before) and names it in `PREVIOUS_WALLET_WASM`.
+/// A change that leaves the Wasm as it was upgrades a wallet to itself.
+#[test]
+#[ignore = "needs PREVIOUS_WALLET_WASM, the previous release's Wasm, which CI builds"]
+fn a_wallet_from_the_previous_release_upgrades_to_this_one() {
+    let path = std::env::var("PREVIOUS_WALLET_WASM")
+        .expect("PREVIOUS_WALLET_WASM names the previous release's Wasm");
+    let previous = std::fs::read(&path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
+    let pic = PocketIc::new();
+    let id = empty_canister(&pic);
+    let arg = encode_one(WalletArg::Init(init_args(&pic))).unwrap();
+    pic.install_canister(id, previous, arg, None);
+    let owner = user(7);
+    claim(&pic, id, owner, claim_signature(id, owner)).unwrap();
+
+    upgrade(&pic, id, &WalletArg::Upgrade).unwrap();
+    assert!(status(&pic, id).claimed);
+    assert_eq!(whoami(&pic, id, owner).map(|m| m.role), Some(Role::Owner));
+    assert_eq!(members(&pic, id, owner).unwrap().len(), 1);
+    run_at_once(&pic, id, owner, add_member_action(user(8), Role::Viewer));
 }

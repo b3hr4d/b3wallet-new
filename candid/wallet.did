@@ -146,7 +146,8 @@ type PolicyRule = record {
   // Approvals needed, the proposer's included.
   quorum : nat8;
   timelock_ns : nat64;
-  // Transfers under these limits need only the proposer and no timelock.
+  // A transfer that keeps its chain's spending over the last 24 hours within
+  // these limits needs only the proposer and no timelock.
   daily_limits : vec DailyLimit;
 };
 
@@ -184,7 +185,10 @@ type Pending = record {
   proposed_at_ns : nat64;
   approvals : vec principal;
   quorum : nat8;
+  // Zero until the action has its quorum; then the end of its timelock.
   executable_after_ns : nat64;
+  // The end of the seven-day approval window (an hour for a join request);
+  // once the action has its quorum, seven days after its timelock ends.
   expires_at_ns : nat64;
   state : ActionState;
 };
@@ -346,7 +350,8 @@ service : (WalletArg) -> {
   claim : (ClaimArgs) -> (MemberResult);
   whoami : () -> (opt Member) query;
   members : () -> (MembersResult) query;
-  // A signed-in non-member asks to join; creates a pending AddMember action.
+  // A signed-in non-member asks to join; creates a pending AddMember action
+  // that adds the caller as a Viewer. Asking again returns the open request.
   request_join : (text) -> (PendingResult);
 
   // Accounts.

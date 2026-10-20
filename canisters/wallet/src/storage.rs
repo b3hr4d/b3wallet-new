@@ -6,7 +6,10 @@
 //! Stored values are Candid. A release may add a field to a stored record only
 //! as an `opt` field, so the values an earlier release wrote still decode.
 
-use crate::{InitArgs, Member, Role};
+use crate::actions::StoredPending;
+use crate::governance::Governance;
+use crate::policy::default_policy;
+use crate::{ActionId, ActionState, InitArgs, Member, Policy, Role};
 use candid::{CandidType, Principal, decode_one, encode_one};
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager, VirtualMemory};
 use ic_stable_structures::storable::Bound;
@@ -20,7 +23,10 @@ use std::cell::RefCell;
 type Memory = VirtualMemory<DefaultMemoryImpl>;
 
 const CONFIG_MEMORY: MemoryId = MemoryId::new(0);
+const POLICY_MEMORY: MemoryId = MemoryId::new(1);
 const MEMBERS_MEMORY: MemoryId = MemoryId::new(2);
+const PENDING_MEMORY: MemoryId = MemoryId::new(4);
+const OPEN_MEMORY: MemoryId = MemoryId::new(10);
 
 /// What the wallet was installed with.
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -97,7 +103,7 @@ macro_rules! candid_storable {
     )*};
 }
 
-candid_storable!(Config, StoredMember);
+candid_storable!(Config, Policy, StoredMember, StoredPending);
 
 fn to_candid<T: CandidType>(value: &T) -> Vec<u8> {
     encode_one(value).expect("a stored value encodes as Candid")
@@ -115,8 +121,19 @@ thread_local! {
     static CONFIG: RefCell<StableCell<Option<Config>, Memory>> =
         RefCell::new(StableCell::init(memory(CONFIG_MEMORY), None));
 
+    static POLICY: RefCell<StableCell<Option<Policy>, Memory>> =
+        RefCell::new(StableCell::init(memory(POLICY_MEMORY), None));
+
     static MEMBERS: RefCell<StableBTreeMap<Principal, StoredMember, Memory>> =
         RefCell::new(StableBTreeMap::init(memory(MEMBERS_MEMORY)));
+
+    static PENDING: RefCell<StableBTreeMap<ActionId, StoredPending, Memory>> =
+        RefCell::new(StableBTreeMap::init(memory(PENDING_MEMORY)));
+
+    /// The ids of the actions not yet executed, rejected, expired or failed,
+    /// so finding them never reads the whole history.
+    static OPEN: RefCell<StableBTreeMap<ActionId, (), Memory>> =
+        RefCell::new(StableBTreeMap::init(memory(OPEN_MEMORY)));
 }
 
 fn memory(id: MemoryId) -> Memory {
@@ -126,6 +143,17 @@ fn memory(id: MemoryId) -> Memory {
 /// Stores the configuration at install.
 pub fn set_config(config: Config) {
     CONFIG.with_borrow_mut(|cell| cell.set(Some(config)));
+}
+
+/// Stores the policy at install; afterwards only `save_governance` changes it.
+pub fn set_policy(policy: Policy) {
+    POLICY.with_borrow_mut(|cell| cell.set(Some(policy)));
+}
+
+pub fn policy() -> Policy {
+    POLICY
+        .with_borrow(|cell| cell.get().clone())
+        .expect("an installed wallet has a policy")
 }
 
 pub fn config() -> Option<Config> {
@@ -158,6 +186,84 @@ pub fn insert_member(id: Principal, member: StoredMember) {
     MEMBERS.with_borrow_mut(|members| members.insert(id, member));
 }
 
+/// The members and the policy, read into the heap. A wallet has at most
+/// `MAX_MEMBERS` members, so this stays small.
+pub fn governance() -> Governance {
+    Governance {
+        members: MEMBERS
+            .with_borrow(|members| members.iter().map(|entry| entry.into_pair()).collect()),
+        policy: policy(),
+    }
+}
+
+/// Writes back what an applied action changed.
+pub fn save_governance(governance: &Governance) {
+    MEMBERS.with_borrow_mut(|members| {
+        let gone: Vec<Principal> = members
+            .keys()
+            .filter(|id| !governance.members.contains_key(id))
+            .collect();
+        for id in gone {
+            members.remove(&id);
+        }
+        for (id, member) in &governance.members {
+            if members.get(id).as_ref() != Some(member) {
+                members.insert(*id, member.clone());
+            }
+        }
+    });
+    if policy() != governance.policy {
+        set_policy(governance.policy.clone());
+    }
+}
+
+/// Stores a new action under the next id. Ids start at 1 and only grow, and
+/// actions are never deleted, so an id never names another action.
+pub fn add_action(pending: StoredPending) -> ActionId {
+    let id = PENDING.with_borrow_mut(|actions| {
+        let id = actions.last_key_value().map_or(1, |(last, _)| last + 1);
+        actions.insert(id, pending);
+        id
+    });
+    OPEN.with_borrow_mut(|open| open.insert(id, ()));
+    id
+}
+
+pub fn action(id: ActionId) -> Option<StoredPending> {
+    PENDING.with_borrow(|actions| actions.get(&id))
+}
+
+pub fn set_action(id: ActionId, pending: StoredPending) {
+    let closed = !matches!(pending.state, ActionState::Waiting | ActionState::Ready);
+    PENDING.with_borrow_mut(|actions| actions.insert(id, pending));
+    if closed {
+        OPEN.with_borrow_mut(|open| open.remove(&id));
+    }
+}
+
+/// The actions open at `now`, oldest first.
+pub fn open_actions(now: u64) -> Vec<(ActionId, StoredPending)> {
+    let ids: Vec<ActionId> = OPEN.with_borrow(|open| open.keys().collect());
+    ids.into_iter()
+        .map(|id| (id, action(id).expect("an open id names a stored action")))
+        .filter(|(_, pending)| pending.is_open(now))
+        .collect()
+}
+
+/// Writes down the expiry of every action that expired by `now`, which also
+/// takes it out of the open ids. Run before adding an action, it keeps the
+/// open ids to the open actions and one more.
+pub fn close_expired(now: u64) {
+    let ids: Vec<ActionId> = OPEN.with_borrow(|open| open.keys().collect());
+    for id in ids {
+        let mut pending = action(id).expect("an open id names a stored action");
+        if !pending.is_open(now) {
+            pending.expire(now);
+            set_action(id, pending);
+        }
+    }
+}
+
 /// Adds the first owner and deletes the claim key, in the same message, so
 /// the claim cannot be used twice.
 pub fn complete_claim(owner: Principal, member: StoredMember) {
@@ -172,19 +278,39 @@ pub fn complete_claim(owner: Principal, member: StoredMember) {
     MEMBERS.with_borrow_mut(|members| members.insert(owner, member));
 }
 
+/// Fills in what an earlier release did not store, so its wallets can
+/// upgrade. Wallets from before step 5 have no policy and get the default
+/// one, which is the policy a new wallet starts with. A trap later in the
+/// upgrade rolls this back with the rest.
+pub fn migrate() {
+    if POLICY.with_borrow(|cell| cell.get().is_none()) {
+        set_policy(default_policy());
+    }
+}
+
 /// Decodes every stored value. `post_upgrade` calls it, so a release that
 /// cannot read the state fails its upgrade instead of a later call.
 pub fn check() -> Result<(), String> {
     if config().is_none() {
         return Err("stable memory holds no configuration".to_string());
     }
+    if POLICY.with_borrow(|cell| cell.get().is_none()) {
+        return Err("stable memory holds no policy".to_string());
+    }
     MEMBERS.with_borrow(|members| members.values().for_each(drop));
+    PENDING.with_borrow(|actions| actions.values().for_each(drop));
+    if let Some(id) = OPEN.with_borrow(|open| open.keys().find(|id| action(*id).is_none())) {
+        return Err(format!("open action {id} is not stored"));
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Action;
+    use crate::actions::APPROVAL_WINDOW_NS;
+    use crate::policy::Terms;
 
     fn config_value() -> Config {
         Config {
@@ -255,9 +381,31 @@ mod tests {
     }
 
     #[test]
+    fn check_fails_without_a_policy() {
+        set_config(config_value());
+        assert!(check().unwrap_err().contains("no policy"));
+    }
+
+    #[test]
+    fn the_migration_adds_the_default_policy_and_keeps_a_stored_one() {
+        set_config(config_value());
+        migrate();
+        assert_eq!(policy(), default_policy());
+        assert_eq!(check(), Ok(()));
+
+        let mut stricter = default_policy();
+        stricter.rules[0].timelock_ns = 1;
+        set_policy(stricter.clone());
+        migrate();
+        assert_eq!(policy(), stricter);
+    }
+
+    #[test]
     fn check_passes_once_configured_and_reads_the_members() {
         set_config(config_value());
+        set_policy(default_policy());
         insert_member(Principal::self_authenticating([3; 32]), stored_member());
+        add_action(action_at(5));
         assert_eq!(check(), Ok(()));
         assert_eq!(config(), Some(config_value()));
         assert!(is_claimed());
@@ -281,5 +429,85 @@ mod tests {
         ];
         expected.sort_by_key(|member| member.id);
         assert_eq!(members(), expected);
+    }
+
+    fn action_at(proposed_at_ns: u64) -> StoredPending {
+        StoredPending::new(
+            Action::RemoveMember(Principal::self_authenticating([3; 32])),
+            Principal::self_authenticating([3; 32]),
+            vec![],
+            Terms {
+                quorum: 1,
+                timelock_ns: 0,
+            },
+            APPROVAL_WINDOW_NS,
+            proposed_at_ns,
+        )
+    }
+
+    #[test]
+    fn action_ids_start_at_one_and_grow() {
+        assert_eq!(add_action(action_at(1)), 1);
+        assert_eq!(add_action(action_at(2)), 2);
+        assert_eq!(action(2), Some(action_at(2)));
+        assert_eq!(action(3), None);
+    }
+
+    #[test]
+    fn open_actions_are_the_waiting_and_ready_ones_not_yet_expired() {
+        let now = 30 * APPROVAL_WINDOW_NS;
+        let expired = add_action(action_at(now - APPROVAL_WINDOW_NS));
+        let open = add_action(action_at(now - 1));
+        let rejected = add_action(action_at(now));
+        let mut closed = action_at(now);
+        closed.state = ActionState::Rejected(Principal::anonymous());
+        set_action(rejected, closed);
+        let newest = add_action(action_at(now));
+
+        let ids = |open: Vec<(ActionId, StoredPending)>| -> Vec<ActionId> {
+            open.into_iter().map(|(id, _)| id).collect()
+        };
+        assert_eq!(ids(open_actions(now)), [open, newest]);
+        assert_eq!(OPEN.with_borrow(|open| open.len()), 3);
+
+        close_expired(now);
+        assert_eq!(action(expired).unwrap().state, ActionState::Expired);
+        assert_eq!(
+            OPEN.with_borrow(|open| open.keys().collect::<Vec<_>>()),
+            [open, newest]
+        );
+        assert_eq!(ids(open_actions(now)), [open, newest]);
+    }
+
+    #[test]
+    fn check_fails_when_an_open_id_has_no_action() {
+        set_config(config_value());
+        set_policy(default_policy());
+        OPEN.with_borrow_mut(|open| open.insert(3, ()));
+        assert_eq!(check(), Err("open action 3 is not stored".to_string()));
+    }
+
+    #[test]
+    fn saving_governance_writes_members_and_policy() {
+        let (kept, removed, added) = (
+            Principal::self_authenticating([3; 32]),
+            Principal::self_authenticating([4; 32]),
+            Principal::self_authenticating([5; 32]),
+        );
+        set_policy(default_policy());
+        insert_member(kept, stored_member());
+        insert_member(removed, stored_member());
+
+        let mut governance = governance();
+        governance.members.remove(&removed);
+        governance.members.insert(added, stored_member());
+        governance.policy.rules[0].quorum = 2;
+        save_governance(&governance);
+
+        assert_eq!(member(removed), None);
+        assert_eq!(member(added), Some(stored_member()));
+        assert_eq!(member(kept), Some(stored_member()));
+        assert_eq!(policy(), governance.policy);
+        assert_eq!(super::governance(), governance);
     }
 }
