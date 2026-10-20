@@ -10,6 +10,8 @@ publish = false
 [workspace.dependencies]
 candid = "=0.10.38"
 candid_parser = "=0.4.1"
+# The wallet only verifies: no precomputed tables, no randomness.
+ed25519-dalek = { version = "=2.2.0", default-features = false }
 ic-cdk = "=0.20.3"
 ic-stable-structures = "=0.7.2"
 pocket-ic = "=16.1.0"

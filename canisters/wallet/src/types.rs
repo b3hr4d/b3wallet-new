@@ -1,12 +1,10 @@
 //! Rust mirrors of the types in `candid/wallet.did` that the implemented
 //! methods use. The interface test checks them against that file.
 
+use crate::ed25519;
 use candid::{CandidType, Nat, Principal};
 use serde::Deserialize;
 use serde_bytes::ByteBuf;
-
-/// Length of an Ed25519 public key, the claim key and each release signer key.
-pub const ED25519_PUBLIC_KEY_LEN: usize = 32;
 
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct InitArgs {
@@ -23,6 +21,55 @@ pub enum Role {
     Owner,
     Approver,
     Viewer,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct Member {
+    pub id: Principal,
+    pub role: Role,
+    pub label: String,
+    pub added_at_ns: u64,
+    pub added_by: Option<Principal>,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ClaimArgs {
+    pub signature: ByteBuf,
+}
+
+#[derive(CandidType, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BitcoinNetwork {
+    Mainnet,
+    Testnet,
+    Regtest,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub enum Chain {
+    Icp,
+    Icrc(Principal),
+    Bitcoin(BitcoinNetwork),
+    Evm(u64),
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub enum WalletError {
+    NotClaimed,
+    AlreadyClaimed,
+    ClaimExpired,
+    BadSignature,
+    NotAMember,
+    Forbidden(String),
+    NotFound(String),
+    InvalidArgument(String),
+    PolicyViolation(String),
+    BudgetExceeded { chain: Chain, remaining: Nat },
+    TimelockActive { executable_after_ns: u64 },
+    QuorumNotMet { approvals: u8, quorum: u8 },
+    UpgradeInProgress,
+    ReleaseRejected(String),
+    ChainError(String),
+    InsufficientCycles,
 }
 
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -66,11 +113,8 @@ impl InitArgs {
     /// Checks the install arguments before anything is stored. `now_ns` is the
     /// IC time at install.
     pub fn validate(&self, now_ns: u64) -> Result<(), String> {
-        if self.claim_public_key.len() != ED25519_PUBLIC_KEY_LEN {
-            return Err(format!(
-                "claim_public_key must be {ED25519_PUBLIC_KEY_LEN} bytes, got {}",
-                self.claim_public_key.len()
-            ));
+        if ed25519::public_key(&self.claim_public_key).is_none() {
+            return Err("claim_public_key must be an Ed25519 public key".to_string());
         }
         if self.claim_expires_at_ns <= now_ns {
             return Err("claim_expires_at_ns must be in the future".to_string());
@@ -79,14 +123,13 @@ impl InitArgs {
         if self.release_channel.as_slice().last() != Some(&0x01) {
             return Err("release_channel must be a canister id".to_string());
         }
-        if let Some(key) = self
+        if let Some(index) = self
             .release_signers
             .iter()
-            .find(|key| key.len() != ED25519_PUBLIC_KEY_LEN)
+            .position(|key| ed25519::public_key(key).is_none())
         {
             return Err(format!(
-                "every release signer key must be {ED25519_PUBLIC_KEY_LEN} bytes, got {}",
-                key.len()
+                "release signer key {index} must be an Ed25519 public key"
             ));
         }
         let mut signers: Vec<&[u8]> = self.release_signers.iter().map(|k| k.as_slice()).collect();
@@ -108,15 +151,22 @@ impl InitArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ed25519::tests::NOT_A_POINT;
+    use ed25519_dalek::SigningKey;
 
     const NOW: u64 = 1_000;
 
+    fn key(seed: u8) -> ByteBuf {
+        let key = SigningKey::from_bytes(&[seed; 32]).verifying_key();
+        ByteBuf::from(key.to_bytes().to_vec())
+    }
+
     fn valid() -> InitArgs {
         InitArgs {
-            claim_public_key: ByteBuf::from(vec![1; 32]),
+            claim_public_key: key(1),
             claim_expires_at_ns: NOW + 1,
             release_channel: Principal::from_slice(&[0, 0, 0, 0, 0, 0, 0, 1, 1, 1]),
-            release_signers: vec![ByteBuf::from(vec![2; 32]), ByteBuf::from(vec![3; 32])],
+            release_signers: vec![key(2), key(3)],
             release_threshold: 2,
             factory: None,
         }
@@ -128,12 +178,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_short_claim_key() {
-        let args = InitArgs {
-            claim_public_key: ByteBuf::from(vec![1; 31]),
-            ..valid()
-        };
-        assert!(args.validate(NOW).unwrap_err().contains("claim_public_key"));
+    fn rejects_a_claim_key_that_is_not_an_ed25519_key() {
+        for claim_public_key in [vec![1; 31], NOT_A_POINT.to_vec()] {
+            let args = InitArgs {
+                claim_public_key: ByteBuf::from(claim_public_key),
+                ..valid()
+            };
+            assert!(args.validate(NOW).unwrap_err().contains("claim_public_key"));
+        }
     }
 
     #[test]
@@ -163,17 +215,19 @@ mod tests {
 
     #[test]
     fn rejects_a_malformed_signer_key() {
-        let args = InitArgs {
-            release_signers: vec![ByteBuf::from(vec![2; 32]), ByteBuf::from(vec![3; 33])],
-            ..valid()
-        };
-        assert!(args.validate(NOW).unwrap_err().contains("signer key"));
+        for bad in [vec![3; 33], NOT_A_POINT.to_vec()] {
+            let args = InitArgs {
+                release_signers: vec![key(2), ByteBuf::from(bad)],
+                ..valid()
+            };
+            assert!(args.validate(NOW).unwrap_err().contains("signer key 1"));
+        }
     }
 
     #[test]
     fn rejects_a_repeated_signer_key() {
         let args = InitArgs {
-            release_signers: vec![ByteBuf::from(vec![2; 32]), ByteBuf::from(vec![2; 32])],
+            release_signers: vec![key(2), key(2)],
             release_threshold: 1,
             ..valid()
         };

@@ -1,15 +1,19 @@
 //! Firmware of a self-owned chain-key wallet canister.
 //!
-//! Steps 1 and 2 of `docs/plan-v0.md`: the install arguments, `status`, and
-//! state in stable memory. The interface test lists the methods of
+//! Steps 1 to 3 of `docs/plan-v0.md`: the install arguments, `status`, state
+//! in stable memory, and the claim. The interface test lists the methods of
 //! `candid/wallet.did` not implemented yet.
 
+mod claim;
+mod ed25519;
 mod storage;
 mod types;
 
+pub use claim::message as claim_message;
 pub use types::*;
 
 use candid::Nat;
+use storage::StoredMember;
 
 #[ic_cdk::init]
 fn init(arg: WalletArg) {
@@ -32,6 +36,38 @@ fn post_upgrade(arg: WalletArg) {
     if let Err(reason) = storage::check() {
         ic_cdk::trap(format!("the upgrade cannot read the state: {reason}"));
     }
+}
+
+/// Makes the caller the first owner. See `claim::check` for what it refuses.
+#[ic_cdk::update]
+fn claim(args: ClaimArgs) -> Result<Member, WalletError> {
+    let caller = ic_cdk::api::msg_caller();
+    let now = ic_cdk::api::time();
+    let Some(config) = storage::config() else {
+        ic_cdk::trap("the wallet has no configuration");
+    };
+    claim::check(
+        config.claim.as_ref(),
+        storage::is_claimed(),
+        ic_cdk::api::canister_self(),
+        caller,
+        now,
+        &args.signature,
+    )?;
+    let member = StoredMember {
+        role: Role::Owner,
+        label: "first owner".to_string(),
+        added_at_ns: now,
+        added_by: None,
+    };
+    storage::complete_claim(caller, member.clone());
+    Ok(Member {
+        id: caller,
+        role: member.role,
+        label: member.label,
+        added_at_ns: member.added_at_ns,
+        added_by: member.added_by,
+    })
 }
 
 #[ic_cdk::query]
