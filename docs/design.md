@@ -16,14 +16,22 @@ On a local network (icp-cli 1.2.0, ic-cdk 0.20.3), 2026-10-19 and 2026-10-20:
   per KB of HTML.
 - Pages rendered in an update call and certified with `ic-http-certification`
   4.0.0 pass the verifying gateway; serving one costs 3.6M to 4.1M instructions.
+- QuickJS (quickjs-ng 0.16.2, through `rquickjs` 0.14.0) renders the same page,
+  also byte-identical, at about 9M instructions per KB of HTML, in a Wasm of
+  595 KB gzipped.
 - A canister can make itself its only controller, which locks out the deployer.
 - A self `install_code` sent one-way upgrades cleanly from v1 to v2 to v3. An
   awaited one lands but traps on the reply (IC0502).
 - Threshold ECDSA keys per derivation path work, and their signatures verify
   offline.
 
-Not proved yet: a chunked self-upgrade for a Wasm over the 2 MB message limit
-(the React page canister is 2.3 MB gzipped), and cycle costs on mainnet.
+Not proved yet: a chunked self-upgrade for a Wasm over the 2 MB message limit,
+and cycle costs on mainnet.
+
+The wallet itself runs no JavaScript: its pages are prerendered at build and
+embedded in the release ([decision 0001](decisions/0001-react-rendering.md)).
+The rendering results above apply to public pages served by a separate
+canister.
 
 ## Architecture
 
@@ -80,7 +88,7 @@ change code, and they act only on actions the policy module released.
 
 | Module | What it owns | Calls out to |
 | --- | --- | --- |
-| HTTP and pages | `http_request` from the certified store; re-renders and re-certifies the pages a write touches; CSP and frame headers | Certification tree, `certified_data_set` |
+| HTTP and pages | `http_request` for the prerendered pages and browser bundle embedded in the release, certified in `init` and `post_upgrade`; the certified 404; CSP and frame headers | Certification tree, `certified_data_set` |
 | Claim and members | One-time claim with the claim key; members with roles Owner, Approver, Viewer; the check that the caller is a member | None |
 | Policy and approvals | Rules per action kind: quorum, daily limits, timelocks; the pending-action queue | Members |
 | Signer | Addresses and signatures by derivation path: threshold ECDSA (secp256k1) for Bitcoin and EVM, threshold Schnorr later | Management canister |
@@ -89,7 +97,7 @@ change code, and they act only on actions the policy module released.
 | Upgrade gate | Verifies a release manifest, stages its chunks in the canister's own chunk store, enforces approval and timelock, installs one-way, checks the module hash afterwards | Release channel, management canister |
 | Cycles | Balance, freezing threshold, low-balance warning, top-ups | Cycles minting canister |
 | Audit log | Append-only record of every privileged action | None |
-| Stable storage | All state in stable structures; the certification tree is rebuilt from stored pages in `post_upgrade` | None |
+| Stable storage | All state in stable structures; the certification tree is rebuilt from the embedded pages in `post_upgrade` | None |
 
 ## Key flows
 
@@ -139,7 +147,8 @@ action that the policy module releases only after its quorum and timelock.
    ledger call from the wallet's own subaccount. Bitcoin and EVM transactions
    are signed with threshold ECDSA on path `wallet / chain / index` and sent
    through the Bitcoin canister or the EVM RPC canister.
-4. The wallet re-renders and re-certifies the account's page and history.
+4. The page shows the new balance and history from calls the agent verifies;
+   the canister renders nothing.
 
 ### Install and use an extension
 
@@ -194,12 +203,12 @@ All state lives in stable memory, one virtual memory per store
 | Extensions | extension canister id to origin, permissions, budgets, spent this window | `StableBTreeMap` | Kept |
 | History | account id and sequence to transfer record | `StableBTreeMap` | Kept |
 | Audit log | sequence to entry | `StableLog` | Kept, append-only |
-| Pages | path to certified status, headers and body | `StableBTreeMap` | Kept; the certification tree is rebuilt by hashing |
 | Upgrade state | idle, staged, installing or failed, with the expected hash | `StableCell` | Read first in `post_upgrade` |
 
 Every stored value is Candid with optional new fields, so a release can add
-fields without a migration. The heap holds only caches: the JavaScript engine
-with the page bundle, re-created in `post_upgrade`, and the certification tree.
+fields without a migration. Pages are not state: they are embedded in the
+Wasm, so they change only with a release. The heap holds only the
+certification tree, rebuilt from them in `post_upgrade`.
 
 ## Schema
 
@@ -224,7 +233,7 @@ exists in canister memory, but whoever can install code can move every fund.
 | An upgrade that bricks the wallet | One-way install keeps the old code when `post_upgrade` traps; `tested_from` refuses untested paths; every release is tested over the last two versions | No rescue if a release breaks its own upgrade method |
 | One owner's device or anchor stolen | Quorum and timelock above the daily limit; any owner can reject; removing an owner needs the others | Losses up to the daily limit |
 | Claim link intercepted | Private key only in the fragment; one use; expiry; the signature names the caller | Whoever opens the link first owns the wallet |
-| Injected script or phishing on the wallet's page | Every byte certified; no third-party scripts; CSP `script-src 'self'`, `frame-src 'none'`, `frame-ancestors 'none'`; the UI ships inside the signed release | Look-alike domains |
+| Injected script or phishing on the wallet's page | Every byte certified; no third-party scripts; CSP `script-src 'self'`, `frame-src 'none'`, `frame-ancestors 'none'`; the UI is prerendered at build and ships inside the signed release, with no per-user data in HTML | Look-alike domains; the browser trusts the HTTP gateway to verify the page |
 | A malicious extension | Own canister and origin, never rendered by the firmware; own sub-wallet path and daily budget; signer window answers only registered origins; ICRC-21 consent for every call | Funds inside its own budget |
 | A dishonest replica answering a query | Every action and balance is an update call; pages are certified | Member lists and history read by query |
 | Node operators reading state | Keys are threshold keys held by the subnet; private notes and labels encrypted with vetKeys | Plaintext state stays readable without SEV |
@@ -241,7 +250,6 @@ exists in canister memory, but whoever can install code can move every fund.
 | Chains in v0 | ICP and ICRC only; add Bitcoin; add EVM | ICP, ICRC and Bitcoin; EVM in v1 |
 | Release signers | One maintainer key; 2 of 3 team keys; an SNS | 2 of 3 team keys |
 | Fee model | Owners top up cycles; a per-signature fee in tokens | Owners top up in v0 |
-| JS engine for pages | Boa (measured); QuickJS (not tried) | Boa for v0, benchmark QuickJS |
 | Custom domains | `icp0.io` only; custom domains as aliases | `icp0.io` only in v0 |
 
 ## Milestones
@@ -251,4 +259,4 @@ exists in canister memory, but whoever can install code can move every fund.
 | v0 | One owner on mainnet: factory, claim link, II sign-in; ICP, ICRC and Bitcoin accounts; transfers; certified pages; signed releases by chunked self-upgrade | Chunked self-upgrade passes from v(n) to v(n+2) on mainnet; cycle costs measured |
 | v1 | Shared wallet: several principals, join requests, quorum and timelocks per action; audit log; EVM accounts | An external review of the policy module and the upgrade gate |
 | v2 | Extensions: registry, sub-wallet keys, daily budgets, `ext_request`; signer window over ICRC-25 and ICRC-29 with ICRC-21 consent | Adversarial tests show no extension can spend past its budget |
-| v3 | Framework: render on write and the firmware core published for any self-owned app; vetKeys for private data; custom domains as aliases | None |
+| v3 | Framework: the firmware core published for any self-owned app; render on write for public pages, in a separate canister on its own origin; vetKeys for private data; custom domains as aliases | None |

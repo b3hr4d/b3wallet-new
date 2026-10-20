@@ -295,8 +295,9 @@ type HttpRequest = record {
   certificate_version : opt nat16;
 };
 
-// Every response is certified (response verification v2); pages are rendered
-// and certified in update calls, never per request.
+// Every response is certified (response verification v2). Pages are
+// prerendered at build, embedded in the release and certified at install and
+// upgrade, never per request.
 type HttpResponse = record {
   status_code : nat16;
   headers : vec HeaderField;

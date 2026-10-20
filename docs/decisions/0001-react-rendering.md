@@ -1,8 +1,8 @@
 # 0001: How the wallet renders React
 
-Status: proposed, 2026-10-20.
+Status: accepted, 2026-10-20. Behrad chose option A.
 
-**Recommendation: prerender the React pages at build time, embed them and the
+**Decision: prerender the React pages at build time, embed them and the
 browser bundle in the signed release, serve them certified, and render every
 private value in the browser from verified canister calls. No JavaScript
 engine runs inside the wallet canister.**
@@ -31,22 +31,30 @@ user is.
 ## Options compared
 
 Measured numbers come from the local-network spikes of 2026-10-19 and
-2026-10-20 (icp-cli 1.2.0, ic-cdk 0.20.3, React 19.2.0, esbuild 0.25.10). The
-50-note page is the spike's test page, about 11.7 KB of HTML.
+2026-10-20 (icp-cli 1.2.0, ic-cdk 0.20.3, React 19.2.0, esbuild 0.25.10;
+QuickJS is quickjs-ng 0.16.2 through `rquickjs` 0.14.0). The 50-note page is
+the spike's test page, about 11.7 KB of HTML.
 
 | Option | JavaScript engine in the wallet canister | Who verifies the page | Private data | Added to the wallet Wasm | Runtime cost | Main risk |
 | --- | --- | --- | --- | --- | --- | --- |
 | **A. Prerender at build, hydrate in the browser** | None | Gateway, against a certificate made from the release's own files | Agent calls, verified in the browser | Browser bundle 195 KB (61 KB gzipped) plus the HTML | 3.6M to 4.1M instructions to serve a certified file | The npm build's supply chain, which every option shares |
 | B. Browser rendering only, from certified files | None | Same as A | Same as A | Same as A, minus the prerendered HTML | Same as A | Same as A; a blank page until the bundle runs |
 | C. Render on write inside the wallet, Boa | Boa 0.22 (Rust; 95.60% of Test262) | Gateway, against a certificate made at write time | Cannot be certified, so still agent calls | Engine and server bundle: Wasm 4.4 MB (2.2 MB gzipped); browser bundle still needed to hydrate | 640M instructions to load React at install and every upgrade; 408M to render and certify the 50-note page on each write | An interpreter and a second bundle in the canister that holds the funds; forces chunked upgrades |
-| D. Render on write inside the wallet, QuickJS | QuickJS, written in C, sharing the canister's linear memory | Same as C | Same as C | See below | See below | Memory-safety bugs in C next to wallet state; QuickJS-family engines had several in 2026 (for example CVE-2026-0821, a heap overflow in quickjs-ng) |
+| D. Render on write inside the wallet, QuickJS | QuickJS, written in C, sharing the canister's linear memory | Same as C | Same as C | Engine and server bundle: Wasm 1.6 MB (595 KB gzipped); browser bundle still needed to hydrate | 135M instructions to load React at install and every upgrade; 109M to render and certify the 50-note page on each write (Boa: 412M in the same run) | Memory-safety bugs in C next to wallet state; QuickJS-family engines had several in 2026 (for example CVE-2026-0821, a heap overflow in quickjs-ng) |
 | E. Render on write in a separate canister on its own origin | None | Gateway, against that canister's certificate | Never there | None | Paid by that canister | Safe only for public pages, and only if it never serves the wallet's own origin |
 | F. Whole canister in JavaScript (Azle) | QuickJS runs all canister logic | Same as C | Same as C | Azle's runtime | Not measured | Azle's README: stable mode "has not yet undergone intense security review" |
 | G. Rust UI framework rendering in the canister (Leptos, Dioxus) | None; the renderer is Rust | Same as C | Same as C | Not measured | Not measured | Not React; no maintained IC integration found |
 | H. Render on a server outside the IC | None | The server | The server sees it | None | The server's | A server every user must trust, outside the one-canister model |
 
-QuickJS (option D) is being measured on the same page and bundle; this record
-is updated with its numbers before the decision.
+QuickJS (option D) renders the same page byte-identical to Node, at about a
+quarter of Boa's instructions and in about a third of its Wasm. That does not
+change the decision, because what rules D out is not cost. About 72,000 lines
+of C and a prebuilt libc share linear memory with the wallet's state, and
+user data reaches that C through `JSON.parse`, strings and regular
+expressions without any untrusted script. Wasm checks indirect calls only by
+signature, a NULL write lands on the bottom of the stack instead of trapping,
+and C and Rust share one stack guarded only by QuickJS's own limit, which has
+to be set by hand (with the default, every call throws).
 
 ### Why not render inside the wallet (C, D, F, G)
 
@@ -60,15 +68,17 @@ is updated with its numbers before the decision.
   instructions). A trap there leaves the old version running, but it is one
   more way for a release to fail its upgrade.
 - **Cycles.** Re-rendering on every write costs about 408M instructions for the
-  50-note page, against about 4M to serve a prerendered file.
+  50-note page with Boa and 109M with QuickJS, against about 4M to serve a
+  prerendered file.
 
 ### When rendering on the IC is still right
 
 Public pages built from on-chain data, the same for every visitor (a public
 payment request, a receipt), are where render on write shines. They belong in
 option E: a separate canister with no funds and its own origin, so a bug in its
-engine or its HTML can never reach the wallet's origin. Boa is the engine to
-use there, because it is memory-safe Rust and it is the one measured.
+engine or its HTML can never reach the wallet's origin. Both engines work
+there: QuickJS is about four times cheaper and a third of the size, and Boa is
+memory-safe Rust. That choice belongs to the framework (v3).
 
 ## Rules that come with option A
 
@@ -93,18 +103,21 @@ What this does not fix: the browser still trusts the HTTP gateway to verify the
 page code. That holds for every option above. Users who need more can verify
 locally, for example by running their own HTTP gateway.
 
-## What changes if this is accepted
+## What changed with this decision
 
 - `docs/design.md`: the HTTP and pages module serves embedded, certified files
-  instead of rendering; the Pages store and the heap's JavaScript engine go
-  away; render on write moves to the framework (v3) as option E.
+  instead of rendering; the Pages store and the heap's JavaScript engine are
+  gone; render on write moves to the framework (v3) as option E.
 - `docs/plan-v0.md`: step 7 serves the embedded files and tests the CSP;
   step 13 builds the prerendered pages and the browser app.
+- `candid/wallet.did` and `README.md`: their notes on how pages are made.
 
 ## Sources
 
 - Boa and render-on-write measurements: the React-in-a-canister spike of
   2026-10-19 (React 19.2.0 on Boa 0.22.0, ic-http-certification 4.0.0).
+- QuickJS measurements: the QuickJS spike of 2026-10-20, with the same bundle,
+  props and local network launcher as the Boa spike.
 - [Boa v0.22 release notes](https://github.com/boa-dev/boa/releases/tag/v0.22):
   95.60% of Test262.
 - [CVE-2026-0821](https://nvd.nist.gov/vuln/detail/CVE-2026-0821): heap overflow in
