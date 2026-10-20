@@ -1,14 +1,16 @@
 //! Firmware of a self-owned chain-key wallet canister.
 //!
-//! Steps 1 to 3 of `docs/plan-v0.md`: the install arguments, `status`, state
-//! in stable memory, and the claim. The interface test lists the methods of
-//! `candid/wallet.did` not implemented yet.
+//! Steps 1 to 4 of `docs/plan-v0.md`: the install arguments, `status`, state
+//! in stable memory, the claim, and members. The interface test lists the
+//! methods of `candid/wallet.did` not implemented yet.
 
+mod access;
 mod claim;
 mod ed25519;
 mod storage;
 mod types;
 
+pub use access::{NOT_A_MEMBER, NOT_CLAIMED};
 pub use claim::message as claim_message;
 pub use types::*;
 
@@ -61,13 +63,19 @@ fn claim(args: ClaimArgs) -> Result<Member, WalletError> {
         added_by: None,
     };
     storage::complete_claim(caller, member.clone());
-    Ok(Member {
-        id: caller,
-        role: member.role,
-        label: member.label,
-        added_at_ns: member.added_at_ns,
-        added_by: member.added_by,
-    })
+    Ok(member.into_member(caller))
+}
+
+/// The caller's membership; `None` for anyone who is not a member.
+#[ic_cdk::query(guard = "access::claimed")]
+fn whoami() -> Option<Member> {
+    let caller = ic_cdk::api::msg_caller();
+    storage::member(caller).map(|member| member.into_member(caller))
+}
+
+#[ic_cdk::query(guard = "access::member")]
+fn members() -> Result<Vec<Member>, WalletError> {
+    Ok(storage::members())
 }
 
 #[ic_cdk::query]

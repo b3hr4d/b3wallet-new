@@ -6,7 +6,7 @@
 //! Stored values are Candid. A release may add a field to a stored record only
 //! as an `opt` field, so the values an earlier release wrote still decode.
 
-use crate::{InitArgs, Role};
+use crate::{InitArgs, Member, Role};
 use candid::{CandidType, Principal, decode_one, encode_one};
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager, VirtualMemory};
 use ic_stable_structures::storable::Bound;
@@ -47,6 +47,19 @@ pub struct StoredMember {
     pub added_at_ns: u64,
     /// `None` for the member who claimed the wallet.
     pub added_by: Option<Principal>,
+}
+
+impl StoredMember {
+    /// The member as the interface shows it.
+    pub fn into_member(self, id: Principal) -> Member {
+        Member {
+            id,
+            role: self.role,
+            label: self.label,
+            added_at_ns: self.added_at_ns,
+            added_by: self.added_by,
+        }
+    }
 }
 
 impl From<InitArgs> for Config {
@@ -123,6 +136,28 @@ pub fn is_claimed() -> bool {
     MEMBERS.with_borrow(|members| !members.is_empty())
 }
 
+pub fn member(id: Principal) -> Option<StoredMember> {
+    MEMBERS.with_borrow(|members| members.get(&id))
+}
+
+/// Every member, in principal order.
+pub fn members() -> Vec<Member> {
+    MEMBERS.with_borrow(|members| {
+        members
+            .iter()
+            .map(|entry| {
+                let (id, member) = entry.into_pair();
+                member.into_member(id)
+            })
+            .collect()
+    })
+}
+
+#[cfg(test)]
+pub fn insert_member(id: Principal, member: StoredMember) {
+    MEMBERS.with_borrow_mut(|members| members.insert(id, member));
+}
+
 /// Adds the first owner and deletes the claim key, in the same message, so
 /// the claim cannot be used twice.
 pub fn complete_claim(owner: Principal, member: StoredMember) {
@@ -164,7 +199,7 @@ mod tests {
         }
     }
 
-    fn member() -> StoredMember {
+    fn stored_member() -> StoredMember {
         StoredMember {
             role: Role::Owner,
             label: "laptop".to_string(),
@@ -177,7 +212,7 @@ mod tests {
     fn stored_values_round_trip_through_their_bytes() {
         let config = config_value();
         assert_eq!(Config::from_bytes(config.to_bytes()), config);
-        let member = member();
+        let member = stored_member();
         assert_eq!(StoredMember::from_bytes(member.to_bytes()), member);
     }
 
@@ -194,7 +229,7 @@ mod tests {
             device_name: Option<String>,
         }
 
-        let later: LaterMember = from_candid(&member().to_bytes());
+        let later: LaterMember = from_candid(&stored_member().to_bytes());
         assert_eq!(later.role, Role::Owner);
         assert_eq!(later.label, "laptop");
         assert_eq!(later.added_at_ns, 9);
@@ -211,7 +246,7 @@ mod tests {
             device_name: String,
         }
 
-        let _: BrokenMember = from_candid(&member().to_bytes());
+        let _: BrokenMember = from_candid(&stored_member().to_bytes());
     }
 
     #[test]
@@ -222,11 +257,29 @@ mod tests {
     #[test]
     fn check_passes_once_configured_and_reads_the_members() {
         set_config(config_value());
-        MEMBERS.with_borrow_mut(|members| {
-            members.insert(Principal::self_authenticating([3; 32]), member())
-        });
+        insert_member(Principal::self_authenticating([3; 32]), stored_member());
         assert_eq!(check(), Ok(()));
         assert_eq!(config(), Some(config_value()));
         assert!(is_claimed());
+    }
+
+    #[test]
+    fn members_are_read_back_with_their_principal() {
+        let (first, second) = (
+            Principal::self_authenticating([3; 32]),
+            Principal::self_authenticating([4; 32]),
+        );
+        assert_eq!(member(first), None);
+        assert_eq!(members(), vec![]);
+
+        insert_member(first, stored_member());
+        insert_member(second, stored_member());
+        assert_eq!(member(first), Some(stored_member()));
+        let mut expected = vec![
+            stored_member().into_member(first),
+            stored_member().into_member(second),
+        ];
+        expected.sort_by_key(|member| member.id);
+        assert_eq!(members(), expected);
     }
 }

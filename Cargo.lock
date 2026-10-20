@@ -1216,6 +1216,7 @@ name = "integration"
 version = "0.1.0"
 dependencies = [
  "candid",
+ "candid_parser",
  "ed25519-dalek",
  "pocket-ic",
  "serde_bytes",

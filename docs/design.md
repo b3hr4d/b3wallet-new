@@ -89,7 +89,7 @@ change code, and they act only on actions the policy module released.
 | Module | What it owns | Calls out to |
 | --- | --- | --- |
 | HTTP and pages | `http_request` for the prerendered pages and browser bundle embedded in the release, certified in `init` and `post_upgrade`; the certified 404; CSP and frame headers | Certification tree, `certified_data_set` |
-| Claim and members | One-time claim with the claim key; members with roles Owner, Approver, Viewer; the check that the caller is a member | None |
+| Claim and members | One-time claim with the claim key; members with roles Owner, Approver, Viewer; the guards that refuse a caller before its arguments are decoded | None |
 | Policy and approvals | Rules per action kind: quorum, daily limits, timelocks; the pending-action queue | Members |
 | Signer | Addresses and signatures by derivation path: threshold ECDSA (secp256k1) for Bitcoin and EVM, threshold Schnorr later | Management canister |
 | Chain adapters | ICP and ICRC tokens held by the canister's own principal and subaccounts; Bitcoin through the Bitcoin canister; EVM through the EVM RPC canister | Ledgers, Bitcoin canister, EVM RPC canister |
@@ -239,6 +239,7 @@ exists in canister memory, but whoever can install code can move every fund.
 | Claim link intercepted | Private key only in the fragment; one use; expiry; the signature names the caller | Whoever opens the link first owns the wallet |
 | Injected script or phishing on the wallet's page | Every byte certified; no third-party scripts; CSP `script-src 'self'`, `frame-src 'none'`, `frame-ancestors 'none'`; the UI is prerendered at build and ships inside the signed release, with no per-user data in HTML | Look-alike domains; the browser trusts the HTTP gateway to verify the page |
 | A malicious extension | Own canister and origin, never rendered by the firmware; own sub-wallet path and daily budget; signer window answers only registered origins; ICRC-21 consent for every call | Funds inside its own budget |
+| Strangers calling the wallet | Before the claim only `claim`, `status` and `http_request` answer; after it, also `whoami` and `request_join`. Every other method has a guard that rejects the call before its arguments are decoded unless the caller is a member (for `ext_request`, a registered extension) | Rejected update calls still cost the wallet cycles |
 | A dishonest replica answering a query | Every action and balance is an update call; pages are certified | Member lists and history read by query |
 | Node operators reading state | Keys are threshold keys held by the subnet; private notes and labels encrypted with vetKeys | Plaintext state stays readable without SEV |
 | Cycles running out | Long freezing threshold; low-balance banner and audit event; anyone can top up | A wallet nobody tops up is deleted |
