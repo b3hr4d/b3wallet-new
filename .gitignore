@@ -1,0 +1,6 @@
+/target/
+node_modules/
+.icp/
+.dfx/
+*.wasm
+*.wasm.gz

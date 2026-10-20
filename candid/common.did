@@ -1,0 +1,60 @@
+// Types shared by the wallet firmware, its release channel, its factory and
+// its extensions. Draft 0, 2026-10-20.
+
+type BitcoinNetwork = variant { Mainnet; Testnet; Regtest };
+
+type Chain = variant {
+  Icp;
+  // ICRC-1 ledger canister id.
+  Icrc : principal;
+  Bitcoin : BitcoinNetwork;
+  // EIP-155 chain id.
+  Evm : nat64;
+};
+
+// What an owner can grant an extension. Nothing here lets an extension touch
+// the main accounts' keys: it can read, propose (owners still approve), or
+// spend from its own sub-wallet within a budget.
+type Permission = variant {
+  ReadAccounts;
+  ProposeTransfer;
+  SpendSubWallet : Chain;
+};
+
+// Base units; the window is a rolling 24 hours.
+type Budget = record {
+  chain : Chain;
+  per_day : nat;
+  total : opt nat;
+};
+
+// Served by every extension canister; read by the wallet before install.
+type ExtensionManifest = record {
+  name : text;
+  description : text;
+  // The only origin the wallet's signer window answers for this extension,
+  // for example https://<extension id>.icp0.io.
+  origin : text;
+  requested : vec Permission;
+};
+
+// An Ed25519 signature by one release signer over
+// SHA-256(Candid encoding of the manifest with `signatures = vec {}`).
+type ReleaseSignature = record {
+  signer : blob;
+  signature : blob;
+};
+
+type ReleaseManifest = record {
+  version : text;
+  wasm_sha256 : blob;
+  wasm_size : nat64;
+  // One SHA-256 per chunk of at most 1 MiB, in install order.
+  chunk_hashes : vec blob;
+  // Module hashes this release was tested to upgrade from. A wallet whose
+  // own module hash is missing here refuses the release.
+  tested_from : vec blob;
+  notes_url : text;
+  published_at_ns : nat64;
+  signatures : vec ReleaseSignature;
+};

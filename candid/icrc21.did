@@ -1,0 +1,79 @@
+// ICRC-21 consent message types, copied from
+// https://github.com/dfinity/wg-identity-authentication/blob/main/topics/ICRC-21/ICRC-21.did
+// on 2026-10-20 (comments trimmed; see the source for their meaning).
+
+type icrc21_consent_message_metadata = record {
+    language: text;
+    utc_offset_minutes: opt int16;
+};
+
+type icrc21_consent_message_spec = record {
+    metadata: icrc21_consent_message_metadata;
+    device_spec: opt variant {
+        GenericDisplay;
+        FieldsDisplay;
+    };
+};
+
+type icrc21_consent_message_request = record {
+    method: text;
+    arg: blob;
+    user_preferences: icrc21_consent_message_spec;
+};
+
+type TokenAmount = record {
+    decimals: nat8;
+    amount: nat64;
+    symbol: text;
+};
+
+type TimestampSeconds = record {
+    amount: nat64;
+};
+
+type DurationSeconds = record {
+    amount: nat64;
+};
+
+type TextValue = record {
+    content: text;
+};
+
+type Value = variant {
+    TokenAmount: TokenAmount;
+    TimestampSeconds: TimestampSeconds;
+    DurationSeconds: DurationSeconds;
+    Text: TextValue;
+};
+
+type icrc21_consent_message = variant {
+    GenericDisplayMessage: text;
+    FieldsDisplayMessage: record {
+        intent: text;
+        fields: vec record { text; Value };
+    };
+};
+
+type icrc21_consent_info = record {
+    consent_message: icrc21_consent_message;
+    metadata: icrc21_consent_message_metadata;
+};
+
+type icrc21_error_info = record {
+    description: text;
+};
+
+type icrc21_error = variant {
+    UnsupportedCanisterCall: icrc21_error_info;
+    ConsentMessageUnavailable: icrc21_error_info;
+    InsufficientPayment: icrc21_error_info;
+    GenericError: record {
+       error_code: nat;
+       description: text;
+   };
+};
+
+type icrc21_consent_message_response = variant {
+    Ok: icrc21_consent_info;
+    Err: icrc21_error;
+};

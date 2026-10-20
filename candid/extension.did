@@ -1,0 +1,9 @@
+// The interface every extension canister serves so a wallet can install it.
+// An extension may serve anything else on its own origin; the wallet only
+// reads this manifest and answers its ext_request calls. Draft 0, 2026-10-20.
+
+import "common.did";
+
+service : {
+  ext_manifest : () -> (ExtensionManifest) query;
+};

@@ -1,0 +1,382 @@
+// Firmware interface of a self-owned chain-key wallet canister.
+// One canister per wallet; it is its own only controller. Draft 0, 2026-10-20.
+
+import "common.did";
+import "icrc21.did";
+
+// ---- Install and upgrade arguments ----------------------------------------
+
+type InitArgs = record {
+  // Ed25519 public key (32 bytes) of the claim keypair. The private key only
+  // ever lives in the claim link's URL fragment.
+  claim_public_key : blob;
+  claim_expires_at_ns : nat64;
+  release_channel : principal;
+  // Ed25519 public keys allowed to sign releases, and how many must sign.
+  release_signers : vec blob;
+  release_threshold : nat8;
+  // The factory that created the wallet. Informational; it holds no rights.
+  factory : opt principal;
+};
+
+// The firmware installs itself with `Upgrade`; all state is in stable memory.
+type WalletArg = variant {
+  Init : InitArgs;
+  Upgrade;
+};
+
+// ---- Members ----------------------------------------------------------------
+
+type Role = variant { Owner; Approver; Viewer };
+
+type Member = record {
+  id : principal;
+  role : Role;
+  label : text;
+  added_at_ns : nat64;
+  // None for the member who claimed the wallet.
+  added_by : opt principal;
+};
+
+// Signature by the claim key over the UTF-8 text
+// "claim:<wallet canister id>:<caller principal>".
+type ClaimArgs = record {
+  signature : blob;
+};
+
+// ---- Accounts ---------------------------------------------------------------
+
+type AccountId = nat32;
+
+type AccountHolder = variant {
+  // Derivation path: "wallet" / chain / index.
+  Wallet;
+  // Derivation path: "ext" / extension canister id / chain / index.
+  Extension : principal;
+};
+
+type Account = record {
+  id : AccountId;
+  chain : Chain;
+  label : text;
+  index : nat32;
+  holder : AccountHolder;
+  // Chain-native text: an ICRC-1 account, a Bitcoin address, or an EVM address.
+  address : text;
+};
+
+type AddAccountArgs = record {
+  chain : Chain;
+  label : text;
+};
+
+type Balance = record {
+  account : AccountId;
+  amount : nat;
+  as_of_ns : nat64;
+};
+
+type Direction = variant { In; Out };
+
+type HistoryEntry = record {
+  seq : nat64;
+  account : AccountId;
+  direction : Direction;
+  counterparty : text;
+  amount : nat;
+  // Ledger block index, Bitcoin txid, or EVM transaction hash, as text.
+  tx_id : text;
+  at_ns : nat64;
+  // The action that sent it; none for incoming funds.
+  action : opt ActionId;
+};
+
+type HistoryRequest = record {
+  account : opt AccountId;
+  before_seq : opt nat64;
+  limit : nat16;
+};
+
+// ---- Actions, approvals and policy -------------------------------------------
+
+type ActionId = nat64;
+
+type TransferRequest = record {
+  from : AccountId;
+  to : text;
+  // Base units of the account's chain.
+  amount : nat;
+  fee : opt nat;
+  memo : opt blob;
+};
+
+type Action = variant {
+  Transfer : TransferRequest;
+  AddMember : record { id : principal; role : Role; label : text };
+  RemoveMember : principal;
+  ChangeRole : record { id : principal; role : Role };
+  InstallExtension : record {
+    canister : principal;
+    granted : vec Permission;
+    budgets : vec Budget;
+  };
+  UninstallExtension : principal;
+  SetPolicy : Policy;
+  Upgrade : record { version : text; wasm_sha256 : blob };
+};
+
+type ActionKind = variant {
+  Transfer;
+  AddMember;
+  RemoveMember;
+  ChangeRole;
+  InstallExtension;
+  UninstallExtension;
+  SetPolicy;
+  Upgrade;
+};
+
+type DailyLimit = record {
+  chain : Chain;
+  amount : nat;
+};
+
+type PolicyRule = record {
+  kind : ActionKind;
+  // Approvals needed, the proposer's included.
+  quorum : nat8;
+  timelock_ns : nat64;
+  // Transfers under these limits need only the proposer and no timelock.
+  daily_limits : vec DailyLimit;
+};
+
+type Policy = record {
+  rules : vec PolicyRule;
+};
+
+type TxReceipt = record {
+  account : AccountId;
+  chain : Chain;
+  tx_id : text;
+  at_ns : nat64;
+};
+
+type Outcome = variant {
+  Done;
+  Sent : TxReceipt;
+};
+
+type ActionState = variant {
+  // Needs more approvals.
+  Waiting;
+  // Quorum met; executable once `executable_after_ns` has passed.
+  Ready;
+  Executed : Outcome;
+  Rejected : principal;
+  Expired;
+  Failed : text;
+};
+
+type Pending = record {
+  id : ActionId;
+  action : Action;
+  proposed_by : principal;
+  proposed_at_ns : nat64;
+  approvals : vec principal;
+  quorum : nat8;
+  executable_after_ns : nat64;
+  expires_at_ns : nat64;
+  state : ActionState;
+};
+
+// ---- Extensions -------------------------------------------------------------
+
+type Extension = record {
+  canister : principal;
+  manifest : ExtensionManifest;
+  granted : vec Permission;
+  budgets : vec Budget;
+  spent_today : vec DailyLimit;
+  installed_at_ns : nat64;
+  installed_by : principal;
+};
+
+// What an extension's canister may ask, within what its owners granted.
+type ExtRequest = variant {
+  Accounts;
+  Balances;
+  ProposeTransfer : TransferRequest;
+  SubWalletAddress : Chain;
+  SubWalletTransfer : record {
+    chain : Chain;
+    to : text;
+    amount : nat;
+    memo : opt blob;
+  };
+};
+
+type ExtResponse = variant {
+  Accounts : vec Account;
+  Balances : vec Balance;
+  Proposed : ActionId;
+  Address : text;
+  Sent : TxReceipt;
+};
+
+// ---- Upgrade ------------------------------------------------------------------
+
+type UpgradeState = variant {
+  Idle;
+  Staging : record {
+    version : text;
+    chunks_uploaded : nat32;
+    chunks_total : nat32;
+  };
+  Installing : record {
+    version : text;
+    wasm_sha256 : blob;
+    started_at_ns : nat64;
+    deadline_ns : nat64;
+  };
+  Failed : record {
+    version : text;
+    reason : text;
+    at_ns : nat64;
+  };
+};
+
+// ---- Operations ---------------------------------------------------------------
+
+type Status = record {
+  version : text;
+  claimed : bool;
+  claim_expires_at_ns : opt nat64;
+  cycles : nat;
+  upgrade : UpgradeState;
+  release_channel : principal;
+};
+
+type AuditEvent = variant {
+  Claimed;
+  JoinRequested : principal;
+  Proposed : ActionId;
+  Approved : ActionId;
+  Rejected : ActionId;
+  Executed : ActionId;
+  ExtensionCall : record { extension : principal; request : text };
+  UpgradeStaged : text;
+  UpgradeInstalled : text;
+  UpgradeFailed : text;
+  CyclesLow : nat;
+};
+
+type AuditEntry = record {
+  seq : nat64;
+  at_ns : nat64;
+  // None for events the canister raises itself (timers).
+  by : opt principal;
+  event : AuditEvent;
+};
+
+type AuditRequest = record {
+  before_seq : opt nat64;
+  limit : nat16;
+};
+
+// ---- HTTP ---------------------------------------------------------------------
+
+type HeaderField = record { text; text };
+
+type HttpRequest = record {
+  method : text;
+  url : text;
+  headers : vec HeaderField;
+  body : blob;
+  certificate_version : opt nat16;
+};
+
+// Every response is certified (response verification v2); pages are rendered
+// and certified in update calls, never per request.
+type HttpResponse = record {
+  status_code : nat16;
+  headers : vec HeaderField;
+  body : blob;
+};
+
+// ---- Errors and results -----------------------------------------------------
+
+type WalletError = variant {
+  NotClaimed;
+  AlreadyClaimed;
+  ClaimExpired;
+  BadSignature;
+  NotAMember;
+  Forbidden : text;
+  NotFound : text;
+  InvalidArgument : text;
+  PolicyViolation : text;
+  BudgetExceeded : record { chain : Chain; remaining : nat };
+  TimelockActive : record { executable_after_ns : nat64 };
+  QuorumNotMet : record { approvals : nat8; quorum : nat8 };
+  UpgradeInProgress;
+  ReleaseRejected : text;
+  ChainError : text;
+  InsufficientCycles;
+};
+
+type MemberResult = variant { Ok : Member; Err : WalletError };
+type MembersResult = variant { Ok : vec Member; Err : WalletError };
+type AccountResult = variant { Ok : Account; Err : WalletError };
+type AccountsResult = variant { Ok : vec Account; Err : WalletError };
+type BalanceResult = variant { Ok : Balance; Err : WalletError };
+type HistoryResult = variant { Ok : vec HistoryEntry; Err : WalletError };
+type PendingResult = variant { Ok : Pending; Err : WalletError };
+type PendingListResult = variant { Ok : vec Pending; Err : WalletError };
+type PolicyResult = variant { Ok : Policy; Err : WalletError };
+type ExtensionsResult = variant { Ok : vec Extension; Err : WalletError };
+type ExtResult = variant { Ok : ExtResponse; Err : WalletError };
+type ReleaseResult = variant { Ok : opt ReleaseManifest; Err : WalletError };
+type AuditResult = variant { Ok : vec AuditEntry; Err : WalletError };
+
+type SupportedStandard = record { name : text; url : text };
+
+service : (WalletArg) -> {
+  // Claim and members. Before the claim, only claim, status and http_request answer.
+  claim : (ClaimArgs) -> (MemberResult);
+  whoami : () -> (opt Member) query;
+  members : () -> (MembersResult) query;
+  // A signed-in non-member asks to join; creates a pending AddMember action.
+  request_join : (text) -> (PendingResult);
+
+  // Accounts.
+  accounts : () -> (AccountsResult) query;
+  add_account : (AddAccountArgs) -> (AccountResult);
+  // Update: asks the ledger, the Bitcoin canister or the EVM RPC canister.
+  balance : (AccountId) -> (BalanceResult);
+  history : (HistoryRequest) -> (HistoryResult) query;
+
+  // Actions: every transfer, membership, extension, policy and upgrade change.
+  propose : (Action) -> (PendingResult);
+  approve : (ActionId) -> (PendingResult);
+  reject : (ActionId) -> (PendingResult);
+  execute : (ActionId) -> (PendingResult);
+  pending : () -> (PendingListResult) query;
+  policy : () -> (PolicyResult) query;
+
+  // Extensions. ext_request accepts only a registered extension canister as caller.
+  extensions : () -> (ExtensionsResult) query;
+  ext_request : (ExtRequest) -> (ExtResult);
+
+  // Upgrade. Update: reads the release channel and checks signatures and tested_from.
+  release_available : () -> (ReleaseResult);
+  upgrade_status : () -> (UpgradeState) query;
+
+  // Operations.
+  status : () -> (Status) query;
+  audit_log : (AuditRequest) -> (AuditResult) query;
+  http_request : (HttpRequest) -> (HttpResponse) query;
+
+  // Standards for the signer window (ICRC-25, ICRC-29) and consent (ICRC-21).
+  icrc10_supported_standards : () -> (vec SupportedStandard) query;
+  icrc21_canister_call_consent_message : (icrc21_consent_message_request) -> (icrc21_consent_message_response);
+};

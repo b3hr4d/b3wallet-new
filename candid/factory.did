@@ -1,0 +1,39 @@
+// Factory: creates a wallet canister, installs a signed release, makes the
+// wallet its own only controller, and drops itself. It keeps no rights over
+// any wallet it created. Draft 0, 2026-10-20.
+
+import "common.did";
+
+type CreateWalletArgs = record {
+  // Ed25519 public key of the claim keypair made in the creator's browser.
+  claim_public_key : blob;
+  claim_expires_at_ns : nat64;
+  // None installs the channel's latest release.
+  version : opt text;
+  // Cycles the factory pulls from the caller's cycles-ledger account with
+  // ICRC-2 transfer_from; they become the new wallet's balance.
+  cycles : nat;
+  from_subaccount : opt blob;
+};
+
+type CreatedWallet = record {
+  wallet : principal;
+  version : text;
+  cycles : nat;
+};
+
+type FactoryError = variant {
+  InsufficientAllowance : record { allowance : nat };
+  ReleaseUnavailable : text;
+  ReleaseRejected : text;
+  CreateFailed : text;
+  InstallFailed : record { wallet : principal; reason : text };
+};
+
+type CreateWalletResult = variant { Ok : CreatedWallet; Err : FactoryError };
+
+service : (record { release_channel : principal; release_signers : vec blob; release_threshold : nat8 }) -> {
+  create_wallet : (CreateWalletArgs) -> (CreateWalletResult);
+  // The release new wallets get, after the factory checked its signatures.
+  current_release : () -> (opt ReleaseManifest) query;
+};
