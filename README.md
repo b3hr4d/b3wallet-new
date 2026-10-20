@@ -5,10 +5,12 @@ its own certified UI, keeps its accounts and approval policy, signs with
 threshold keys, is its own only controller, and upgrades itself only to a
 release its owners approved.
 
-**Status: step 4 of [the v0 plan](docs/plan-v0.md).** The wallet canister
+**Status: step 5 of [the v0 plan](docs/plan-v0.md).** The wallet canister
 installs, keeps its state in stable memory across upgrades, answers `status`,
 can be claimed once by its first owner, and shows its member list only to its
-members. Everything else is still design, in [docs/design.md](docs/design.md).
+members. Members change members and the policy through actions that wait for
+their quorum and timelock, and a new device can ask to join. Everything else
+is still design, in [docs/design.md](docs/design.md).
 
 ## Principles
 

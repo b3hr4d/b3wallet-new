@@ -15,6 +15,8 @@ ed25519-dalek = { version = "=2.2.0", default-features = false }
 ic-cdk = "=0.20.3"
 ic-stable-structures = "=0.7.2"
 pocket-ic = "=16.1.0"
+# Property tests only; no fork or timeout support needed.
+proptest = { version = "=1.11.0", default-features = false, features = ["std"] }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_bytes = "=0.11.19"
 
