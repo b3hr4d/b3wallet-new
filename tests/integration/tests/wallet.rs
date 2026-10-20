@@ -2,12 +2,18 @@
 //! `cargo build -p wallet --target wasm32-unknown-unknown --release`.
 //! PocketIC uses the server binary named by `POCKET_IC_BIN`.
 
-use candid::{Principal, decode_one, encode_one};
+use candid::types::{FuncMode, TypeInner};
+use candid::{Principal, decode_one, encode_args, encode_one};
+use candid_parser::utils::CandidSource;
 use ed25519_dalek::{Signer, SigningKey};
-use pocket_ic::PocketIc;
+use pocket_ic::{ErrorCode, PocketIc, RejectCode, RejectResponse};
 use serde_bytes::ByteBuf;
+use std::path::Path;
 use std::time::Duration;
-use wallet::{ClaimArgs, InitArgs, Member, Role, Status, UpgradeState, WalletArg, WalletError};
+use wallet::{
+    ClaimArgs, InitArgs, Member, NOT_A_MEMBER, NOT_CLAIMED, Role, Status, UpgradeState, WalletArg,
+    WalletError,
+};
 
 const DAY_NS: u64 = 24 * 60 * 60 * 1_000_000_000;
 
@@ -318,4 +324,164 @@ fn the_claim_survives_an_upgrade() {
         claim(&pic, id, second, claim_signature(id, second)),
         Err(WalletError::AlreadyClaimed)
     );
+}
+
+fn whoami(pic: &PocketIc, id: Principal, caller: Principal) -> Option<Member> {
+    let reply = pic
+        .query_call(id, caller, "whoami", encode_one(()).unwrap())
+        .expect("whoami answers");
+    decode_one(&reply).unwrap()
+}
+
+fn members(pic: &PocketIc, id: Principal, caller: Principal) -> Result<Vec<Member>, WalletError> {
+    let reply = pic
+        .query_call(id, caller, "members", encode_one(()).unwrap())
+        .expect("members answers");
+    decode_one(&reply).unwrap()
+}
+
+#[test]
+fn whoami_and_members_answer_the_owner_also_after_an_upgrade() {
+    let pic = PocketIc::new();
+    let id = installed_wallet(&pic);
+    let owner = user(7);
+    let member = claim(&pic, id, owner, claim_signature(id, owner)).unwrap();
+
+    for upgraded in [false, true] {
+        if upgraded {
+            upgrade(&pic, id, &WalletArg::Upgrade).unwrap();
+        }
+        assert_eq!(whoami(&pic, id, owner), Some(member.clone()));
+        assert_eq!(members(&pic, id, owner), Ok(vec![member.clone()]));
+    }
+}
+
+#[test]
+fn whoami_tells_a_non_member_that_it_is_not_one() {
+    let pic = PocketIc::new();
+    let id = installed_wallet(&pic);
+    let owner = user(7);
+    claim(&pic, id, owner, claim_signature(id, owner)).unwrap();
+
+    assert_eq!(whoami(&pic, id, user(8)), None);
+    assert_eq!(whoami(&pic, id, Principal::anonymous()), None);
+}
+
+/// What anyone may call before the claim. Every other method is refused.
+const PUBLIC_BEFORE_CLAIM: &[&str] = &["claim", "status", "http_request"];
+/// What anyone may call once the wallet is claimed. Every other method is for
+/// members only.
+const PUBLIC_AFTER_CLAIM: &[&str] = &["claim", "status", "http_request", "whoami", "request_join"];
+
+/// Every method of `candid/wallet.did` in name order, and whether it is a
+/// query.
+fn target_methods() -> Vec<(String, bool)> {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../candid/wallet.did");
+    let (env, actor) = CandidSource::File(Path::new(path))
+        .load()
+        .expect("candid/wallet.did parses");
+    let actor = env.trace_type(&actor.expect("a service")).unwrap();
+    let TypeInner::Class(_, service) = actor.as_ref() else {
+        panic!("the service has no init arguments: {actor}");
+    };
+    env.as_service(service)
+        .unwrap()
+        .iter()
+        .map(|(name, method)| {
+            let modes = &env.as_func(method).unwrap().modes;
+            let query = modes
+                .iter()
+                .any(|mode| matches!(mode, FuncMode::Query | FuncMode::CompositeQuery));
+            (name.clone(), query)
+        })
+        .collect()
+}
+
+/// A call without arguments: a method that runs at all fails to decode them,
+/// so only a guard, which runs before decoding, can answer with its message.
+fn call_without_arguments(
+    pic: &PocketIc,
+    id: Principal,
+    caller: Principal,
+    method: &str,
+    query: bool,
+) -> Result<Vec<u8>, RejectResponse> {
+    let arg = encode_args(()).unwrap();
+    if query {
+        pic.query_call(id, caller, method, arg)
+    } else {
+        pic.update_call(id, caller, method, arg)
+    }
+}
+
+/// Calls, as `caller`, every method of the target interface that is not in
+/// `public`, and checks that each one is refused with `refusal` or is not
+/// implemented yet. Returns the methods it refused.
+fn methods_refused(
+    pic: &PocketIc,
+    id: Principal,
+    caller: Principal,
+    public: &[&str],
+    refusal: &str,
+) -> Vec<String> {
+    let methods = target_methods();
+    for name in public {
+        assert!(
+            methods.iter().any(|(method, _)| method == name),
+            "{name} is not in candid/wallet.did"
+        );
+    }
+    let (mut refused, mut not_yet, mut wrong) = (Vec::new(), Vec::new(), Vec::new());
+    for (method, query) in methods {
+        if public.contains(&method.as_str()) {
+            continue;
+        }
+        match call_without_arguments(pic, id, caller, &method, query) {
+            Err(reject) if reject.error_code == ErrorCode::CanisterMethodNotFound => {
+                not_yet.push(method)
+            }
+            Err(reject)
+                if reject.reject_code == RejectCode::CanisterReject
+                    && reject.reject_message == refusal =>
+            {
+                refused.push(method)
+            }
+            other => wrong.push(format!("{method}: {other:?}")),
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "not refused with {refusal:?}:\n{}",
+        wrong.join("\n")
+    );
+    eprintln!(
+        "refused: {}; not implemented yet: {}",
+        refused.join(", "),
+        not_yet.join(", ")
+    );
+    refused
+}
+
+#[test]
+fn before_the_claim_only_the_public_methods_answer() {
+    let pic = PocketIc::new();
+    let id = installed_wallet(&pic);
+
+    for caller in [user(8), Principal::anonymous()] {
+        let refused = methods_refused(&pic, id, caller, PUBLIC_BEFORE_CLAIM, NOT_CLAIMED);
+        assert_eq!(refused, ["members", "whoami"]);
+    }
+}
+
+#[test]
+fn a_non_member_is_refused_by_every_method_for_members() {
+    let pic = PocketIc::new();
+    let id = installed_wallet(&pic);
+    let owner = user(7);
+    claim(&pic, id, owner, claim_signature(id, owner)).unwrap();
+
+    for caller in [user(8), Principal::anonymous()] {
+        let refused = methods_refused(&pic, id, caller, PUBLIC_AFTER_CLAIM, NOT_A_MEMBER);
+        assert_eq!(refused, ["members"]);
+    }
 }

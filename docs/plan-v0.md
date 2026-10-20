@@ -41,12 +41,13 @@ the test, so the gap is always visible.
    unclaimed wallet answers only `claim`, `status` and `http_request`. Done when
    tests cover a wrong principal, a replayed signature, an expired key and a
    second claim.
-4. **Members.** Roles, `whoami`, `members`, `request_join`, and caller guards on
-   every method. Done when a non-member is refused by every non-public method.
+4. **Members.** Roles, `whoami`, `members`, and caller guards on every method.
+   Done when a non-member is refused by every non-public method.
+   (`request_join` moved to step 5: it creates a pending action.)
 5. **Policy and pending actions.** A pure Rust policy engine (quorum, daily
    limits, timelocks, expiry) with property tests, then `propose`, `approve`,
-   `reject`, `execute` and `pending`. Done when PocketIC tests advance time
-   through a timelock and an expiry.
+   `reject`, `execute`, `pending` and `request_join`. Done when PocketIC tests
+   advance time through a timelock and an expiry.
 6. **Audit log.** An append-only log written by every privileged method. Done
    when each action kind leaves exactly one entry per state change.
 7. **Certified HTTP.** `http_request` for files embedded in the Wasm with
