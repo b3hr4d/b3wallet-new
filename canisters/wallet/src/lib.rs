@@ -1,9 +1,9 @@
 //! Firmware of a self-owned chain-key wallet canister.
 //!
-//! Steps 1 to 5 of `docs/plan-v0.md`: the install arguments, `status`, state
-//! in stable memory, the claim, members, and the policy with its pending
-//! actions. The interface test lists the methods of `candid/wallet.did` not
-//! implemented yet.
+//! Steps 1 to 6 of `docs/plan-v0.md`: the install arguments, `status`, state
+//! in stable memory, the claim, members, the policy with its pending actions,
+//! and the audit log. The interface test lists the methods of
+//! `candid/wallet.did` not implemented yet.
 
 mod access;
 mod actions;
@@ -22,7 +22,7 @@ use actions::{
     APPROVAL_WINDOW_NS, JOIN_WINDOW_NS, MAX_OPEN_ACTIONS, MAX_OPEN_JOIN_REQUESTS, StoredPending,
 };
 use candid::{Nat, Principal};
-use storage::StoredMember;
+use storage::{StoredAuditEntry, StoredMember};
 
 #[ic_cdk::init]
 fn init(arg: WalletArg) {
@@ -72,6 +72,7 @@ fn claim(args: ClaimArgs) -> Result<Member, WalletError> {
         added_by: None,
     };
     storage::complete_claim(caller, member.clone());
+    audit(caller, AuditEvent::Claimed, now);
     Ok(member.into_member(caller))
 }
 
@@ -119,6 +120,7 @@ fn propose(action: Action) -> Result<Pending, WalletError> {
     let terms = policy::terms(&governance.policy, action.kind(), None);
     let pending = StoredPending::new(action, caller, vec![caller], terms, APPROVAL_WINDOW_NS, now);
     let id = storage::add_action(pending.clone());
+    audit(caller, AuditEvent::Proposed(id), now);
     Ok(pending.view(id, now))
 }
 
@@ -159,17 +161,30 @@ fn request_join(label: String) -> Result<Pending, WalletError> {
     let terms = policy::terms(&governance.policy, ActionKind::AddMember, None);
     let pending = StoredPending::new(action, caller, vec![], terms, JOIN_WINDOW_NS, now);
     let id = storage::add_action(pending.clone());
+    audit(caller, AuditEvent::JoinRequested(caller), now);
     Ok(pending.view(id, now))
 }
 
 #[ic_cdk::update(guard = "access::approver")]
 fn approve(id: ActionId) -> Result<Pending, WalletError> {
-    change_action(id, |pending, caller, now| pending.approve(id, caller, now))
+    change_action(id, |pending, caller, now| {
+        let before = pending.approvals.len();
+        pending.approve(id, caller, now)?;
+        // Approving twice changes nothing, so it logs nothing.
+        if pending.approvals.len() > before {
+            audit(caller, AuditEvent::Approved(id), now);
+        }
+        Ok(())
+    })
 }
 
 #[ic_cdk::update(guard = "access::owner")]
 fn reject(id: ActionId) -> Result<Pending, WalletError> {
-    change_action(id, |pending, caller, now| pending.reject(id, caller, now))
+    change_action(id, |pending, caller, now| {
+        pending.reject(id, caller, now)?;
+        audit(caller, AuditEvent::Rejected(id), now);
+        Ok(())
+    })
 }
 
 /// Runs an action that has its quorum once its timelock has passed. An
@@ -212,7 +227,30 @@ fn execute(id: ActionId) -> Result<Pending, WalletError> {
             .map_err(|error| reason(&error)),
     );
     storage::set_action(id, pending.clone());
+    audit(ic_cdk::api::msg_caller(), AuditEvent::Executed(id), now);
     Ok(pending.view(id, now))
+}
+
+/// Newest first: up to `limit` entries, at most `MAX_AUDIT_PAGE`, before
+/// `before_seq`, or from the newest.
+#[ic_cdk::query(guard = "access::member")]
+fn audit_log(request: AuditRequest) -> Result<Vec<AuditEntry>, WalletError> {
+    let limit = usize::from(request.limit).min(MAX_AUDIT_PAGE);
+    Ok(storage::audit_page(request.before_seq, limit))
+}
+
+/// The most entries one `audit_log` call returns.
+const MAX_AUDIT_PAGE: usize = 100;
+
+/// Records a change made by `by`. Every call that changes state writes one
+/// entry for it; a refused call writes none. An expiry is no one's act and is
+/// not logged: the action itself shows it.
+fn audit(by: Principal, event: AuditEvent, now: u64) {
+    storage::append_audit(StoredAuditEntry {
+        at_ns: now,
+        by: Some(by),
+        event,
+    });
 }
 
 fn stored_action(id: ActionId) -> Result<StoredPending, WalletError> {

@@ -9,11 +9,11 @@
 use crate::actions::StoredPending;
 use crate::governance::Governance;
 use crate::policy::default_policy;
-use crate::{ActionId, ActionState, InitArgs, Member, Policy, Role};
+use crate::{ActionId, ActionState, AuditEntry, AuditEvent, InitArgs, Member, Policy, Role};
 use candid::{CandidType, Principal, decode_one, encode_one};
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager, VirtualMemory};
 use ic_stable_structures::storable::Bound;
-use ic_stable_structures::{DefaultMemoryImpl, StableBTreeMap, StableCell, Storable};
+use ic_stable_structures::{DefaultMemoryImpl, StableBTreeMap, StableCell, StableLog, Storable};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_bytes::ByteBuf;
@@ -26,6 +26,8 @@ const CONFIG_MEMORY: MemoryId = MemoryId::new(0);
 const POLICY_MEMORY: MemoryId = MemoryId::new(1);
 const MEMBERS_MEMORY: MemoryId = MemoryId::new(2);
 const PENDING_MEMORY: MemoryId = MemoryId::new(4);
+const AUDIT_INDEX_MEMORY: MemoryId = MemoryId::new(7);
+const AUDIT_DATA_MEMORY: MemoryId = MemoryId::new(8);
 const OPEN_MEMORY: MemoryId = MemoryId::new(10);
 
 /// What the wallet was installed with.
@@ -53,6 +55,14 @@ pub struct StoredMember {
     pub added_at_ns: u64,
     /// `None` for the member who claimed the wallet.
     pub added_by: Option<Principal>,
+}
+
+/// An audit log entry as stored; its sequence number is its place in the log.
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct StoredAuditEntry {
+    pub at_ns: u64,
+    pub by: Option<Principal>,
+    pub event: AuditEvent,
 }
 
 impl StoredMember {
@@ -103,7 +113,13 @@ macro_rules! candid_storable {
     )*};
 }
 
-candid_storable!(Config, Policy, StoredMember, StoredPending);
+candid_storable!(
+    Config,
+    Policy,
+    StoredAuditEntry,
+    StoredMember,
+    StoredPending
+);
 
 fn to_candid<T: CandidType>(value: &T) -> Vec<u8> {
     encode_one(value).expect("a stored value encodes as Candid")
@@ -134,6 +150,9 @@ thread_local! {
     /// so finding them never reads the whole history.
     static OPEN: RefCell<StableBTreeMap<ActionId, (), Memory>> =
         RefCell::new(StableBTreeMap::init(memory(OPEN_MEMORY)));
+
+    static AUDIT: RefCell<StableLog<StoredAuditEntry, Memory, Memory>> =
+        RefCell::new(StableLog::init(memory(AUDIT_INDEX_MEMORY), memory(AUDIT_DATA_MEMORY)));
 }
 
 fn memory(id: MemoryId) -> Memory {
@@ -264,6 +283,32 @@ pub fn close_expired(now: u64) {
     }
 }
 
+/// Appends to the audit log. A wallet out of stable memory traps here, which
+/// rolls back the change the entry records: nothing happens unlogged.
+pub fn append_audit(entry: StoredAuditEntry) -> u64 {
+    AUDIT.with_borrow(|log| log.append(&entry).expect("the audit log grows"))
+}
+
+/// Up to `limit` entries before `before_seq` (or the end), newest first.
+pub fn audit_page(before_seq: Option<u64>, limit: usize) -> Vec<AuditEntry> {
+    AUDIT.with_borrow(|log| {
+        let end = before_seq.map_or(log.len(), |before| before.min(log.len()));
+        (0..end)
+            .rev()
+            .take(limit)
+            .map(|seq| {
+                let entry = log.get(seq).expect("an entry below the length is stored");
+                AuditEntry {
+                    seq,
+                    at_ns: entry.at_ns,
+                    by: entry.by,
+                    event: entry.event,
+                }
+            })
+            .collect()
+    })
+}
+
 /// Adds the first owner and deletes the claim key, in the same message, so
 /// the claim cannot be used twice.
 pub fn complete_claim(owner: Principal, member: StoredMember) {
@@ -299,6 +344,7 @@ pub fn check() -> Result<(), String> {
     }
     MEMBERS.with_borrow(|members| members.values().for_each(drop));
     PENDING.with_borrow(|actions| actions.values().for_each(drop));
+    AUDIT.with_borrow(|log| log.iter().for_each(drop));
     if let Some(id) = OPEN.with_borrow(|open| open.keys().find(|id| action(*id).is_none())) {
         return Err(format!("open action {id} is not stored"));
     }
@@ -509,5 +555,31 @@ mod tests {
         assert_eq!(member(kept), Some(stored_member()));
         assert_eq!(policy(), governance.policy);
         assert_eq!(super::governance(), governance);
+    }
+
+    fn entry(at_ns: u64) -> StoredAuditEntry {
+        StoredAuditEntry {
+            at_ns,
+            by: Some(Principal::self_authenticating([3; 32])),
+            event: AuditEvent::Proposed(at_ns),
+        }
+    }
+
+    #[test]
+    fn the_audit_log_pages_back_from_the_newest() {
+        assert!(audit_page(None, 10).is_empty());
+        for at_ns in 0..5 {
+            assert_eq!(append_audit(entry(at_ns)), at_ns);
+        }
+        let seqs = |page: Vec<AuditEntry>| -> Vec<u64> { page.iter().map(|e| e.seq).collect() };
+        assert_eq!(seqs(audit_page(None, 2)), [4, 3]);
+        assert_eq!(seqs(audit_page(Some(3), 2)), [2, 1]);
+        assert_eq!(seqs(audit_page(Some(1), 5)), [0]);
+        assert!(audit_page(Some(0), 5).is_empty());
+        assert_eq!(seqs(audit_page(Some(99), 1)), [4]);
+        assert!(audit_page(None, 0).is_empty());
+        let newest = &audit_page(None, 1)[0];
+        assert_eq!(newest.at_ns, 4);
+        assert_eq!(newest.event, AuditEvent::Proposed(4));
     }
 }

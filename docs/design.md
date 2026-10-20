@@ -151,7 +151,11 @@ action that the policy module releases only after its quorum and timelock.
    a viewer.
 4. `execute` checks the action again against the current members and policy;
    one that no longer fits ends `Failed` with the reason.
-5. No change may leave the wallet without an owner, or with fewer owners and
+5. The claim, each join request, proposal, approval, rejection and
+   execution writes one audit entry, in the same message as the change; a
+   refused call or a repeated approval writes none. An expiry is no one's act
+   and is not logged: the action shows it.
+6. No change may leave the wallet without an owner, or with fewer owners and
    approvers than a rule's quorum. The `SetPolicy` rule needs at least the
    quorum and timelock of every other rule, so changing the policy is never
    the shortcut around a rule.
@@ -230,7 +234,8 @@ is never reused or renumbered, even after its store goes away; the audit log's
 Every stored value is Candid with optional new fields, so a release can add
 fields without a migration. A store a release adds is filled in by
 `post_upgrade` first: a wallet from before the policy store gets the default
-policy. `post_upgrade` then decodes every stored value before
+policy, and one from before the audit log starts an empty log, so its log
+begins at that upgrade. `post_upgrade` then decodes every stored value before
 it returns, so a release that cannot read the state traps there and the IC
 keeps the running version. CI installs the pull request's base, claims it and
 upgrades it to the change. Pages are not state: they are embedded in the

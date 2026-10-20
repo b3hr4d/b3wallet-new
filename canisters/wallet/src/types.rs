@@ -172,6 +172,38 @@ pub struct Pending {
     pub state: ActionState,
 }
 
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub enum AuditEvent {
+    Claimed,
+    JoinRequested(Principal),
+    Proposed(ActionId),
+    Approved(ActionId),
+    Rejected(ActionId),
+    Executed(ActionId),
+    ExtensionCall {
+        extension: Principal,
+        request: String,
+    },
+    UpgradeStaged(String),
+    UpgradeInstalled(String),
+    UpgradeFailed(String),
+    CyclesLow(Nat),
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct AuditEntry {
+    pub seq: u64,
+    pub at_ns: u64,
+    pub by: Option<Principal>,
+    pub event: AuditEvent,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct AuditRequest {
+    pub before_seq: Option<u64>,
+    pub limit: u16,
+}
+
 impl Action {
     pub fn kind(&self) -> ActionKind {
         match self {

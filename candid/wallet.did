@@ -379,6 +379,7 @@ service : (WalletArg) -> {
 
   // Operations.
   status : () -> (Status) query;
+  // Newest first, at most 100 entries.
   audit_log : (AuditRequest) -> (AuditResult) query;
   http_request : (HttpRequest) -> (HttpResponse) query;
 
