@@ -18,6 +18,13 @@ pub struct InitArgs {
     pub factory: Option<Principal>,
 }
 
+#[derive(CandidType, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    Owner,
+    Approver,
+    Viewer,
+}
+
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum WalletArg {
     Init(InitArgs),
