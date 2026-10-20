@@ -228,9 +228,12 @@ is never reused or renumbered, even after its store goes away; the audit log's
 | 10 | Open actions | the ids of the pending actions still waiting or ready | `StableBTreeMap` | Kept |
 
 Every stored value is Candid with optional new fields, so a release can add
-fields without a migration. `post_upgrade` decodes every stored value before
+fields without a migration. A store a release adds is filled in by
+`post_upgrade` first: a wallet from before the policy store gets the default
+policy. `post_upgrade` then decodes every stored value before
 it returns, so a release that cannot read the state traps there and the IC
-keeps the running version. Pages are not state: they are embedded in the
+keeps the running version. CI installs the pull request's base, claims it and
+upgrades it to the change. Pages are not state: they are embedded in the
 Wasm, so they change only with a release. The heap holds only the
 certification tree, rebuilt from them in `post_upgrade`.
 

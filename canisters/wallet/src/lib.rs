@@ -43,6 +43,7 @@ fn post_upgrade(arg: WalletArg) {
     if !matches!(arg, WalletArg::Upgrade) {
         ic_cdk::trap("an upgrade needs WalletArg::Upgrade");
     }
+    storage::migrate();
     if let Err(reason) = storage::check() {
         ic_cdk::trap(format!("the upgrade cannot read the state: {reason}"));
     }

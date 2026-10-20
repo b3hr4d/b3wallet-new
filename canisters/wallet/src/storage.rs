@@ -8,6 +8,7 @@
 
 use crate::actions::StoredPending;
 use crate::governance::Governance;
+use crate::policy::default_policy;
 use crate::{ActionId, ActionState, InitArgs, Member, Policy, Role};
 use candid::{CandidType, Principal, decode_one, encode_one};
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager, VirtualMemory};
@@ -277,6 +278,16 @@ pub fn complete_claim(owner: Principal, member: StoredMember) {
     MEMBERS.with_borrow_mut(|members| members.insert(owner, member));
 }
 
+/// Fills in what an earlier release did not store, so its wallets can
+/// upgrade. Wallets from before step 5 have no policy and get the default
+/// one, which is the policy a new wallet starts with. A trap later in the
+/// upgrade rolls this back with the rest.
+pub fn migrate() {
+    if POLICY.with_borrow(|cell| cell.get().is_none()) {
+        set_policy(default_policy());
+    }
+}
+
 /// Decodes every stored value. `post_upgrade` calls it, so a release that
 /// cannot read the state fails its upgrade instead of a later call.
 pub fn check() -> Result<(), String> {
@@ -299,7 +310,7 @@ mod tests {
     use super::*;
     use crate::Action;
     use crate::actions::APPROVAL_WINDOW_NS;
-    use crate::policy::{Terms, default_policy};
+    use crate::policy::Terms;
 
     fn config_value() -> Config {
         Config {
@@ -373,6 +384,20 @@ mod tests {
     fn check_fails_without_a_policy() {
         set_config(config_value());
         assert!(check().unwrap_err().contains("no policy"));
+    }
+
+    #[test]
+    fn the_migration_adds_the_default_policy_and_keeps_a_stored_one() {
+        set_config(config_value());
+        migrate();
+        assert_eq!(policy(), default_policy());
+        assert_eq!(check(), Ok(()));
+
+        let mut stricter = default_policy();
+        stricter.rules[0].timelock_ns = 1;
+        set_policy(stricter.clone());
+        migrate();
+        assert_eq!(policy(), stricter);
     }
 
     #[test]

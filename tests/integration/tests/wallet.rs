@@ -908,3 +908,28 @@ fn each_role_is_refused_what_it_may_not_do() {
     assert_eq!(policy(&pic, id, viewer), policy(&pic, id, owner));
     assert_eq!(members(&pic, id, viewer).unwrap().len(), 3);
 }
+
+/// A wallet that the previous release installed and that its owner claimed
+/// upgrades to this one, keeps its owner, and runs this release's code. CI
+/// builds the previous release from the pull request's base commit (on
+/// `main`, from the commit before) and names it in `PREVIOUS_WALLET_WASM`.
+/// A change that leaves the Wasm as it was upgrades a wallet to itself.
+#[test]
+#[ignore = "needs PREVIOUS_WALLET_WASM, the previous release's Wasm, which CI builds"]
+fn a_wallet_from_the_previous_release_upgrades_to_this_one() {
+    let path = std::env::var("PREVIOUS_WALLET_WASM")
+        .expect("PREVIOUS_WALLET_WASM names the previous release's Wasm");
+    let previous = std::fs::read(&path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
+    let pic = PocketIc::new();
+    let id = empty_canister(&pic);
+    let arg = encode_one(WalletArg::Init(init_args(&pic))).unwrap();
+    pic.install_canister(id, previous, arg, None);
+    let owner = user(7);
+    claim(&pic, id, owner, claim_signature(id, owner)).unwrap();
+
+    upgrade(&pic, id, &WalletArg::Upgrade).unwrap();
+    assert!(status(&pic, id).claimed);
+    assert_eq!(whoami(&pic, id, owner).map(|m| m.role), Some(Role::Owner));
+    assert_eq!(members(&pic, id, owner).unwrap().len(), 1);
+    run_at_once(&pic, id, owner, add_member_action(user(8), Role::Viewer));
+}
