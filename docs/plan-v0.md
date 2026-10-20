@@ -49,9 +49,12 @@ the test, so the gap is always visible.
    through a timelock and an expiry.
 6. **Audit log.** An append-only log written by every privileged method. Done
    when each action kind leaves exactly one entry per state change.
-7. **Certified HTTP.** `http_request` from a certified store, static HTML pages
-   first (no React yet), the certified 404, and the CSP headers. Done when every
-   response verifies with `ic-response-verification` in tests.
+7. **Certified HTTP.** `http_request` for files embedded in the Wasm with
+   `include_bytes!` (a static HTML page first, no React yet), certified with
+   `ic-asset-certification` in `init` and `post_upgrade`, the certified 404,
+   and the CSP header from decision 0001. Done when every response verifies
+   with `ic-response-verification` in tests, also after an upgrade, and a test
+   pins the exact CSP header.
 8. **ICP and ICRC accounts.** Accounts on the wallet's own principal and
    subaccounts, `balance`, and `Transfer` actions against a real ICRC-1 ledger
    Wasm in PocketIC.
@@ -69,8 +72,12 @@ the test, so the gap is always visible.
 12. **Factory.** `create_wallet`: create, install a signed release, hand
     control to the wallet, drop itself. Done when the factory is no longer a
     controller of any wallet it created.
-13. **UI.** Render-on-write React pages inside the canister and the client
-    app. The client library choice is made at this step.
+13. **UI.** The React app, prerendered at build into page shells and hydrated
+    in the browser, with every private value from agent calls. The build is
+    reproducible (pinned Node, esbuild and lockfile) and its output is
+    embedded in the release; a lint rule bans `dangerouslySetInnerHTML`. The
+    client library choice is made at this step. Done when two clean builds
+    produce identical bytes and every served page verifies.
 14. **Mainnet gate.** Deploy, run the chunked self-upgrade from v(n) to v(n+2)
     on mainnet, and record the cycle cost of each step.
 

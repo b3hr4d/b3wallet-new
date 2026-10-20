@@ -16,8 +16,9 @@ network on 2026-10-19 and 2026-10-20; see [docs/design.md](docs/design.md).
    own domain becomes the first owner; owners add more principals later.
 3. **Self-upgrading.** The canister is its only controller and installs
    approved, signed releases on itself.
-4. **Everything certified.** Pages are rendered and certified when data
-   changes and served from a query, so the gateway verifies every byte.
+4. **Everything certified.** Pages are prerendered at build and ship inside
+   the signed release, the canister serves them certified, and private values
+   come from calls the agent verifies in the browser.
 5. **Extensions isolated.** Each extension is its own canister on its own
    origin, with its own sub-key and budget. The wallet's UI never renders
    extension code.
