@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # The PocketIC server the pocket-ic crate pins (LATEST_SERVER_VERSION).
+  # No checksum is published with the release; this one was recorded from the
+  # first download on 2026-10-20, so a changed binary fails the job.
+  POCKET_IC_VERSION: 16.1.0
+  POCKET_IC_SHA256: 131219d90dcf9bf6f3ed8ee02d8f55504ea24a6db382f5680675b7bd6b7ed3bf
+
+jobs:
+  wallet:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy (native)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Clippy (canister target)
+        run: cargo clippy -p wallet --target wasm32-unknown-unknown --locked -- -D warnings
+
+      - name: Unit and interface tests
+        run: cargo test -p wallet --locked -- --nocapture
+
+      - name: Build the wallet Wasm
+        run: cargo build -p wallet --target wasm32-unknown-unknown --release --locked
+
+      - name: Download the PocketIC server
+        run: |
+          curl -sSfL -o pocket-ic.gz \
+            "https://github.com/dfinity/pocketic/releases/download/${POCKET_IC_VERSION}/pocket-ic-x86_64-linux.gz"
+          echo "${POCKET_IC_SHA256}  pocket-ic.gz" | sha256sum --check
+          gunzip pocket-ic.gz
+          chmod +x pocket-ic
+          echo "POCKET_IC_BIN=${PWD}/pocket-ic" >> "${GITHUB_ENV}"
+
+      - name: PocketIC tests
+        run: cargo test -p integration --locked

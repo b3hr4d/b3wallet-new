@@ -1,0 +1,21 @@
+[workspace]
+resolver = "3"
+members = ["canisters/wallet", "tests/integration"]
+
+[workspace.package]
+edition = "2024"
+publish = false
+
+# Every direct dependency is pinned exactly; Cargo.lock pins the rest.
+[workspace.dependencies]
+candid = "=0.10.38"
+candid_parser = "=0.4.1"
+ic-cdk = "=0.20.3"
+pocket-ic = "=16.1.0"
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_bytes = "=0.11.19"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
