@@ -8,6 +8,7 @@ publish.workspace = true
 
 [dev-dependencies]
 candid.workspace = true
+ed25519-dalek.workspace = true
 pocket-ic.workspace = true
 serde_bytes.workspace = true
 wallet = { path = "../../canisters/wallet" }

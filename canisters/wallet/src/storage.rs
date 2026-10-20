@@ -123,6 +123,20 @@ pub fn is_claimed() -> bool {
     MEMBERS.with_borrow(|members| !members.is_empty())
 }
 
+/// Adds the first owner and deletes the claim key, in the same message, so
+/// the claim cannot be used twice.
+pub fn complete_claim(owner: Principal, member: StoredMember) {
+    CONFIG.with_borrow_mut(|cell| {
+        let mut config = cell
+            .get()
+            .clone()
+            .expect("a claimed wallet has a configuration");
+        config.claim = None;
+        cell.set(Some(config));
+    });
+    MEMBERS.with_borrow_mut(|members| members.insert(owner, member));
+}
+
 /// Decodes every stored value. `post_upgrade` calls it, so a release that
 /// cannot read the state fails its upgrade instead of a later call.
 pub fn check() -> Result<(), String> {
