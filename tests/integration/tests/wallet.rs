@@ -11,9 +11,9 @@ use serde_bytes::ByteBuf;
 use std::path::Path;
 use std::time::Duration;
 use wallet::{
-    Action, ActionId, ActionState, ClaimArgs, InitArgs, Member, NOT_A_MEMBER, NOT_AN_APPROVER,
-    NOT_AN_OWNER, NOT_CLAIMED, Outcome, Pending, Policy, Role, Status, TransferRequest,
-    UpgradeState, WalletArg, WalletError,
+    Action, ActionId, ActionState, AuditEntry, AuditEvent, AuditRequest, ClaimArgs, InitArgs,
+    Member, NOT_A_MEMBER, NOT_AN_APPROVER, NOT_AN_OWNER, NOT_CLAIMED, Outcome, Pending, Policy,
+    Role, Status, TransferRequest, UpgradeState, WalletArg, WalletError,
 };
 
 const DAY_NS: u64 = 24 * 60 * 60 * 1_000_000_000;
@@ -474,6 +474,7 @@ fn before_the_claim_only_the_public_methods_answer() {
             refused,
             [
                 "approve",
+                "audit_log",
                 "execute",
                 "members",
                 "pending",
@@ -499,7 +500,14 @@ fn a_non_member_is_refused_by_every_method_for_members() {
         assert_eq!(
             refused,
             [
-                "approve", "execute", "members", "pending", "policy", "propose", "reject"
+                "approve",
+                "audit_log",
+                "execute",
+                "members",
+                "pending",
+                "policy",
+                "propose",
+                "reject"
             ]
         );
     }
@@ -932,4 +940,204 @@ fn a_wallet_from_the_previous_release_upgrades_to_this_one() {
     assert_eq!(whoami(&pic, id, owner).map(|m| m.role), Some(Role::Owner));
     assert_eq!(members(&pic, id, owner).unwrap().len(), 1);
     run_at_once(&pic, id, owner, add_member_action(user(8), Role::Viewer));
+}
+
+// ---- Step 6: the audit log ------------------------------------------------------
+
+fn audit_page(
+    pic: &PocketIc,
+    id: Principal,
+    caller: Principal,
+    before_seq: Option<u64>,
+    limit: u16,
+) -> Vec<AuditEntry> {
+    let request = AuditRequest { before_seq, limit };
+    let reply = pic
+        .query_call(id, caller, "audit_log", encode_one(request).unwrap())
+        .expect("audit_log answers");
+    decode_one::<Result<Vec<AuditEntry>, WalletError>>(&reply)
+        .unwrap()
+        .unwrap()
+}
+
+/// The whole log, oldest first, as who did what.
+fn audit(pic: &PocketIc, id: Principal, reader: Principal) -> Vec<(Option<Principal>, AuditEvent)> {
+    let mut entries = audit_page(pic, id, reader, None, 100);
+    entries.reverse();
+    for (seq, entry) in entries.iter().enumerate() {
+        assert_eq!(entry.seq, seq as u64);
+    }
+    entries
+        .into_iter()
+        .map(|entry| (entry.by, entry.event))
+        .collect()
+}
+
+/// The entries after the first `from`.
+fn audit_since(
+    pic: &PocketIc,
+    id: Principal,
+    reader: Principal,
+    from: usize,
+) -> Vec<(Option<Principal>, AuditEvent)> {
+    audit(pic, id, reader).split_off(from)
+}
+
+#[test]
+fn the_claim_is_the_first_entry() {
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    let entries = audit_page(&pic, id, owner, None, 10);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].seq, 0);
+    assert_eq!(entries[0].by, Some(owner));
+    assert_eq!(entries[0].event, AuditEvent::Claimed);
+    assert!(entries[0].at_ns > 0);
+}
+
+/// Every supported kind of action, proposed and executed under the default
+/// policy, logs exactly its proposal and its execution.
+#[test]
+fn each_action_kind_logs_its_proposal_and_execution_once() {
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    let laptop = user(8);
+    let mut policy = policy(&pic, id, owner);
+    policy.rules[0].timelock_ns = HOUR_NS;
+    let actions = [
+        add_member_action(laptop, Role::Viewer),
+        Action::ChangeRole {
+            id: laptop,
+            role: Role::Approver,
+        },
+        Action::RemoveMember(laptop),
+        Action::SetPolicy(policy),
+    ];
+    for action in actions {
+        let before = audit(&pic, id, owner).len();
+        let proposed = propose(&pic, id, owner, action).unwrap();
+        // Executing too early is refused and logs nothing.
+        if proposed.executable_after_ns > proposed.proposed_at_ns {
+            assert!(act(&pic, id, owner, "execute", proposed.id).is_err());
+            pic.advance_time(Duration::from_nanos(
+                proposed.executable_after_ns - proposed.proposed_at_ns,
+            ));
+        }
+        act(&pic, id, owner, "execute", proposed.id).unwrap();
+        assert_eq!(
+            audit_since(&pic, id, owner, before),
+            [
+                (Some(owner), AuditEvent::Proposed(proposed.id)),
+                (Some(owner), AuditEvent::Executed(proposed.id)),
+            ]
+        );
+    }
+}
+
+#[test]
+fn approvals_rejections_and_failures_log_once_and_refusals_never() {
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    let approver = quorum_of_two(&pic, id, owner);
+    let before = audit(&pic, id, owner).len();
+
+    let approved = propose(&pic, id, owner, add_member_action(user(9), Role::Viewer)).unwrap();
+    act(&pic, id, approver, "approve", approved.id).unwrap();
+    // A second approval by the same member changes nothing.
+    act(&pic, id, approver, "approve", approved.id).unwrap();
+    act(&pic, id, owner, "approve", approved.id).unwrap();
+    act(&pic, id, approver, "execute", approved.id).unwrap();
+    assert!(act(&pic, id, approver, "execute", approved.id).is_err());
+
+    let rejected = propose(&pic, id, owner, add_member_action(user(10), Role::Viewer)).unwrap();
+    act(&pic, id, owner, "reject", rejected.id).unwrap();
+    assert!(act(&pic, id, owner, "reject", rejected.id).is_err());
+    assert!(act(&pic, id, approver, "approve", rejected.id).is_err());
+    assert!(propose(&pic, id, owner, Action::RemoveMember(owner)).is_err());
+
+    assert_eq!(
+        audit_since(&pic, id, owner, before),
+        [
+            (Some(owner), AuditEvent::Proposed(approved.id)),
+            (Some(approver), AuditEvent::Approved(approved.id)),
+            (Some(approver), AuditEvent::Executed(approved.id)),
+            (Some(owner), AuditEvent::Proposed(rejected.id)),
+            (Some(owner), AuditEvent::Rejected(rejected.id)),
+        ]
+    );
+}
+
+#[test]
+fn a_join_request_logs_who_asked_and_an_expiry_logs_nothing() {
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    let (phone, late) = (user(8), user(9));
+    let before = audit(&pic, id, owner).len();
+
+    let request = update::<PendingResult>(&pic, id, phone, "request_join", &"phone").unwrap();
+    // Asking again returns the same request and logs nothing.
+    update::<PendingResult>(&pic, id, phone, "request_join", &"phone").unwrap();
+    act(&pic, id, owner, "approve", request.id).unwrap();
+    run_at_once(&pic, id, owner, add_member_action(phone, Role::Approver));
+    let failed = act(&pic, id, owner, "execute", request.id).unwrap();
+    assert!(matches!(failed.state, ActionState::Failed(_)));
+
+    let expiring = update::<PendingResult>(&pic, id, late, "request_join", &"late").unwrap();
+    pic.advance_time(Duration::from_nanos(HOUR_NS));
+    assert!(act(&pic, id, owner, "approve", expiring.id).is_err());
+
+    let added = request.id + 1;
+    assert_eq!(
+        audit_since(&pic, id, owner, before),
+        [
+            (Some(phone), AuditEvent::JoinRequested(phone)),
+            (Some(owner), AuditEvent::Approved(request.id)),
+            (Some(owner), AuditEvent::Proposed(added)),
+            (Some(owner), AuditEvent::Executed(added)),
+            // The execution that failed is logged like any other.
+            (Some(owner), AuditEvent::Executed(request.id)),
+            (Some(late), AuditEvent::JoinRequested(late)),
+        ]
+    );
+}
+
+#[test]
+fn the_audit_log_pages_and_survives_an_upgrade() {
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    for seed in 0..5 {
+        update::<PendingResult>(&pic, id, user(100 + seed), "request_join", &"x").unwrap();
+    }
+    let all = audit_page(&pic, id, owner, None, 100);
+    assert_eq!(all.len(), 6);
+    upgrade(&pic, id, &WalletArg::Upgrade).unwrap();
+    assert_eq!(audit_page(&pic, id, owner, None, 100), all);
+
+    let seqs = |page: Vec<AuditEntry>| -> Vec<u64> { page.iter().map(|e| e.seq).collect() };
+    assert_eq!(seqs(audit_page(&pic, id, owner, None, 2)), [5, 4]);
+    assert_eq!(seqs(audit_page(&pic, id, owner, Some(4), 3)), [3, 2, 1]);
+    assert_eq!(seqs(audit_page(&pic, id, owner, Some(1), 3)), [0]);
+    assert!(audit_page(&pic, id, owner, Some(0), 3).is_empty());
+}
+
+#[test]
+fn an_audit_page_holds_at_most_a_hundred_entries() {
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    // The claim and 50 proposals with their executions: 101 entries.
+    for seed in 0..50 {
+        run_at_once(
+            &pic,
+            id,
+            owner,
+            add_member_action(user(100 + seed), Role::Viewer),
+        );
+    }
+    let page = audit_page(&pic, id, owner, None, u16::MAX);
+    assert_eq!(page.len(), 100);
+    assert_eq!((page[0].seq, page[99].seq), (100, 1));
+    assert_eq!(
+        audit_page(&pic, id, owner, Some(1), u16::MAX)[0].event,
+        AuditEvent::Claimed
+    );
 }
