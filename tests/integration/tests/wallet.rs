@@ -97,22 +97,65 @@ fn install_with_invalid_arguments_is_refused() {
     assert!(err.contains("invalid InitArgs: claim_public_key"), "{err}");
 }
 
+/// An upgrade in a later round. The IC rate-limits `install_code` on a
+/// canister whose previous installs used many instructions, and each round
+/// pays some of that back.
+fn upgrade(pic: &PocketIc, id: Principal, arg: &WalletArg) -> Result<(), String> {
+    pic.tick();
+    pic.upgrade_canister(id, wasm(), encode_one(arg).unwrap(), None)
+        .map_err(|reject| format!("{reject:?}"))
+}
+
 #[test]
-fn an_upgrade_is_refused_and_the_running_version_keeps_its_state() {
+fn upgrades_keep_the_state_in_stable_memory() {
+    let pic = PocketIc::new();
+    let id = empty_canister(&pic);
+    try_install(&pic, id, &WalletArg::Init(init_args(&pic))).unwrap();
+    let before = status(&pic, id);
+
+    for _ in 0..2 {
+        upgrade(&pic, id, &WalletArg::Upgrade).unwrap();
+        let after = status(&pic, id);
+        assert_eq!(after.claim_expires_at_ns, before.claim_expires_at_ns);
+        assert_eq!(after.release_channel, before.release_channel);
+        assert_eq!(after.claimed, before.claimed);
+        assert_eq!(after.upgrade, UpgradeState::Idle);
+    }
+}
+
+#[test]
+fn an_upgrade_with_init_arguments_is_refused() {
     let pic = PocketIc::new();
     let id = empty_canister(&pic);
     let args = init_args(&pic);
     try_install(&pic, id, &WalletArg::Init(args.clone())).unwrap();
 
-    let err = pic
-        .upgrade_canister(id, wasm(), encode_one(WalletArg::Upgrade).unwrap(), None)
-        .unwrap_err();
-    assert!(
-        format!("{err:?}").contains("upgrades are refused"),
-        "{err:?}"
-    );
+    let other = InitArgs {
+        release_channel: Principal::from_text("ryjl3-tyaaa-aaaaa-aaaba-cai").unwrap(),
+        ..args.clone()
+    };
+    let err = upgrade(&pic, id, &WalletArg::Init(other)).unwrap_err();
+    assert!(err.contains("an upgrade needs WalletArg::Upgrade"), "{err}");
+    assert_eq!(status(&pic, id).release_channel, args.release_channel);
+}
 
-    let status = status(&pic, id);
-    assert_eq!(status.claim_expires_at_ns, Some(args.claim_expires_at_ns));
-    assert_eq!(status.release_channel, release_channel());
+/// A canister whose stable memory holds no wallet state, as the step 1 Wasm
+/// left it, refuses the upgrade and keeps its running version.
+#[test]
+fn an_upgrade_without_stored_state_is_refused() {
+    let pic = PocketIc::new();
+    let id = empty_canister(&pic);
+    let empty_module = b"\0asm\x01\0\0\0".to_vec();
+    pic.install_canister(id, empty_module, vec![], None);
+    let module_hash = pic.canister_status(id, None).unwrap().module_hash;
+
+    let err = upgrade(&pic, id, &WalletArg::Upgrade).unwrap_err();
+    assert!(
+        err.contains("the upgrade cannot read the state: stable memory holds no configuration"),
+        "{err}"
+    );
+    assert_eq!(
+        pic.canister_status(id, None).unwrap().module_hash,
+        module_hash
+    );
 }

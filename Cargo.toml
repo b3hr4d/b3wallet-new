@@ -11,6 +11,7 @@ publish = false
 candid = "=0.10.38"
 candid_parser = "=0.4.1"
 ic-cdk = "=0.20.3"
+ic-stable-structures = "=0.7.2"
 pocket-ic = "=16.1.0"
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_bytes = "=0.11.19"

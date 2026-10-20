@@ -5,9 +5,9 @@ its own certified UI, keeps its accounts and approval policy, signs with
 threshold keys, is its own only controller, and upgrades itself only to a
 release its owners approved.
 
-**Status: step 1 of [the v0 plan](docs/plan-v0.md).** The wallet canister
-installs and answers `status`; everything else is still design, in
-[docs/design.md](docs/design.md).
+**Status: step 2 of [the v0 plan](docs/plan-v0.md).** The wallet canister
+installs, keeps its state in stable memory across upgrades, and answers
+`status`; everything else is still design, in [docs/design.md](docs/design.md).
 
 ## Principles
 

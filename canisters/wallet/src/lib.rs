@@ -1,21 +1,15 @@
 //! Firmware of a self-owned chain-key wallet canister.
 //!
-//! Step 1 of `docs/plan-v0.md`: the install arguments and `status`. The
-//! interface test lists the methods of `candid/wallet.did` not implemented
-//! yet.
+//! Steps 1 and 2 of `docs/plan-v0.md`: the install arguments, `status`, and
+//! state in stable memory. The interface test lists the methods of
+//! `candid/wallet.did` not implemented yet.
 
+mod storage;
 mod types;
 
 pub use types::*;
 
 use candid::Nat;
-use std::cell::RefCell;
-
-thread_local! {
-    // Heap only until step 2 moves it to stable memory, which is why
-    // `post_upgrade` refuses every upgrade for now.
-    static CONFIG: RefCell<Option<InitArgs>> = const { RefCell::new(None) };
-}
 
 #[ic_cdk::init]
 fn init(arg: WalletArg) {
@@ -25,31 +19,34 @@ fn init(arg: WalletArg) {
     if let Err(reason) = args.validate(ic_cdk::api::time()) {
         ic_cdk::trap(format!("invalid InitArgs: {reason}"));
     }
-    CONFIG.with_borrow_mut(|config| *config = Some(args));
+    storage::set_config(args.into());
 }
 
-// Trapping here makes the IC keep the running version, so an upgrade cannot
-// silently drop the heap state above.
+// A trap here makes the IC keep the running version: an upgrade either reads
+// all of the state or does not happen.
 #[ic_cdk::post_upgrade]
-fn post_upgrade(_arg: WalletArg) {
-    ic_cdk::trap("upgrades are refused until the state lives in stable memory");
+fn post_upgrade(arg: WalletArg) {
+    if !matches!(arg, WalletArg::Upgrade) {
+        ic_cdk::trap("an upgrade needs WalletArg::Upgrade");
+    }
+    if let Err(reason) = storage::check() {
+        ic_cdk::trap(format!("the upgrade cannot read the state: {reason}"));
+    }
 }
 
 #[ic_cdk::query]
 fn status() -> Status {
-    CONFIG.with_borrow(|config| {
-        let Some(config) = config else {
-            ic_cdk::trap("the wallet was installed without InitArgs");
-        };
-        Status {
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            claimed: false,
-            claim_expires_at_ns: Some(config.claim_expires_at_ns),
-            cycles: Nat::from(ic_cdk::api::canister_cycle_balance()),
-            upgrade: UpgradeState::Idle,
-            release_channel: config.release_channel,
-        }
-    })
+    let Some(config) = storage::config() else {
+        ic_cdk::trap("the wallet has no configuration");
+    };
+    Status {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        claimed: storage::is_claimed(),
+        claim_expires_at_ns: config.claim.map(|claim| claim.expires_at_ns),
+        cycles: Nat::from(ic_cdk::api::canister_cycle_balance()),
+        upgrade: UpgradeState::Idle,
+        release_channel: config.release_channel,
+    }
 }
 
 ic_cdk::export_candid!();

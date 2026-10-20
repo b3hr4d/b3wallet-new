@@ -191,22 +191,26 @@ action that the policy module releases only after its quorum and timelock.
 ## Data model
 
 All state lives in stable memory, one virtual memory per store
-(`ic-stable-structures`), so an upgrade never serializes the heap.
+(`ic-stable-structures`), so an upgrade never serializes the heap. A memory id
+is never reused or renumbered, even after its store goes away; the audit log's
+`StableLog` takes two, its index and its data.
 
-| Store | Key to value | Structure | On upgrade |
-| --- | --- | --- | --- |
-| Config | claim key until claimed, release channel, release signer keys and threshold, factory | `StableCell` | Kept |
-| Policy | action kind to quorum, daily limit, timelock | `StableCell` | Kept; changed only by a `SetPolicy` action |
-| Members | principal to role, label, added at, added by | `StableBTreeMap` | Kept |
-| Accounts | account id to chain, label, derivation index, address | `StableBTreeMap` | Kept; addresses re-derivable from the path |
-| Pending actions | action id to action, approvals, earliest execution, state | `StableBTreeMap` | Kept; timelocks keep running |
-| Extensions | extension canister id to origin, permissions, budgets, spent this window | `StableBTreeMap` | Kept |
-| History | account id and sequence to transfer record | `StableBTreeMap` | Kept |
-| Audit log | sequence to entry | `StableLog` | Kept, append-only |
-| Upgrade state | idle, staged, installing or failed, with the expected hash | `StableCell` | Read first in `post_upgrade` |
+| Memory id | Store | Key to value | Structure | On upgrade |
+| --- | --- | --- | --- | --- |
+| 0 | Config | claim key until claimed, release channel, release signer keys and threshold, factory | `StableCell` | Kept |
+| 1 | Policy | action kind to quorum, daily limit, timelock | `StableCell` | Kept; changed only by a `SetPolicy` action |
+| 2 | Members | principal to role, label, added at, added by | `StableBTreeMap` | Kept |
+| 3 | Accounts | account id to chain, label, derivation index, address | `StableBTreeMap` | Kept; addresses re-derivable from the path |
+| 4 | Pending actions | action id to action, approvals, earliest execution, state | `StableBTreeMap` | Kept; timelocks keep running |
+| 5 | Extensions | extension canister id to origin, permissions, budgets, spent this window | `StableBTreeMap` | Kept |
+| 6 | History | account id and sequence to transfer record | `StableBTreeMap` | Kept |
+| 7 and 8 | Audit log | sequence to entry | `StableLog` | Kept, append-only |
+| 9 | Upgrade state | idle, staged, installing or failed, with the expected hash | `StableCell` | Read first in `post_upgrade` |
 
 Every stored value is Candid with optional new fields, so a release can add
-fields without a migration. Pages are not state: they are embedded in the
+fields without a migration. `post_upgrade` decodes every stored value before
+it returns, so a release that cannot read the state traps there and the IC
+keeps the running version. Pages are not state: they are embedded in the
 Wasm, so they change only with a release. The heap holds only the
 certification tree, rebuilt from them in `post_upgrade`.
 
