@@ -1,0 +1,13 @@
+[package]
+name = "integration"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+candid.workspace = true
+pocket-ic.workspace = true
+serde_bytes.workspace = true
+wallet = { path = "../../canisters/wallet" }
