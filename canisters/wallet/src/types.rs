@@ -56,6 +56,35 @@ pub type AccountId = u32;
 pub type ActionId = u64;
 
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub enum AccountHolder {
+    Wallet,
+    Extension(Principal),
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct Account {
+    pub id: AccountId,
+    pub chain: Chain,
+    pub label: String,
+    pub index: u32,
+    pub holder: AccountHolder,
+    pub address: String,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct AddAccountArgs {
+    pub chain: Chain,
+    pub label: String,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct Balance {
+    pub account: AccountId,
+    pub amount: Nat,
+    pub as_of_ns: u64,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum Permission {
     ReadAccounts,
     ProposeTransfer,
@@ -176,6 +205,7 @@ pub struct Pending {
 pub enum AuditEvent {
     Claimed,
     JoinRequested(Principal),
+    AccountAdded(AccountId),
     Proposed(ActionId),
     Approved(ActionId),
     Rejected(ActionId),
@@ -298,6 +328,11 @@ pub struct Status {
     pub release_channel: Principal,
 }
 
+/// Canister ids are opaque principals, whose last byte is 0x01.
+pub fn is_canister_id(id: &Principal) -> bool {
+    id.as_slice().last() == Some(&0x01)
+}
+
 impl InitArgs {
     /// Checks the install arguments before anything is stored. `now_ns` is the
     /// IC time at install.
@@ -308,8 +343,7 @@ impl InitArgs {
         if self.claim_expires_at_ns <= now_ns {
             return Err("claim_expires_at_ns must be in the future".to_string());
         }
-        // Canister ids are opaque principals, whose last byte is 0x01.
-        if self.release_channel.as_slice().last() != Some(&0x01) {
+        if !is_canister_id(&self.release_channel) {
             return Err("release_channel must be a canister id".to_string());
         }
         if let Some(index) = self

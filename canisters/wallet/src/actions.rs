@@ -7,10 +7,17 @@
 //! `executable_after_ns` until a new `expires_at_ns`, one execution window
 //! later. An action past its expiry is expired, whether or not that was
 //! written down yet.
+//!
+//! A transfer stays open past its expiry while one of its ledger calls is in
+//! flight or ended without the wallet learning whether it ran, until the
+//! ledger no longer finds it: only another attempt can tell.
 
 use crate::policy::{DAY_NS, HOUR_NS, Terms};
-use crate::{Action, ActionId, ActionState, Outcome, Pending, WalletError};
-use candid::{CandidType, Principal};
+use crate::transfers::{DEDUP_WINDOW_NS, Reply, STALE_CALL_NS};
+use crate::{
+    AccountId, Action, ActionId, ActionState, Chain, Outcome, Pending, TxReceipt, WalletError,
+};
+use candid::{CandidType, Nat, Principal};
 use serde::Deserialize;
 
 /// How long a member's proposal waits for its quorum.
@@ -39,6 +46,24 @@ pub struct StoredPending {
     pub executable_after_ns: u64,
     pub expires_at_ns: u64,
     pub state: ActionState,
+    /// Whether a transfer's chain's daily limit released it without its
+    /// rule's quorum and timelock. Absent from actions stored before step 8.
+    pub daily_limit: Option<bool>,
+    /// A transfer's latest ledger call, once `execute` started one.
+    pub transfer: Option<TransferAttempt>,
+}
+
+/// What the wallet knows of a transfer's calls to the ledger.
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct TransferAttempt {
+    /// The `created_at_time` of the latest call, by which the ledger finds a
+    /// repeated transfer.
+    pub created_at_ns: u64,
+    /// When the call in flight started; `None` once it returned.
+    pub in_flight_since_ns: Option<u64>,
+    /// Whether a call with `created_at_ns` may have run without the wallet
+    /// learning how it ended. The next call then reuses `created_at_ns`.
+    pub unknown: bool,
 }
 
 impl StoredPending {
@@ -62,6 +87,8 @@ impl StoredPending {
             executable_after_ns: 0,
             expires_at_ns: now.saturating_add(approval_window_ns),
             state: ActionState::Waiting,
+            daily_limit: Some(terms.daily_limit),
+            transfer: None,
         };
         pending.release_at_quorum(now);
         pending
@@ -75,7 +102,25 @@ impl StoredPending {
 
     /// Waiting or ready, and not past its expiry at `now`.
     pub fn is_open(&self, now: u64) -> bool {
-        matches!(self.state, ActionState::Waiting | ActionState::Ready) && now < self.expires_at_ns
+        matches!(self.state, ActionState::Waiting | ActionState::Ready) && now < self.open_until()
+    }
+
+    /// The expiry, or for a transfer whose latest call may have run, the end
+    /// of the window in which the ledger finds it, if that is later.
+    fn open_until(&self) -> u64 {
+        match &self.transfer {
+            Some(attempt) if attempt.unknown || attempt.in_flight_since_ns.is_some() => self
+                .expires_at_ns
+                .max(attempt.created_at_ns.saturating_add(DEDUP_WINDOW_NS)),
+            _ => self.expires_at_ns,
+        }
+    }
+
+    /// Whether a ledger call of this transfer may have run unseen.
+    pub fn may_have_sent(&self) -> bool {
+        self.transfer
+            .as_ref()
+            .is_some_and(|attempt| attempt.unknown || attempt.in_flight_since_ns.is_some())
     }
 
     fn release_at_quorum(&mut self, now: u64) {
@@ -89,7 +134,7 @@ impl StoredPending {
     /// Writes down an expiry that has passed.
     pub fn expire(&mut self, now: u64) {
         if matches!(self.state, ActionState::Waiting | ActionState::Ready)
-            && now >= self.expires_at_ns
+            && now >= self.open_until()
         {
             self.state = ActionState::Expired;
         }
@@ -131,8 +176,15 @@ impl StoredPending {
         Ok(())
     }
 
+    /// Rejects an open action. A transfer that may have been sent cannot be
+    /// rejected: only executing it again tells whether it was.
     pub fn reject(&mut self, id: ActionId, by: Principal, now: u64) -> Result<(), WalletError> {
         self.check_open(id, now)?;
+        if self.may_have_sent() {
+            return Err(WalletError::InvalidArgument(format!(
+                "action {id} may have reached the ledger; execute it again to find out"
+            )));
+        }
         self.state = ActionState::Rejected(by);
         Ok(())
     }
@@ -155,6 +207,119 @@ impl StoredPending {
         Ok(())
     }
 
+    /// Whether the next ledger call of this transfer retries one that may
+    /// have run, and so must not be checked again like a new one. Refuses
+    /// while a call is in flight.
+    pub fn transfer_retry(&self, id: ActionId, now: u64) -> Result<bool, WalletError> {
+        let Some(attempt) = &self.transfer else {
+            return Ok(false);
+        };
+        match attempt.in_flight_since_ns {
+            Some(since) if now < since.saturating_add(STALE_CALL_NS) => Err(
+                WalletError::InvalidArgument(format!("a ledger call for action {id} is in flight")),
+            ),
+            // A call that never returned to the wallet's code may have run.
+            Some(_) => Ok(true),
+            None => Ok(attempt.unknown),
+        }
+    }
+
+    /// Starts a ledger call of this transfer and returns its
+    /// `created_at_time`: the earlier one when an earlier call may have run,
+    /// so the ledger finds it, and otherwise one from `fresh`, which no other
+    /// call has. Call `transfer_retry` first.
+    pub fn begin_transfer(&mut self, now: u64, fresh: impl FnOnce() -> u64) -> u64 {
+        let retry = self
+            .transfer
+            .as_ref()
+            .filter(|attempt| attempt.unknown || attempt.in_flight_since_ns.is_some());
+        let attempt = match retry {
+            Some(earlier) => TransferAttempt {
+                created_at_ns: earlier.created_at_ns,
+                in_flight_since_ns: Some(now),
+                unknown: true,
+            },
+            None => TransferAttempt {
+                created_at_ns: fresh(),
+                in_flight_since_ns: Some(now),
+                unknown: false,
+            },
+        };
+        let created_at_ns = attempt.created_at_ns;
+        self.transfer = Some(attempt);
+        created_at_ns
+    }
+
+    /// Records that the call in flight will not return to the wallet's code:
+    /// its callback trapped. The ledger may have run it.
+    pub fn lose_transfer_call(&mut self) {
+        if let Some(attempt) = &mut self.transfer {
+            attempt.in_flight_since_ns = None;
+            attempt.unknown = true;
+        }
+    }
+
+    /// Records how the call `begin_transfer` started ended, from `account` on
+    /// `chain`. Returns the block of a transfer the ledger holds, which ends
+    /// the action `Executed`; a refusal ends it `Failed`. When the transfer
+    /// may still be sent, the action stays ready and the error says why.
+    pub fn end_transfer(
+        &mut self,
+        reply: Reply,
+        account: AccountId,
+        chain: Chain,
+        now: u64,
+    ) -> Result<Option<Nat>, WalletError> {
+        let Some(attempt) = &mut self.transfer else {
+            return Err(WalletError::InvalidArgument(
+                "no ledger call was started".to_string(),
+            ));
+        };
+        attempt.in_flight_since_ns = None;
+        match reply {
+            Reply::Sent(block) => {
+                self.state = ActionState::Executed(Outcome::Sent(TxReceipt {
+                    account,
+                    chain,
+                    tx_id: block.0.to_str_radix(10),
+                    at_ns: now,
+                }));
+                Ok(Some(block))
+            }
+            // The refusal may have come before the ledger looked for the
+            // earlier call, so that one may still have been sent.
+            Reply::Refused(reason) if attempt.unknown => Err(WalletError::ChainError(format!(
+                "{reason}; an earlier attempt may have been sent, so execute it again to find out"
+            ))),
+            Reply::Refused(reason) => {
+                self.state = ActionState::Failed(reason);
+                Ok(None)
+            }
+            Reply::NotRun(reason) => Err(WalletError::ChainError(reason)),
+            Reply::Unknown(reason) => {
+                attempt.unknown = true;
+                Err(WalletError::ChainError(format!(
+                    "{reason}; the ledger may have sent it, so execute it again to find out"
+                )))
+            }
+            Reply::TooOld if attempt.unknown => {
+                self.state = ActionState::Failed(format!(
+                    "the ledger no longer finds transfers created at {} ns, so it cannot tell \
+                     whether an earlier attempt was sent; check the ledger for it",
+                    attempt.created_at_ns
+                ));
+                Ok(None)
+            }
+            // No earlier call ran, so the next one starts afresh.
+            Reply::TooOld => {
+                self.transfer = None;
+                Err(WalletError::ChainError(
+                    "the ledger refused the call as too old; execute it again".to_string(),
+                ))
+            }
+        }
+    }
+
     /// Records how an execution that `check_executable` allowed ended.
     pub fn finish(&mut self, result: Result<Outcome, String>) {
         self.state = match result {
@@ -175,6 +340,7 @@ impl StoredPending {
     pub fn view(&self, id: ActionId, now: u64) -> Pending {
         let mut current = self.clone();
         current.expire(now);
+        let expires_at_ns = current.open_until();
         Pending {
             id,
             action: current.action,
@@ -183,7 +349,7 @@ impl StoredPending {
             approvals: current.approvals,
             quorum: current.quorum,
             executable_after_ns: current.executable_after_ns,
-            expires_at_ns: current.expires_at_ns,
+            expires_at_ns,
             state: current.state,
         }
     }
@@ -218,6 +384,7 @@ mod tests {
             Terms {
                 quorum,
                 timelock_ns,
+                daily_limit: false,
             },
             APPROVAL_WINDOW_NS,
             T0,
@@ -321,6 +488,7 @@ mod tests {
             Terms {
                 quorum: 1,
                 timelock_ns: 0,
+                daily_limit: false,
             },
             JOIN_WINDOW_NS,
             T0,
@@ -400,6 +568,348 @@ mod tests {
                     let mut expected = before.clone();
                     expected.expire(now);
                     prop_assert_eq!(&pending, &expected);
+                }
+            }
+        }
+    }
+
+    fn transfer() -> StoredPending {
+        StoredPending::new(
+            Action::Transfer(crate::TransferRequest {
+                from: 1,
+                to: member(2).to_text(),
+                amount: Nat::from(5u8),
+                fee: None,
+                memo: None,
+            }),
+            member(1),
+            vec![member(1)],
+            Terms {
+                quorum: 1,
+                timelock_ns: 0,
+                daily_limit: true,
+            },
+            APPROVAL_WINDOW_NS,
+            T0,
+        )
+    }
+
+    fn end(
+        pending: &mut StoredPending,
+        reply: Reply,
+        now: u64,
+    ) -> Result<Option<Nat>, WalletError> {
+        pending.end_transfer(reply, 1, Chain::Icp, now)
+    }
+
+    fn unknown() -> Reply {
+        Reply::Unknown("timeout".to_string())
+    }
+
+    /// The fresh time of a call that must reuse an earlier one.
+    fn no_fresh_time() -> u64 {
+        panic!("a retry takes no fresh time")
+    }
+
+    #[test]
+    fn a_sent_transfer_ends_executed_with_its_block() {
+        let mut pending = transfer();
+        assert_eq!(pending.daily_limit, Some(true));
+        assert_eq!(pending.transfer_retry(ID, T0), Ok(false));
+        // A fresh call takes the time it is given, not `now`.
+        assert_eq!(pending.begin_transfer(T0, || T0 + 5), T0 + 5);
+        let block = Nat::from(1_234u32);
+        assert_eq!(
+            end(&mut pending, Reply::Sent(block.clone()), T0 + 1),
+            Ok(Some(block))
+        );
+        assert_eq!(
+            pending.state,
+            ActionState::Executed(Outcome::Sent(TxReceipt {
+                account: 1,
+                chain: Chain::Icp,
+                tx_id: "1234".to_string(),
+                at_ns: T0 + 1,
+            }))
+        );
+    }
+
+    #[test]
+    fn one_call_at_a_time_and_one_that_never_returned_is_retried_as_it_was() {
+        let mut pending = transfer();
+        let created_at = pending.begin_transfer(T0, || T0);
+        assert!(matches!(
+            pending.transfer_retry(ID, T0 + STALE_CALL_NS - 1),
+            Err(WalletError::InvalidArgument(reason)) if reason.contains("in flight")
+        ));
+        assert_eq!(pending.transfer_retry(ID, T0 + STALE_CALL_NS), Ok(true));
+        assert_eq!(
+            pending.begin_transfer(T0 + STALE_CALL_NS, no_fresh_time),
+            created_at
+        );
+    }
+
+    #[test]
+    fn after_an_unknown_outcome_every_retry_reuses_its_created_at_time() {
+        let mut pending = transfer();
+        let created_at = pending.begin_transfer(T0, || T0);
+        assert!(matches!(
+            end(&mut pending, unknown(), T0),
+            Err(WalletError::ChainError(reason)) if reason.contains("execute it again")
+        ));
+        assert_eq!(pending.state, ActionState::Ready);
+        assert_eq!(pending.transfer_retry(ID, T0 + HOUR_NS), Ok(true));
+        assert_eq!(
+            pending.begin_transfer(T0 + HOUR_NS, no_fresh_time),
+            created_at
+        );
+        // A call that did not run tells nothing of the earlier one.
+        assert!(
+            end(
+                &mut pending,
+                Reply::NotRun("busy".to_string()),
+                T0 + HOUR_NS
+            )
+            .is_err()
+        );
+        assert_eq!(
+            pending.begin_transfer(T0 + 2 * HOUR_NS, no_fresh_time),
+            created_at
+        );
+        assert_eq!(
+            end(&mut pending, Reply::Sent(Nat::from(3u8)), T0 + 2 * HOUR_NS),
+            Ok(Some(Nat::from(3u8)))
+        );
+    }
+
+    #[test]
+    fn a_call_that_did_not_run_leaves_the_transfer_ready_for_a_fresh_one() {
+        let mut pending = transfer();
+        pending.begin_transfer(T0, || T0);
+        assert_eq!(
+            end(&mut pending, Reply::NotRun("stopped".to_string()), T0),
+            Err(WalletError::ChainError("stopped".to_string()))
+        );
+        assert_eq!(pending.state, ActionState::Ready);
+        assert_eq!(pending.transfer_retry(ID, T0 + 1), Ok(false));
+        assert_eq!(pending.begin_transfer(T0 + 1, || T0 + 7), T0 + 7);
+    }
+
+    #[test]
+    fn a_refusal_fails_the_transfer() {
+        let mut pending = transfer();
+        pending.begin_transfer(T0, || T0);
+        assert_eq!(
+            end(&mut pending, Reply::Refused("poor".to_string()), T0),
+            Ok(None)
+        );
+        assert_eq!(pending.state, ActionState::Failed("poor".to_string()));
+    }
+
+    #[test]
+    fn after_an_unknown_outcome_a_refusal_leaves_the_transfer_open() {
+        let mut pending = transfer();
+        let created_at = pending.begin_transfer(T0, || T0);
+        assert!(end(&mut pending, unknown(), T0).is_err());
+        assert_eq!(pending.begin_transfer(T0 + 1, no_fresh_time), created_at);
+        // A ledger checks the fee before it looks for the earlier transfer.
+        let refused = Reply::Refused("the ledger's fee is 20".to_string());
+        assert!(matches!(
+            end(&mut pending, refused, T0 + 1),
+            Err(WalletError::ChainError(reason)) if reason.contains("may have been sent")
+        ));
+        assert_eq!(pending.state, ActionState::Ready);
+        assert!(pending.may_have_sent());
+        assert!(pending.reject(ID, member(1), T0 + 1).is_err());
+    }
+
+    #[test]
+    fn too_old_fails_only_a_transfer_that_may_have_been_sent() {
+        let mut fresh = transfer();
+        fresh.begin_transfer(T0, || T0);
+        assert!(matches!(
+            end(&mut fresh, Reply::TooOld, T0),
+            Err(WalletError::ChainError(_))
+        ));
+        assert_eq!(fresh.state, ActionState::Ready);
+        assert_eq!(fresh.transfer, None);
+
+        let mut unseen = transfer();
+        unseen.begin_transfer(T0, || T0);
+        end(&mut unseen, unknown(), T0).unwrap_err();
+        unseen.begin_transfer(T0 + DEDUP_WINDOW_NS, || T0 + DEDUP_WINDOW_NS);
+        assert_eq!(
+            end(&mut unseen, Reply::TooOld, T0 + DEDUP_WINDOW_NS),
+            Ok(None)
+        );
+        assert!(matches!(
+            &unseen.state,
+            ActionState::Failed(reason) if reason.contains("cannot tell")
+        ));
+    }
+
+    #[test]
+    fn a_transfer_that_may_have_been_sent_stays_open_and_cannot_be_rejected() {
+        let mut pending = transfer();
+        let expiry = pending.expires_at_ns;
+        let started = expiry - HOUR_NS;
+        pending.begin_transfer(started, || started);
+        assert!(pending.is_open(expiry));
+        end(&mut pending, unknown(), started).unwrap_err();
+        assert!(pending.is_open(started + DEDUP_WINDOW_NS - 1));
+        assert_eq!(
+            pending.view(ID, expiry).expires_at_ns,
+            started + DEDUP_WINDOW_NS
+        );
+        assert!(matches!(
+            pending.reject(ID, member(1), expiry),
+            Err(WalletError::InvalidArgument(reason)) if reason.contains("may have reached")
+        ));
+        assert_eq!(
+            pending.view(ID, started + DEDUP_WINDOW_NS).state,
+            ActionState::Expired
+        );
+
+        let mut trapped = transfer();
+        trapped.begin_transfer(T0, || T0);
+        trapped.lose_transfer_call();
+        assert!(trapped.may_have_sent());
+        assert_eq!(trapped.transfer_retry(ID, T0), Ok(true));
+
+        let mut untouched = transfer();
+        assert_eq!(untouched.reject(ID, member(1), T0), Ok(()));
+    }
+
+    /// What the ledger does with a call, and what the wallet hears of it.
+    #[derive(Clone, Copy, Debug)]
+    enum Ledger {
+        Sends,
+        SendsUnheard,
+        Loses,
+        Busy,
+        /// Refuses after looking for an earlier transfer, as with too little
+        /// in the account.
+        Refuses,
+        /// Refuses before looking for an earlier transfer, as with a changed
+        /// fee.
+        RefusesFirst,
+        /// Sends, and the wallet's code after the call traps.
+        SendsAndTraps,
+    }
+
+    #[derive(Clone, Debug)]
+    enum Step {
+        Execute(Ledger),
+        /// Starts a call that never returns to the wallet's code.
+        Stall(bool),
+        Reject,
+        Wait(u64),
+    }
+
+    fn step() -> impl Strategy<Value = Step> {
+        let ledger = prop_oneof![
+            Just(Ledger::Sends),
+            Just(Ledger::SendsUnheard),
+            Just(Ledger::Loses),
+            Just(Ledger::Busy),
+            Just(Ledger::Refuses),
+            Just(Ledger::RefusesFirst),
+            Just(Ledger::SendsAndTraps),
+        ];
+        prop_oneof![
+            3 => ledger.prop_map(Step::Execute),
+            1 => any::<bool>().prop_map(Step::Stall),
+            1 => Just(Step::Reject),
+            3 => prop_oneof![0..=2 * HOUR_NS, 0..=2 * DAY_NS, 0..=8 * DAY_NS].prop_map(Step::Wait),
+        ]
+    }
+
+    proptest! {
+        // The cases that matter need a call near the end of the window.
+        #![proptest_config(ProptestConfig::with_cases(2048))]
+
+        /// However the ledger answers and whatever the wallet never hears,
+        /// the ledger sends the tokens at most once: once they may have been
+        /// sent, every call reuses their `created_at_time`. A transfer ends
+        /// `Executed` only if they were sent, and one that was sent unheard
+        /// stays open until the ledger no longer finds it.
+        #[test]
+        fn a_transfer_is_sent_at_most_once(
+            start in 0..EXECUTION_WINDOW_NS,
+            steps in prop::collection::vec(step(), 1..40),
+        ) {
+            let mut pending = transfer();
+            let mut now = T0 + start;
+            // The `created_at_time` of the transfer the ledger sent.
+            let mut sent: Option<u64> = None;
+            for step in steps {
+                let call = |pending: &mut StoredPending, sends: bool| -> Option<(u64, bool)> {
+                    if pending.check_executable(ID, now).is_err() || pending.transfer_retry(ID, now).is_err() {
+                        return None;
+                    }
+                    let created_at = pending.begin_transfer(now, || now);
+                    let too_old = now >= created_at + DEDUP_WINDOW_NS;
+                    let found = sent == Some(created_at) && !too_old;
+                    Some((created_at, sends && !too_old && !found))
+                };
+                match step {
+                    Step::Wait(ns) => now += ns,
+                    Step::Reject => {
+                        let _ = pending.reject(ID, member(1), now);
+                    }
+                    Step::Stall(sends) => {
+                        if let Some((created_at, runs)) = call(&mut pending, sends) {
+                            if let Some(earlier) = sent {
+                                prop_assert_eq!(created_at, earlier);
+                            }
+                            if runs {
+                                sent = Some(created_at);
+                            }
+                        }
+                    }
+                    Step::Execute(ledger) => {
+                        let sends = matches!(ledger, Ledger::Sends | Ledger::SendsUnheard | Ledger::SendsAndTraps);
+                        let Some((created_at, runs)) = call(&mut pending, sends) else {
+                            continue;
+                        };
+                        if let Some(earlier) = sent {
+                            prop_assert_eq!(created_at, earlier, "a second transfer");
+                        }
+                        let reply = if now >= created_at + DEDUP_WINDOW_NS {
+                            Reply::TooOld
+                        } else if matches!(ledger, Ledger::RefusesFirst) {
+                            Reply::Refused("fee".to_string())
+                        } else if sent == Some(created_at) {
+                            Reply::Sent(Nat::from(0u8))
+                        } else {
+                            match ledger {
+                                Ledger::Sends => Reply::Sent(Nat::from(0u8)),
+                                Ledger::SendsUnheard | Ledger::Loses => unknown(),
+                                Ledger::Busy => Reply::NotRun("busy".to_string()),
+                                Ledger::Refuses => Reply::Refused("poor".to_string()),
+                                Ledger::RefusesFirst => unreachable!(),
+                                Ledger::SendsAndTraps => unknown(),
+                            }
+                        };
+                        if runs {
+                            sent = Some(created_at);
+                        }
+                        if matches!(ledger, Ledger::SendsAndTraps) && runs {
+                            pending.lose_transfer_call();
+                        } else {
+                            let _ = end(&mut pending, reply, now);
+                        }
+                    }
+                }
+                pending.expire(now);
+                if matches!(pending.state, ActionState::Executed(_)) {
+                    prop_assert!(sent.is_some());
+                }
+                if let Some(created_at) = sent
+                    && !pending.is_open(now)
+                    && !matches!(pending.state, ActionState::Executed(_))
+                {
+                    prop_assert!(now >= created_at + DEDUP_WINDOW_NS, "{:?}", pending.state);
                 }
             }
         }

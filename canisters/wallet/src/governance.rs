@@ -22,7 +22,7 @@ pub struct Governance {
     pub policy: Policy,
 }
 
-fn check_label(label: &str) -> Result<(), WalletError> {
+pub fn check_label(label: &str) -> Result<(), WalletError> {
     if label.trim().is_empty() || label.len() > MAX_LABEL_BYTES {
         return Err(WalletError::InvalidArgument(format!(
             "a label needs 1 to {MAX_LABEL_BYTES} bytes"
@@ -103,9 +103,14 @@ impl Governance {
                 policy::validate(policy).map_err(WalletError::InvalidArgument)?;
                 next.policy = policy.clone();
             }
-            // Transfers, extensions and upgrades arrive in later steps.
-            Action::Transfer(_)
-            | Action::InstallExtension { .. }
+            // A transfer changes no member or rule; `execute` sends it.
+            Action::Transfer(_) => {
+                return Err(WalletError::InvalidArgument(
+                    "a transfer is not a change to the members or the policy".to_string(),
+                ));
+            }
+            // Extensions and upgrades arrive in later steps.
+            Action::InstallExtension { .. }
             | Action::UninstallExtension(_)
             | Action::Upgrade { .. } => {
                 return Err(WalletError::InvalidArgument(format!(

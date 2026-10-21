@@ -1,6 +1,7 @@
 //! The approval policy: for each kind of action, how many approvals it needs
 //! and how long it waits once it has them. Pure: no storage and no clock.
 
+use crate::accounts::check_chain;
 use crate::{ActionKind, Chain, Policy, PolicyRule, Role};
 use candid::Nat;
 
@@ -59,6 +60,7 @@ pub fn validate(policy: &Policy) -> Result<(), String> {
             ));
         }
         for (index, limit) in rule.daily_limits.iter().enumerate() {
+            check_chain(&limit.chain).map_err(|reason| format!("a daily limit: {reason}"))?;
             if rule.daily_limits[..index]
                 .iter()
                 .any(|earlier| earlier.chain == limit.chain)
@@ -128,6 +130,9 @@ pub fn check_governance(
 pub struct Terms {
     pub quorum: u8,
     pub timelock_ns: u64,
+    /// Whether these are a transfer's terms under its chain's daily limit,
+    /// lighter than its rule. `execute` checks the limit again.
+    pub daily_limit: bool,
 }
 
 /// A transfer's chain and amount, and what transfers under the daily limit
@@ -139,10 +144,12 @@ pub struct Spend<'a> {
 }
 
 /// The terms for an action under `policy`. A transfer that stays within its
-/// chain's daily limit needs only the proposer and no timelock.
+/// chain's daily limit needs only the proposer and no timelock; under a rule
+/// that asks no more, it takes the rule's terms.
 pub fn terms(policy: &Policy, kind: ActionKind, spend: Option<&Spend>) -> Terms {
     let rule = rule(policy, kind);
     if kind == ActionKind::Transfer
+        && (rule.quorum > 1 || rule.timelock_ns > 0)
         && let Some(spend) = spend
         && let Some(limit) = rule
             .daily_limits
@@ -153,11 +160,13 @@ pub fn terms(policy: &Policy, kind: ActionKind, spend: Option<&Spend>) -> Terms 
         return Terms {
             quorum: 1,
             timelock_ns: 0,
+            daily_limit: true,
         };
     }
     Terms {
         quorum: rule.quorum,
         timelock_ns: rule.timelock_ns,
+        daily_limit: false,
     }
 }
 
@@ -337,16 +346,61 @@ pub(crate) mod tests {
         let fast = Terms {
             quorum: 1,
             timelock_ns: 0,
+            daily_limit: true,
         };
         let rule = Terms {
             quorum: 2,
             timelock_ns: DAY_NS,
+            daily_limit: false,
         };
         assert_eq!(terms_for(&Chain::Icp, 60, 40), fast);
         assert_eq!(terms_for(&Chain::Icp, 61, 40), rule);
         assert_eq!(terms_for(&Chain::Icp, 0, 101), rule);
         // A chain without a limit always takes the rule.
         assert_eq!(terms_for(&Chain::Evm(1), 1, 0), rule);
+    }
+
+    #[test]
+    fn under_a_rule_that_asks_no_more_a_limit_changes_nothing() {
+        let policy = with_rule(default_policy(), ActionKind::Transfer, |rule| {
+            rule.daily_limits = vec![DailyLimit {
+                chain: Chain::Icp,
+                amount: Nat::from(100u8),
+            }];
+        });
+        let (amount, spent) = (Nat::from(1u8), Nat::from(0u8));
+        let spend = Spend {
+            chain: &Chain::Icp,
+            amount: &amount,
+            spent: &spent,
+        };
+        assert_eq!(
+            terms(&policy, ActionKind::Transfer, Some(&spend)),
+            Terms {
+                quorum: 1,
+                timelock_ns: 0,
+                daily_limit: false,
+            }
+        );
+    }
+
+    #[test]
+    fn a_daily_limit_names_the_icp_ledger_as_icp_and_a_canister_as_icrc() {
+        for chain in [
+            Chain::Icrc(crate::accounts::ICP_LEDGER),
+            Chain::Icrc(candid::Principal::self_authenticating([1; 32])),
+        ] {
+            let policy = with_rule(default_policy(), ActionKind::Transfer, |rule| {
+                rule.daily_limits = vec![DailyLimit {
+                    chain: chain.clone(),
+                    amount: Nat::from(5u8),
+                }];
+            });
+            assert!(
+                validate(&policy).unwrap_err().starts_with("a daily limit:"),
+                "{chain:?}"
+            );
+        }
     }
 
     proptest! {
@@ -377,9 +431,10 @@ pub(crate) mod tests {
             prop_assert_eq!(validate(&weaker).is_ok(), still_dominant);
         }
 
-        /// A transfer skips its rule exactly when its chain has a daily limit
-        /// that the amount, added to what was spent, does not pass. Nothing
-        /// else ever gets lighter terms than its rule.
+        /// A transfer skips its rule exactly when the rule asks for more than
+        /// the proposer and its chain has a daily limit that the amount, added
+        /// to what was spent, does not pass. Nothing else ever gets lighter
+        /// terms than its rule.
         #[test]
         fn only_transfers_within_the_daily_limit_skip_their_rule(
             policy in valid_policy(),
@@ -393,19 +448,18 @@ pub(crate) mod tests {
             let spend = Spend { chain: &chain, amount: &amount, spent: &spent };
             let rule = rule(&policy, kind).clone();
             let within_limit = kind == ActionKind::Transfer
+                && (rule.quorum > 1 || rule.timelock_ns > 0)
                 && rule.daily_limits.iter().any(|limit| {
                     limit.chain == chain && spent.clone() + amount.clone() <= limit.amount
                 });
+            let by_rule = Terms { quorum: rule.quorum, timelock_ns: rule.timelock_ns, daily_limit: false };
             let expected = if within_limit {
-                Terms { quorum: 1, timelock_ns: 0 }
+                Terms { quorum: 1, timelock_ns: 0, daily_limit: true }
             } else {
-                Terms { quorum: rule.quorum, timelock_ns: rule.timelock_ns }
+                by_rule
             };
             prop_assert_eq!(terms(&policy, kind, Some(&spend)), expected);
-            prop_assert_eq!(
-                terms(&policy, kind, None),
-                Terms { quorum: rule.quorum, timelock_ns: rule.timelock_ns }
-            );
+            prop_assert_eq!(terms(&policy, kind, None), by_rule);
         }
 
         /// Spending more never turns a transfer that needs its rule into one
