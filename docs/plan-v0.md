@@ -87,4 +87,4 @@ the test, so the gap is always visible.
 - Rescue path: none, or a guardian that can only reinstall a signed release
   after a long timelock (affects step 11).
 - License.
-- Release signers for v0 (affects step 10).
+- Who holds the three release signer keys (before step 14).

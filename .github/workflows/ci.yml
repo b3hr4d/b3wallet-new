@@ -44,10 +44,10 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Clippy (canister target)
-        run: cargo clippy -p wallet --target wasm32-unknown-unknown --locked -- -D warnings
+        run: cargo clippy -p wallet -p release_channel -p caller --target wasm32-unknown-unknown --locked -- -D warnings
 
-      - name: Unit and interface tests
-        run: cargo test -p wallet --locked -- --nocapture
+      - name: Unit, interface and release tool tests
+        run: cargo test --workspace --exclude integration --locked -- --nocapture
 
       # The previous release is the pull request's base, or on main the commit
       # before. It builds in its own target directory: both builds write
@@ -63,8 +63,9 @@ jobs:
             -p wallet --target wasm32-unknown-unknown --release --locked
           echo "PREVIOUS_WALLET_WASM=${RUNNER_TEMP}/previous-target/wasm32-unknown-unknown/release/wallet.wasm" >> "${GITHUB_ENV}"
 
-      - name: Build the wallet Wasm
-        run: cargo build -p wallet --target wasm32-unknown-unknown --release --locked
+      # The caller canister lets the PocketIC tests call as a canister.
+      - name: Build the wallet, release channel and caller Wasm
+        run: cargo build -p wallet -p release_channel -p caller --target wasm32-unknown-unknown --release --locked
 
       - name: Download the PocketIC server
         run: |
@@ -91,5 +92,5 @@ jobs:
           echo "BITCOIND=${PWD}/bitcoin-${BITCOIN_CORE_VERSION}/bin/bitcoind" >> "${GITHUB_ENV}"
           echo "BITCOIN_CLI=${PWD}/bitcoin-${BITCOIN_CORE_VERSION}/bin/bitcoin-cli" >> "${GITHUB_ENV}"
 
-      - name: PocketIC tests, with the upgrade from the previous release and regtest
+      - name: PocketIC tests, with the upgrade from the previous release, regtest and a 100 MiB release
         run: cargo test -p integration --locked -- --include-ignored

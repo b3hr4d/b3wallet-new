@@ -245,6 +245,38 @@ action that the policy module releases only after its quorum and timelock.
 6. Uninstalling revokes the permissions. Funds left in the sub-wallet stay
    under the owners' control.
 
+### Publish a release
+
+Three keys sign releases, and a release needs any two of them ([decision
+0004](decisions/0004-release-signers.md)). The release channel is a canister
+of its own, installed with its publishers, the signer keys and the threshold;
+an upgrade keeps them or replaces them.
+
+1. A publisher builds the Wasm and runs `release-tool manifest`, which cuts it
+   into 1 MiB chunks and writes the manifest: version, Wasm SHA-256 and size,
+   one SHA-256 per chunk, the module hashes it was tested to upgrade from, the
+   notes URL and the publish time.
+2. Two signers each check the manifest against the Wasm and run
+   `release-tool sign`, which signs SHA-256 of the manifest's Candid encoding
+   with no signatures.
+3. The publisher stages every chunk with `publish_chunk`. A chunk staged again
+   replaces the one before.
+4. `publish_manifest` checks the manifest's form, that its version is new,
+   that two of the channel's keys signed it, and that every staged chunk
+   matches its hash and all of them together are the Wasm it names. Only then
+   does the release go live, with its chunks; until then the channel serves
+   nothing of it.
+5. A published version never changes. Wallets read `latest`, `manifest` and
+   `chunk`, and check all of it again against the keys they pin, so the
+   channel can withhold a release but cannot push a bad one.
+
+Only publishers can call `publish_chunk` and `publish_manifest`. The channel
+drops anyone else's message before it runs, so a stranger's megabyte costs it
+no cycles, and its guard refuses a call from another canister. Checking the
+largest release, 100 chunks, which is what the IC's chunk store holds, hashes
+every byte twice in one call: about 16.4 billion of the 40 billion
+instructions an update may use.
+
 ### Self-upgrade
 
 1. The release channel publishes a manifest: version, Wasm SHA-256, chunk
@@ -325,6 +357,16 @@ upgrades it to the change. Pages are not state: they are embedded in the
 Wasm, so they change only with a release. The heap holds only the
 certification tree, rebuilt from them in `post_upgrade`.
 
+The release channel keeps its state the same way, and its `post_upgrade` reads
+its configuration and every manifest before it returns:
+
+| Memory id | Store | Key to value | Structure |
+| --- | --- | --- | --- |
+| 0 | Config | publishers, release signer keys and threshold | `StableCell` |
+| 1 | Releases | version to its manifest, once published | `StableBTreeMap` |
+| 2 | Publish order | sequence to version; `latest` is the last | `StableBTreeMap` |
+| 3 | Chunks | version and index to the chunk's bytes, staged or published | `StableBTreeMap` |
+
 ## Schema
 
 The target interfaces are in [`candid/`](../candid):
@@ -344,7 +386,8 @@ exists in canister memory, but whoever can install code can move every fund.
 
 | Threat | Mitigation | What remains |
 | --- | --- | --- |
-| A malicious or compromised release | Release signers' threshold pinned in the wallet; owner quorum; timelock with a banner during which any owner can cancel or withdraw | Owners who ignore the banner |
+| A malicious or compromised release | Two of three release signer keys, pinned in the wallet; owner quorum; timelock with a banner during which any owner can cancel or withdraw | Owners who ignore the banner; two signers who sign a bad release |
+| A compromised release channel or publisher | The channel publishes only a manifest two signers signed, with chunks that match it; wallets check both again themselves | It can withhold releases |
 | An upgrade that bricks the wallet | One-way install keeps the old code when `post_upgrade` traps; `tested_from` refuses untested paths; every release is tested over the last two versions | No rescue if a release breaks its own upgrade method |
 | One owner's device or anchor stolen | Quorum and timelock above the daily limit; any owner can reject; removing an owner needs the others | Losses up to the daily limit |
 | Claim link intercepted | Private key only in the fragment; one use; expiry; the signature names the caller | Whoever opens the link first owns the wallet |
@@ -368,7 +411,6 @@ exists in canister memory, but whoever can install code can move every fund.
 | Upgrade timelock | 48 hours; 7 days | 7 days for upgrades, 24 hours for removing an owner; the default policy uses this, with 24 hours for role changes and 7 days for `SetPolicy` |
 | Default quorum | 1 while there is one owner; 2 once a second owner joins | Start at 1, prompt to raise it when a second owner joins; the default policy starts at 1 |
 | Chains in v0 | ICP and ICRC only; add Bitcoin; add EVM | ICP, ICRC and Bitcoin; EVM in v1 |
-| Release signers | One maintainer key; 2 of 3 team keys; an SNS | 2 of 3 team keys |
 | Fee model | Owners top up cycles; a per-signature fee in tokens | Owners top up in v0 |
 | Custom domains | `icp0.io` only; custom domains as aliases | `icp0.io` only in v0 |
 

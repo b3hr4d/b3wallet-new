@@ -5,7 +5,7 @@ its own certified UI, keeps its accounts and approval policy, signs with
 threshold keys, is its own only controller, and upgrades itself only to a
 release its owners approved.
 
-**Status: step 9 of [the v0 plan](docs/plan-v0.md).** The wallet canister
+**Status: step 10 of [the v0 plan](docs/plan-v0.md).** The wallet canister
 installs, keeps its state in stable memory across upgrades, answers `status`,
 can be claimed once by its first owner, and shows its member list only to its
 members. Members change members and the policy through actions that wait for
@@ -17,8 +17,12 @@ balances from the ledgers, and sends them by `Transfer` actions, at most once
 each, with a daily limit below which a transfer needs no approvals. Its
 Bitcoin accounts hold coins at addresses of its threshold ECDSA keys, and a
 `Transfer` from one sends a transaction it signs with those keys through the
-Bitcoin canister, again at most once. Everything else is still design, in
-[docs/design.md](docs/design.md).
+Bitcoin canister, again at most once. Releases are published to a release
+channel canister, which serves a release only when two of its three signer
+keys signed its manifest and its chunks match the manifest
+([decision 0004](docs/decisions/0004-release-signers.md)); `release-tool`
+makes and signs the manifests. Wallets do not install releases yet.
+Everything else is still design, in [docs/design.md](docs/design.md).
 
 ## Principles
 
@@ -43,7 +47,11 @@ Bitcoin canister, again at most once. Everything else is still design, in
 | `docs/plan-v0.md` | The v0 build, one small verified step per pull request |
 | `candid/` | The target Candid interfaces of the wallet, release channel, factory and extensions |
 | `canisters/wallet/` | The wallet canister |
-| `tests/integration/` | PocketIC tests of the real wallet Wasm |
+| `canisters/release_channel/` | The release channel canister |
+| `crates/release/` | Release manifests and their checks, shared by the channel, wallets and the tool |
+| `tools/release-tool/` | The command-line tool that makes, signs and checks manifests |
+| `tests/integration/` | PocketIC tests of the real wallet and release channel Wasm |
+| `tests/caller/` | A canister the PocketIC tests call through, to call as a canister |
 | `scripts/try-local.sh`, `icp.yaml` | A local wallet to try, with icp-cli and a regtest Bitcoin node |
 
 ## Development
@@ -63,16 +71,18 @@ CI runs the same commands:
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo clippy -p wallet --target wasm32-unknown-unknown --locked -- -D warnings
-cargo test -p wallet --locked -- --nocapture   # unit tests and the interface check
-cargo build -p wallet --target wasm32-unknown-unknown --release --locked
+cargo clippy -p wallet -p release_channel -p caller --target wasm32-unknown-unknown --locked -- -D warnings
+cargo test --workspace --exclude integration --locked -- --nocapture   # unit, interface and tool tests
+cargo build -p wallet -p release_channel -p caller --target wasm32-unknown-unknown --release --locked
 POCKET_IC_BIN=/path/to/pocket-ic ICRC1_LEDGER_WASM=/path/to/ic-icrc1-ledger.wasm.gz \
   BITCOIND=/path/to/bitcoind BITCOIN_CLI=/path/to/bitcoin-cli \
   cargo test -p integration --locked -- --include-ignored
 ```
 
-The interface check compares every method the canister exports with the same
-method in `candid/wallet.did` and prints the methods not implemented yet. The
+The interface checks compare every method a canister exports with the same
+method in its file in `candid/`; the wallet's prints the methods not
+implemented yet. One release channel test publishes a release of 100 MiB, the
+largest the channel takes. The
 PocketIC tests need the server version and the ICRC-1 ledger release pinned in
 `.github/workflows/ci.yml`; the ledger runs both as the ICP ledger, at its
 mainnet id, and as an ICRC token. The Bitcoin tests start a regtest node of
@@ -95,6 +105,52 @@ Bitcoin account; without it the wallet gets only the ICP one.
 ```sh
 ./scripts/try-local.sh
 ```
+
+## Publishing a release
+
+`release-tool` (`cargo run -p release-tool --`) never talks to the network: it
+writes files that icp-cli sends. Each signer makes a key once and gives the
+publisher its public key:
+
+```sh
+openssl genpkey -algorithm ed25519 -out signer.pem
+release-tool public-key --key signer.pem
+```
+
+The release channel is installed with its publishers, the three public keys
+and the threshold (`release-tool public-key --candid` prints a key as a Candid
+blob). The icp-cli commands run in the repository root, whose `icp.yaml` names
+the channel:
+
+```sh
+icp deploy release_channel --args '(variant { Init = record {
+  publishers = vec { principal "<publisher>" };
+  release_signers = vec { blob "..."; blob "..."; blob "..." };
+  release_threshold = 2 : nat8;
+} })'
+```
+
+A release, from its Wasm:
+
+```sh
+release-tool manifest --wasm wallet.wasm --version 0.2.0 \
+  --notes-url https://example.org/0.2.0 --tested-from <module hash of 0.1.0> > manifest.did
+release-tool sign --key signer.pem --wasm wallet.wasm manifest.did     # two signers, in turn
+release-tool verify --signer <key 1> --signer <key 2> --signer <key 3> --threshold 2 \
+  --wasm wallet.wasm manifest.did
+release-tool chunks --wasm wallet.wasm --version 0.2.0 --out chunks
+for f in chunks/chunk-*.bin; do
+  icp canister call release_channel publish_chunk --args-file "$f" --args-format bin \
+    --candid candid/release_channel.did
+done
+icp canister call release_channel publish_manifest --args-file manifest.did \
+  --candid candid/release_channel.did
+```
+
+`sign` prints what it signs, the manifest's signing hash included, and with
+`--wasm` first checks that the manifest names that Wasm. Signing hashes the
+manifest's Candid encoding as the Rust `candid` crate writes it; other
+encoders lay out the type table differently, so sign with this tool.
 
 ## Checking the schema
 
