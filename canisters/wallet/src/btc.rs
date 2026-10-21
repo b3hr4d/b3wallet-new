@@ -175,7 +175,9 @@ pub struct Plan {
 }
 
 /// Chooses the outputs that pay `amount` to `to` and the fee, largest first.
-/// Change too small for the network to relay goes to the fee as well.
+/// Change too small for the network to relay goes to the fee as well; change
+/// it would relay never does, so a fixed fee too low for the transaction
+/// with change fails.
 pub fn plan(
     mut coins: Vec<Coin>,
     amount: u64,
@@ -186,36 +188,44 @@ pub fn plan(
     coins.sort_by(|a, b| b.value.cmp(&a.value).then(a.key().cmp(&b.key())));
     let available: u64 = coins.iter().map(|coin| coin.value).sum();
     let dust = change.minimal_non_dust().to_sat();
-    let fee_for = |vsize: u64| -> Result<u64, String> {
-        match fee {
-            Fee::Rate(rate) => Ok((rate * vsize).div_ceil(1_000)),
-            Fee::Total(total) if total.saturating_mul(1_000) >= MIN_FEE_RATE * vsize => Ok(total),
-            Fee::Total(total) => Err(format!(
-                "a fee of {total} satoshis is below {} satoshi per vbyte for this \
+    let fee_for = |vsize: u64| match fee {
+        Fee::Rate(rate) => (rate * vsize).div_ceil(1_000),
+        Fee::Total(total) => total,
+    };
+    // A rate is never below the floor; a fixed fee may be.
+    let check_floor = |paid: u64, vsize: u64| -> Result<(), String> {
+        if paid.saturating_mul(1_000) < MIN_FEE_RATE * vsize {
+            return Err(format!(
+                "a fee of {paid} satoshis is below {} satoshi per vbyte for this \
                  transaction's {vsize} vbytes",
                 MIN_FEE_RATE / 1_000
-            )),
+            ));
         }
+        Ok(())
     };
     let mut total = 0u64;
     for (count, coin) in coins.iter().enumerate().take(MAX_INPUTS) {
         total += coin.value;
         let inputs = count + 1;
-        let with_change = fee_for(vsize(inputs, &[to, change]))?;
+        let size = vsize(inputs, &[to, change]);
+        let with_change = fee_for(size);
         if let Some(left) = total.checked_sub(amount + with_change)
             && left >= dust
         {
+            check_floor(with_change, size)?;
             return Ok(Plan {
                 inputs: coins[..inputs].to_vec(),
                 fee: with_change,
                 change: left,
             });
         }
-        let without = fee_for(vsize(inputs, &[to]))?;
-        if total >= amount + without {
+        let size = vsize(inputs, &[to]);
+        if total >= amount + fee_for(size) {
+            let paid = total - amount;
+            check_floor(paid, size)?;
             return Ok(Plan {
                 inputs: coins[..inputs].to_vec(),
-                fee: total - amount,
+                fee: paid,
                 change: 0,
             });
         }
@@ -516,6 +526,30 @@ pub(crate) mod tests {
             &to,
             &change,
             Fee::Total(100),
+        )
+        .unwrap_err();
+        assert!(error.contains("below 1 satoshi per vbyte"), "{error}");
+
+        // A fee that covers the transaction without change, though not the
+        // one with it, pays an exact balance.
+        let exact = vsize(1, &[&to]);
+        assert!(exact < vsize(1, &[&to, &change]));
+        let plan = super::plan(
+            vec![coin(1, 10_000)],
+            10_000 - exact,
+            &to,
+            &change,
+            Fee::Total(exact),
+        )
+        .unwrap();
+        assert_eq!((plan.fee, plan.change), (exact, 0));
+        // But change the network would relay never goes to the fee for it.
+        let error = super::plan(
+            vec![coin(1, 10_000)],
+            10_000 - exact - 294,
+            &to,
+            &change,
+            Fee::Total(exact),
         )
         .unwrap_err();
         assert!(error.contains("below 1 satoshi per vbyte"), "{error}");
