@@ -7,6 +7,7 @@
 //! shorter, so one Wasm has exactly one list of chunk hashes.
 
 pub mod channel;
+pub mod factory;
 
 use candid::{CandidType, encode_one};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};

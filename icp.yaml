@@ -1,6 +1,6 @@
-# icp-cli project: the wallet and release channel canisters and a local
-# network whose Bitcoin canister follows a regtest node on 127.0.0.1:18444, as
-# scripts/try-local.sh starts one.
+# icp-cli project: the wallet, release channel and factory canisters and a
+# local network whose Bitcoin canister follows a regtest node on
+# 127.0.0.1:18444, as scripts/try-local.sh starts one.
 canisters:
   - name: wallet
     recipe:
@@ -14,6 +14,12 @@ canisters:
       configuration:
         package: release_channel
         candid: candid/release_channel.did
+  - name: factory
+    recipe:
+      type: "@dfinity/rust@v3.2.0"
+      configuration:
+        package: factory
+        candid: candid/factory.did
 
 networks:
   - name: local

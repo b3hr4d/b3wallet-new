@@ -36,6 +36,12 @@ gzipped, since precomputed points do not compress. About 410 KB of its code
 is the glob matcher (`globset` and its regex engine) that
 `ic-asset-certification` always pulls in.
 
+At step 12 a factory creates wallets on PocketIC, with the IC's cycles
+minting canister and cycles ledger. Of 3T cycles a creator pays, a new wallet
+starts with 2.49T; the rest paid the IC for creating the canister and
+installing the release. The factory spends about 8.5B cycles of its own per
+wallet on its calls. Not proved yet: the same on mainnet.
+
 The wallet itself runs no JavaScript: its pages are prerendered at build and
 embedded in the release ([decision 0001](decisions/0001-react-rendering.md)).
 The rendering results above apply to public pages served by a separate
@@ -116,9 +122,21 @@ action that the policy module releases only after its quorum and timelock.
 
 1. The creator's browser makes a fresh Ed25519 claim keypair. Only the public
    key leaves the browser.
-2. The creator calls the factory's `create_wallet` with cycles and that public
-   key. The factory creates the canister, installs the current release with
-   `InitArgs`, makes the wallet its own only controller, and drops itself.
+2. The creator lets the factory take the wallet's cycles and the fee from
+   their account on the cycles ledger, and calls the factory's
+   `create_wallet` with that public key, when the claim expires, and the
+   cycles. The factory first checks that two of the three signer keys signed
+   the channel's release. The cycles ledger then takes the cycles and has the
+   cycles minting canister create the canister (`create_canister_from`),
+   controlled by the factory alone. The factory stages the release's chunks
+   in the canister's own chunk store, each checked against the signed
+   manifest, installs the wallet with `InitArgs` that name the channel, the
+   signer keys and the factory, empties the chunk store, and makes the wallet
+   its own only controller. If the release does not install, the creator
+   becomes the canister's only controller instead, with the cycles left in
+   it. A canister whose hand-over fails stays on the factory's record, and
+   the factory's timer tries again every five minutes until it controls none
+   of the canisters it created.
 3. The browser builds the claim link
    `https://<wallet id>.icp0.io/claim#<claim private key>`. The fragment never
    reaches the gateway or any node.
@@ -384,6 +402,14 @@ its configuration and every manifest before it returns:
 | 2 | Publish order | sequence to version; `latest` is the last | `StableBTreeMap` |
 | 3 | Chunks | version and index to the chunk's bytes, staged or published | `StableBTreeMap` |
 
+So does the factory, whose `post_upgrade` also sets its timer again while a
+canister waits for its hand-over:
+
+| Memory id | Store | Key to value | Structure |
+| --- | --- | --- | --- |
+| 0 | Config | release channel, release signer keys and threshold | `StableCell` |
+| 1 | Hand-overs | a canister it created and still controls to its creator, the module of its release, and when it was created | `StableBTreeMap` |
+
 ## Schema
 
 The target interfaces are in [`candid/`](../candid):
@@ -405,6 +431,8 @@ exists in canister memory, but whoever can install code can move every fund.
 | --- | --- | --- |
 | A malicious or compromised release | Two of three release signer keys, pinned in the wallet; owner quorum; timelock with a banner during which any owner can cancel or withdraw | Owners who ignore the banner; two signers who sign a bad release |
 | A compromised release channel or publisher | The channel publishes only a manifest two signers signed, with chunks that match it; wallets check both again themselves | It can withhold releases |
+| A malicious or compromised factory | It installs only a release two of the three signer keys signed, pins those keys in the wallet, and leaves each wallet its own only controller; a wallet's module hash and controllers are public in the IC's certified state | A factory whose controllers change its code can create wallets that run other code or that it still controls, and nothing checks a new wallet's module hash and controllers before the claim yet. Wallets already handed over are out of its reach |
+| Strangers calling the factory | `create_wallet` checks its arguments and the release before the creator pays; the creator pays the wallet's cycles | Each call costs the factory cycles: a refused one a channel read and the signature checks, and each wallet about 8.5B for the factory's calls, which the creator does not pay |
 | An upgrade that bricks the wallet | One-way install keeps the old code when `post_upgrade` traps, and the wallet marks the upgrade `Failed` an hour later; `tested_from` refuses untested paths; every release is tested over the last two versions | No rescue if a release breaks its own upgrade method ([decision 0005](decisions/0005-rescue-path.md)) |
 | One owner's device or anchor stolen | Quorum and timelock above the daily limit; any owner can reject; removing an owner needs the others | Losses up to the daily limit |
 | Claim link intercepted | Private key only in the fragment; one use; expiry; the signature names the caller | Whoever opens the link first owns the wallet |

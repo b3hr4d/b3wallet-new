@@ -1,17 +1,36 @@
 // Factory: creates a wallet canister, installs a signed release, makes the
 // wallet its own only controller, and drops itself. It keeps no rights over
-// any wallet it created. Draft 0, 2026-10-20.
+// any wallet it created. Draft 0, 2026-10-20; install arguments, errors and
+// current_release from step 12, 2026-10-21.
 
 import "common.did";
+
+// The release channel new wallets get their release from, and the keys that
+// must have signed it. Every wallet the factory creates pins the same.
+type FactoryConfig = record {
+  release_channel : principal;
+  // Ed25519 public keys, at most 16, and how many of them must sign.
+  release_signers : vec blob;
+  release_threshold : nat8;
+};
+
+// An upgrade keeps the configuration, or replaces it with the one it names.
+type FactoryArg = variant {
+  Init : FactoryConfig;
+  Upgrade : opt FactoryConfig;
+};
 
 type CreateWalletArgs = record {
   // Ed25519 public key of the claim keypair made in the creator's browser.
   claim_public_key : blob;
+  // At least an hour from now.
   claim_expires_at_ns : nat64;
   // None installs the channel's latest release.
   version : opt text;
-  // Cycles the factory pulls from the caller's cycles-ledger account with
-  // ICRC-2 transfer_from; they become the new wallet's balance.
+  // At least 1T. The cycles ledger takes them, and its fee, out of the
+  // caller's account (from_subaccount, 32 bytes) with create_canister_from,
+  // under the allowance the caller gave the factory for both. They become
+  // the new wallet's balance, less the IC's fees to create and install it.
   cycles : nat;
   from_subaccount : opt blob;
 };
@@ -19,21 +38,35 @@ type CreateWalletArgs = record {
 type CreatedWallet = record {
   wallet : principal;
   version : text;
+  // What the caller paid.
   cycles : nat;
 };
 
 type FactoryError = variant {
+  // An argument out of its form or limit, or the anonymous caller.
+  InvalidArgument : text;
+  // Nothing was paid in any of the next four.
   InsufficientAllowance : record { allowance : nat };
+  InsufficientFunds : record { balance : nat };
   ReleaseUnavailable : text;
+  // The release is out of form or not signed by enough of the keys.
   ReleaseRejected : text;
+  // The cycles ledger did not create the canister. It refunds what it took
+  // less its fees, and the text holds its answer.
   CreateFailed : text;
+  // The canister was created and paid for, but the release did not install
+  // in it. The factory made the caller its only controller.
   InstallFailed : record { wallet : principal; reason : text };
 };
 
 type CreateWalletResult = variant { Ok : CreatedWallet; Err : FactoryError };
 
-service : (record { release_channel : principal; release_signers : vec blob; release_threshold : nat8 }) -> {
+type CurrentReleaseResult = variant { Ok : ReleaseManifest; Err : FactoryError };
+
+service : (FactoryArg) -> {
   create_wallet : (CreateWalletArgs) -> (CreateWalletResult);
-  // The release new wallets get, after the factory checked its signatures.
-  current_release : () -> (opt ReleaseManifest) query;
+  // The release a wallet created now gets: the channel's latest, after the
+  // factory checked its form and signatures. An update, since it calls the
+  // channel.
+  current_release : () -> (CurrentReleaseResult);
 };

@@ -44,7 +44,7 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Clippy (canister target)
-        run: cargo clippy -p wallet -p release_channel -p caller --target wasm32-unknown-unknown --locked -- -D warnings
+        run: cargo clippy -p wallet -p release_channel -p factory -p caller --target wasm32-unknown-unknown --locked -- -D warnings
 
       - name: Unit, interface and release tool tests
         run: cargo test --workspace --exclude integration --locked -- --nocapture
@@ -64,8 +64,8 @@ jobs:
           echo "PREVIOUS_WALLET_WASM=${RUNNER_TEMP}/previous-target/wasm32-unknown-unknown/release/wallet.wasm" >> "${GITHUB_ENV}"
 
       # The caller canister lets the PocketIC tests call as a canister.
-      - name: Build the wallet, release channel and caller Wasm
-        run: cargo build -p wallet -p release_channel -p caller --target wasm32-unknown-unknown --release --locked
+      - name: Build the wallet, release channel, factory and caller Wasm
+        run: cargo build -p wallet -p release_channel -p factory -p caller --target wasm32-unknown-unknown --release --locked
 
       - name: Download the PocketIC server
         run: |
