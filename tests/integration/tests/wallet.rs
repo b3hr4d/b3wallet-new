@@ -6,7 +6,10 @@ use candid::types::{FuncMode, TypeInner};
 use candid::{CandidType, Deserialize, Principal, decode_one, encode_args, encode_one};
 use candid_parser::utils::CandidSource;
 use ed25519_dalek::{Signer, SigningKey};
-use pocket_ic::{ErrorCode, PocketIc, RejectCode, RejectResponse};
+use ic_http_certification::{HttpRequest, StatusCode};
+use ic_response_verification::types::VerifiedResponse;
+use ic_response_verification::verify_request_response_pair;
+use pocket_ic::{ErrorCode, PocketIc, PocketIcBuilder, RejectCode, RejectResponse};
 use serde_bytes::ByteBuf;
 use std::path::Path;
 use std::time::Duration;
@@ -1139,5 +1142,223 @@ fn an_audit_page_holds_at_most_a_hundred_entries() {
     assert_eq!(
         audit_page(&pic, id, owner, Some(1), u16::MAX)[0].event,
         AuditEvent::Claimed
+    );
+}
+
+// ---- Step 7: certified pages -------------------------------------------------
+
+const INDEX_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/index.html");
+const NOT_FOUND_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/404.html");
+
+/// The Content-Security-Policy from decision 0001, spelled out here so that
+/// any change to it fails this test.
+const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; \
+    img-src 'self' data:; font-src 'self'; \
+    connect-src 'self' https://icp-api.io https://icp0.io; frame-src 'none'; \
+    frame-ancestors 'none'; object-src 'none'; base-uri 'none'; \
+    form-action 'none'; upgrade-insecure-requests";
+
+/// The headers every page carries, certified.
+const PAGE_HEADERS: &[(&str, &str)] = &[
+    ("content-type", "text/html; charset=utf-8"),
+    ("content-security-policy", CSP),
+    ("x-content-type-options", "nosniff"),
+    ("x-frame-options", "DENY"),
+    ("referrer-policy", "no-referrer"),
+    (
+        "strict-transport-security",
+        "max-age=31536000; includeSubDomains",
+    ),
+    ("cache-control", "no-cache"),
+];
+
+/// What a gateway allows between the certificate's time and its own clock.
+const MAX_CERT_TIME_OFFSET_NS: u128 = 5 * 60 * 1_000_000_000;
+
+/// A wallet on an application subnet of an IC with an NNS subnet, so its
+/// certificates carry a delegation from the root key, as on mainnet.
+fn wallet_with_root_key() -> (PocketIc, Principal) {
+    let pic = PocketIcBuilder::new()
+        .with_nns_subnet()
+        .with_application_subnet()
+        .build();
+    let subnet = pic.topology().get_app_subnets()[0];
+    let id = pic.create_canister_on_subnet(None, None, subnet);
+    pic.add_cycles(id, 2_000_000_000_000);
+    try_install(&pic, id, &WalletArg::Init(init_args(&pic))).unwrap();
+    (pic, id)
+}
+
+/// What a gateway sends for `url`, and what the wallet answers, as the types
+/// the verifier takes.
+fn http_get(
+    pic: &PocketIc,
+    id: Principal,
+    url: &str,
+) -> (
+    HttpRequest<'static>,
+    ic_http_certification::HttpResponse<'static>,
+) {
+    let request = HttpRequest::get(url)
+        .with_headers(vec![("accept".to_string(), "text/html".to_string())])
+        .with_certificate_version(2)
+        .build();
+    let reply = pic
+        .query_call(
+            id,
+            Principal::anonymous(),
+            "http_request",
+            encode_one(&request).unwrap(),
+        )
+        .expect("http_request answers");
+    let response: wallet::HttpResponse = decode_one(&reply).unwrap();
+    let response = ic_http_certification::HttpResponse::builder()
+        .with_status_code(StatusCode::from_u16(response.status_code).unwrap())
+        .with_headers(response.headers)
+        .with_body(response.body.into_vec())
+        .build();
+    (request, response)
+}
+
+/// Verifies a response the way an HTTP gateway does, against the IC's root
+/// key and current time, and returns the part that was certified.
+fn verify(
+    pic: &PocketIc,
+    id: Principal,
+    request: HttpRequest<'static>,
+    response: ic_http_certification::HttpResponse<'static>,
+) -> Result<VerifiedResponse, String> {
+    let root_key = pic
+        .root_key()
+        .expect("an IC with an NNS subnet has a root key");
+    let now = u128::from(pic.get_time().as_nanos_since_unix_epoch());
+    let info = verify_request_response_pair(
+        request,
+        response,
+        id.as_slice(),
+        now,
+        MAX_CERT_TIME_OFFSET_NS,
+        &root_key,
+        2,
+    )
+    .map_err(|error| error.to_string())?;
+    assert_eq!(info.verification_version, 2);
+    Ok(info
+        .response
+        .expect("verification v2 returns the certified response"))
+}
+
+fn certified_header<'a>(response: &'a VerifiedResponse, name: &str) -> Option<&'a str> {
+    response
+        .headers
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
+}
+
+/// Requests each path and checks that the answer verifies and that its
+/// certified status, body and headers are the expected page's.
+fn check_every_page(pic: &PocketIc, id: Principal) {
+    let pages: &[(&str, u16, &[u8])] = &[
+        ("/", 200, INDEX_HTML),
+        ("/index.html", 200, INDEX_HTML),
+        ("/?from=link", 200, INDEX_HTML),
+        ("/404.html", 200, NOT_FOUND_HTML),
+        ("/claim", 404, NOT_FOUND_HTML),
+        ("/assets/app.js", 404, NOT_FOUND_HTML),
+    ];
+    for &(url, status, body) in pages {
+        let (request, response) = http_get(pic, id, url);
+        assert_eq!(response.status_code().as_u16(), status, "{url}");
+        assert_eq!(response.body(), body, "{url}");
+        let certified = verify(pic, id, request, response).unwrap_or_else(|e| panic!("{url}: {e}"));
+        assert_eq!(certified.status_code, Some(status), "{url}");
+        assert_eq!(certified.body, body, "{url}");
+        for &(name, value) in PAGE_HEADERS {
+            assert_eq!(
+                certified_header(&certified, name),
+                Some(value),
+                "{url}: {name}"
+            );
+        }
+    }
+}
+
+#[test]
+fn every_page_verifies_before_and_after_the_claim_and_an_upgrade() {
+    let (pic, id) = wallet_with_root_key();
+    check_every_page(&pic, id);
+
+    let owner = user(7);
+    claim(&pic, id, owner, claim_signature(id, owner)).unwrap();
+    check_every_page(&pic, id);
+
+    upgrade(&pic, id, &WalletArg::Upgrade).unwrap();
+    check_every_page(&pic, id);
+}
+
+/// The verifier these tests use refuses what a gateway must refuse, so the
+/// checks above mean something.
+#[test]
+fn a_changed_page_or_header_fails_verification() {
+    let (pic, id) = wallet_with_root_key();
+    let (request, response) = http_get(&pic, id, "/");
+    verify(&pic, id, request.clone(), response.clone()).unwrap();
+
+    let mut body = response.body().to_vec();
+    body.extend_from_slice(b"<script src=/evil.js></script>");
+    let changed_body = ic_http_certification::HttpResponse::builder()
+        .with_status_code(response.status_code())
+        .with_headers(response.headers().to_vec())
+        .with_body(body)
+        .build();
+    assert!(verify(&pic, id, request.clone(), changed_body).is_err());
+
+    let weaker: Vec<_> = response
+        .headers()
+        .iter()
+        .map(|(name, value)| match name.as_str() {
+            "content-security-policy" => (name.clone(), "script-src *".to_string()),
+            _ => (name.clone(), value.clone()),
+        })
+        .collect();
+    let weaker_csp = ic_http_certification::HttpResponse::builder()
+        .with_status_code(response.status_code())
+        .with_headers(weaker)
+        .with_body(response.body().to_vec())
+        .build();
+    assert!(verify(&pic, id, request.clone(), weaker_csp).is_err());
+
+    // The 404 page, certified for another path, is not the start page.
+    let (_, not_found) = http_get(&pic, id, "/claim");
+    assert!(verify(&pic, id, request.clone(), not_found).is_err());
+
+    // Nor is the start page another canister's.
+    let other = empty_canister(&pic);
+    assert!(verify(&pic, other, request, response).is_err());
+
+    // A URL that cannot be read gets an answer without a certificate.
+    let (request, response) = http_get(&pic, id, "/%FF");
+    assert_eq!(response.status_code().as_u16(), 400);
+    assert!(verify(&pic, id, request, response).is_err());
+}
+
+#[test]
+fn http_request_answers_only_as_a_query() {
+    let (pic, id) = wallet_with_root_key();
+    let request = HttpRequest::get("/").build();
+    let reject = pic
+        .update_call(
+            id,
+            Principal::anonymous(),
+            "http_request",
+            encode_one(&request).unwrap(),
+        )
+        .unwrap_err();
+    assert!(
+        reject
+            .reject_message
+            .contains("http_request answers only as a query"),
+        "{reject:?}"
     );
 }

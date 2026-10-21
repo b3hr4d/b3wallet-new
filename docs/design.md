@@ -26,7 +26,10 @@ On a local network (icp-cli 1.2.0, ic-cdk 0.20.3), 2026-10-19 and 2026-10-20:
   offline.
 
 Not proved yet: a chunked self-upgrade for a Wasm over the 2 MB message limit,
-and cycle costs on mainnet.
+and cycle costs on mainnet. The wallet's Wasm has been over that limit since
+step 7: 2.74 MB, or 656 KB gzipped (`gzip -9`), and the IC accepts a gzipped
+module. About 410 KB of its code is the glob matcher (`globset` and its regex
+engine) that `ic-asset-certification` always pulls in.
 
 The wallet itself runs no JavaScript: its pages are prerendered at build and
 embedded in the release ([decision 0001](decisions/0001-react-rendering.md)).
@@ -210,6 +213,32 @@ action that the policy module releases only after its quorum and timelock.
    store. If the install failed, the old code is still running; a timer sees
    `Installing` past its deadline with an unchanged module hash and marks it
    `Failed`.
+
+### Serve a page
+
+1. `init` and `post_upgrade` certify the files embedded in the release with
+   `ic-asset-certification` and set the canister's certified data to their
+   root hash. The certification tree lives on the heap only.
+2. `/` and `/index.html` are the start page. Any other path is the 404 page
+   with status 404, certified as the fallback for `/`.
+3. Every page carries these headers, all certified: the Content-Security-Policy
+   below, `x-content-type-options: nosniff`, `x-frame-options: DENY`,
+   `referrer-policy: no-referrer`,
+   `strict-transport-security: max-age=31536000; includeSubDomains`, and
+   `cache-control: no-cache`.
+4. `http_request` answers only as a query. A URL whose path cannot be decoded
+   gets a 400 without a certificate, which a gateway refuses to show.
+
+The Content-Security-Policy, pinned by a test:
+
+```text
+default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:;
+font-src 'self'; connect-src 'self' https://icp-api.io https://icp0.io;
+frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'none';
+form-action 'none'; upgrade-insecure-requests
+```
+
+Until step 13 the start page is a placeholder and `/claim` is the 404.
 
 ## Data model
 

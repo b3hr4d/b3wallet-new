@@ -204,6 +204,15 @@ pub struct AuditRequest {
     pub limit: u16,
 }
 
+/// What `http_request` answers. The request is `ic_http_certification`'s
+/// `HttpRequest`, whose Candid type is the one in `candid/wallet.did`.
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct HttpResponse {
+    pub status_code: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: ByteBuf,
+}
+
 impl Action {
     pub fn kind(&self) -> ActionKind {
         match self {

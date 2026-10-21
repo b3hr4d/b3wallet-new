@@ -12,7 +12,11 @@ candid = "=0.10.38"
 candid_parser = "=0.4.1"
 # The wallet only verifies: no precomputed tables, no randomness.
 ed25519-dalek = { version = "=2.2.0", default-features = false }
+# Certified pages (decision 0001); response verification in tests only.
+ic-asset-certification = "=4.0.0"
 ic-cdk = "=0.20.3"
+ic-http-certification = "=4.0.0"
+ic-response-verification = "=4.0.0"
 ic-stable-structures = "=0.7.2"
 pocket-ic = "=16.1.0"
 # Property tests only; no fork or timeout support needed.

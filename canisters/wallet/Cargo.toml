@@ -10,7 +10,9 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 candid.workspace = true
 ed25519-dalek.workspace = true
+ic-asset-certification.workspace = true
 ic-cdk.workspace = true
+ic-http-certification.workspace = true
 ic-stable-structures.workspace = true
 serde.workspace = true
 serde_bytes.workspace = true
