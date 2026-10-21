@@ -5,13 +5,18 @@ its own certified UI, keeps its accounts and approval policy, signs with
 threshold keys, is its own only controller, and upgrades itself only to a
 release its owners approved.
 
-**Status: step 12 of [the v0 plan](docs/plan-v0.md).** The wallet canister
+**Status: step 13 of [the v0 plan](docs/plan-v0.md).** The wallet canister
 installs, keeps its state in stable memory across upgrades, answers `status`,
 can be claimed once by its first owner, and shows its member list only to its
 members. Members change members and the policy through actions that wait for
 their quorum and timelock, a new device can ask to join, and every change
-leaves one entry in an append-only audit log. It serves a placeholder start
-page and a 404, both certified and with a strict Content-Security-Policy. It
+leaves one entry in an append-only audit log. It serves its own UI, certified
+and with a strict Content-Security-Policy: a React app from `ui/`, prerendered
+at build, whose start page shows the wallet's version and who you are to it,
+and whose claim page lets the holder of the claim link sign in with Internet
+Identity and claim the wallet
+([decision 0006](docs/decisions/0006-client-library.md) chose ic-reactor 4 to
+call it). It
 holds ICP and ICRC tokens on its own principal and subaccounts, reads their
 balances from the ledgers, and sends them by `Transfer` actions, at most once
 each, with a daily limit below which a transfer needs no approvals. Its
@@ -55,7 +60,8 @@ design, in [docs/design.md](docs/design.md).
 | `docs/design.md` | System design: architecture, flows, data model, security model, open decisions |
 | `docs/plan-v0.md` | The v0 build, one small verified step per pull request |
 | `candid/` | The target Candid interfaces of the wallet, release channel, factory and extensions |
-| `canisters/wallet/` | The wallet canister |
+| `canisters/wallet/` | The wallet canister; `pages/` holds the UI build it embeds |
+| `ui/` | The wallet's UI: React pages prerendered at build, and the app that hydrates them |
 | `canisters/release_channel/` | The release channel canister |
 | `canisters/factory/` | The factory canister, which creates wallets |
 | `crates/release/` | Release manifests and their checks, shared by the channel, wallets and the tool |
@@ -89,6 +95,23 @@ POCKET_IC_BIN=/path/to/pocket-ic ICRC1_LEDGER_WASM=/path/to/ic-icrc1-ledger.wasm
   cargo test -p integration --locked -- --include-ignored
 ```
 
+The UI builds with the Node release `ui/package.json` names (the build checks
+it) and the dependencies its lockfile pins. CI runs, in `ui/`:
+
+```sh
+npm ci
+npm run build          # writes canisters/wallet/pages, which the wallet embeds
+npm run format:check
+npm run lint           # also refuses HTML strings, inline styles and eval
+npm run typecheck
+npm test
+```
+
+The wallet embeds the committed files in `canisters/wallet/pages`, so its own
+build needs no Node; a change to `ui/` commits its build output with it. CI
+checks the committed files are the build's, and builds again from a clean copy
+in another directory to check it gives the same bytes.
+
 The interface checks compare every method a canister exports with the same
 method in its file in `candid/`; the wallet's prints the methods not
 implemented yet. One release channel test publishes a release of 100 MiB, the
@@ -106,7 +129,9 @@ cycles ledger PocketIC installs itself. The upgrade test also needs
 `scripts/try-local.sh` starts an icp-cli local network and a regtest Bitcoin
 node, installs a new wallet, claims it with your current icp-cli identity, and
 sends its accounts 10 local ICP and 50 regtest BTC. It then prints the calls
-that check a balance and propose and execute a transfer. It needs icp-cli and
+that check a balance and propose and execute a transfer. With `--browser` it
+prints the new wallet's claim link instead, to open in a browser, sign in with
+the network's own Internet Identity and claim the wallet there. It needs icp-cli and
 ic-wasm (`npm install -g @icp-sdk/icp-cli @icp-sdk/ic-wasm`), Node, the Rust
 toolchain, and on a Mac Homebrew's LLVM (`brew install llvm`), which it finds
 on its own. Bitcoin Core (`brew install bitcoin`), whose `bitcoind` and
@@ -114,7 +139,8 @@ on its own. Bitcoin Core (`brew install bitcoin`), whose `bitcoind` and
 Bitcoin account; without it the wallet gets only the ICP one.
 
 ```sh
-./scripts/try-local.sh
+./scripts/try-local.sh             # claimed by your icp-cli identity
+./scripts/try-local.sh --browser   # claimed in the browser, from its claim link
 ```
 
 ## Publishing a release
@@ -202,7 +228,17 @@ The factory checks the release's signatures before the ledger takes anything,
 installs it, and answers with the wallet's id once the wallet is its own only
 controller. Anyone can check that with `icp canister status <wallet>`, which
 shows its controllers and module hash. Whoever holds the claim key then claims
-it (`scripts/try-local.sh` signs a claim with Node). If the release does not
+it on the wallet's own page, from the claim link
+`https://<wallet>.icp0.io/claim#<claim key>`, whose fragment is the key's
+32-byte seed in base64url:
+
+```sh
+node -e 'const { createPrivateKey } = require("crypto");
+  const key = createPrivateKey(require("fs").readFileSync("claim.pem"));
+  console.log(key.export({ format: "der", type: "pkcs8" }).subarray(-32).toString("base64url"))'
+```
+
+The fragment never leaves the browser. If the release does not
 install, the call fails with `InstallFailed` and the creator is the canister's
 only controller, with the cycles left in it. `current_release` shows the
 release a wallet created now gets.

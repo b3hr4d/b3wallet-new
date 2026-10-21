@@ -1179,7 +1179,10 @@ fn an_audit_page_holds_at_most_a_hundred_entries() {
 // ---- Step 7: certified pages -------------------------------------------------
 
 const INDEX_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/index.html");
+const CLAIM_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/claim.html");
 const NOT_FOUND_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/404.html");
+const APP_JS: &[u8] = include_bytes!("../../../canisters/wallet/pages/app.js");
+const APP_CSS: &[u8] = include_bytes!("../../../canisters/wallet/pages/app.css");
 
 /// The Content-Security-Policy from decision 0001, spelled out here so that
 /// any change to it fails this test.
@@ -1189,9 +1192,8 @@ const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; \
     frame-ancestors 'none'; object-src 'none'; base-uri 'none'; \
     form-action 'none'; upgrade-insecure-requests";
 
-/// The headers every page carries, certified.
+/// The headers every page, the script and the styles carry, certified.
 const PAGE_HEADERS: &[(&str, &str)] = &[
-    ("content-type", "text/html; charset=utf-8"),
     ("content-security-policy", CSP),
     ("x-content-type-options", "nosniff"),
     ("x-frame-options", "DENY"),
@@ -1290,21 +1292,31 @@ fn certified_header<'a>(response: &'a VerifiedResponse, name: &str) -> Option<&'
 /// Requests each path and checks that the answer verifies and that its
 /// certified status, body and headers are the expected page's.
 fn check_every_page(pic: &PocketIc, id: Principal) {
-    let pages: &[(&str, u16, &[u8])] = &[
-        ("/", 200, INDEX_HTML),
-        ("/index.html", 200, INDEX_HTML),
-        ("/?from=link", 200, INDEX_HTML),
-        ("/404.html", 200, NOT_FOUND_HTML),
-        ("/claim", 404, NOT_FOUND_HTML),
-        ("/assets/app.js", 404, NOT_FOUND_HTML),
+    const HTML: &str = "text/html; charset=utf-8";
+    let pages: &[(&str, u16, &[u8], &str)] = &[
+        ("/", 200, INDEX_HTML, HTML),
+        ("/index.html", 200, INDEX_HTML, HTML),
+        ("/?from=link", 200, INDEX_HTML, HTML),
+        ("/claim", 200, CLAIM_HTML, HTML),
+        ("/claim.html", 200, CLAIM_HTML, HTML),
+        ("/app.js", 200, APP_JS, "text/javascript; charset=utf-8"),
+        ("/app.css", 200, APP_CSS, "text/css; charset=utf-8"),
+        ("/404.html", 200, NOT_FOUND_HTML, HTML),
+        ("/claims", 404, NOT_FOUND_HTML, HTML),
+        ("/assets/app.js", 404, NOT_FOUND_HTML, HTML),
     ];
-    for &(url, status, body) in pages {
+    for &(url, status, body, content_type) in pages {
         let (request, response) = http_get(pic, id, url);
         assert_eq!(response.status_code().as_u16(), status, "{url}");
         assert_eq!(response.body(), body, "{url}");
         let certified = verify(pic, id, request, response).unwrap_or_else(|e| panic!("{url}: {e}"));
         assert_eq!(certified.status_code, Some(status), "{url}");
         assert_eq!(certified.body, body, "{url}");
+        assert_eq!(
+            certified_header(&certified, "content-type"),
+            Some(content_type),
+            "{url}"
+        );
         for &(name, value) in PAGE_HEADERS {
             assert_eq!(
                 certified_header(&certified, name),
@@ -1361,7 +1373,7 @@ fn a_changed_page_or_header_fails_verification() {
     assert!(verify(&pic, id, request.clone(), weaker_csp).is_err());
 
     // The 404 page, certified for another path, is not the start page.
-    let (_, not_found) = http_get(&pic, id, "/claim");
+    let (_, not_found) = http_get(&pic, id, "/claims");
     assert!(verify(&pic, id, request.clone(), not_found).is_err());
 
     // Nor is the start page another canister's.

@@ -407,8 +407,9 @@ service : (WalletArg) -> {
   status : () -> (Status) query;
   // Newest first, at most 100 entries.
   audit_log : (AuditRequest) -> (AuditResult) query;
-  // Query only: the start page at / and /index.html, and a certified 404 for
-  // any other path. See "Serve a page" in docs/design.md.
+  // Query only: the start page at / and /index.html, the claim page at
+  // /claim, the app at /app.js and /app.css, and a certified 404 for any
+  // other path. See "Serve a page" in docs/design.md.
   http_request : (HttpRequest) -> (HttpResponse) query;
 
   // Standards for the signer window (ICRC-25, ICRC-29) and consent (ICRC-21).

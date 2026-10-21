@@ -29,5 +29,8 @@ networks:
     version: v16.0.0-2026-09-18-03-28
     # The ICP ledger, at its mainnet id, with local ICP for your identity.
     nns: true
+    # Internet Identity at id.ai.localhost:8000, where the wallet's pages
+    # sign in on this network.
+    ii: true
     bitcoind-addr:
       - "127.0.0.1:18444"

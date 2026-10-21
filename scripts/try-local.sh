@@ -3,6 +3,9 @@
 # claims it with your current icp-cli identity, and funds an ICP account and
 # a Bitcoin account. Each run installs a new wallet in place of the last.
 #
+# With --browser it prints the wallet's claim link instead, for you to claim
+# it in a browser with the local Internet Identity, and stops there.
+#
 # Needs icp-cli and ic-wasm, Node, the Rust toolchain of rust-toolchain.toml,
 # and a clang that compiles to WebAssembly (on a Mac, Homebrew's LLVM).
 # Bitcoin Core's bitcoind and bitcoin-cli, on PATH or
@@ -10,6 +13,13 @@
 # the wallet gets only its ICP account.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+browser=false
+case "${1:-}" in
+  --browser) browser=true ;;
+  "") ;;
+  *) echo "usage: $0 [--browser]" >&2; exit 2 ;;
+esac
 
 state=.icp/try
 bitcoind=${BITCOIND:-bitcoind}
@@ -64,7 +74,8 @@ if [ "$me" = 2vxsx-fae ]; then
 fi
 
 # Ed25519 keys for the claim and the release signer: `new` writes a key and
-# prints its public key, `sign` prints a signature, both as Candid blob text.
+# prints its public key, `sign` prints a signature, both as Candid blob text,
+# and `seed` prints the key as a claim link's fragment holds it.
 ed25519() {
   node -e '
     const crypto = require("crypto"), fs = require("fs");
@@ -77,6 +88,8 @@ ed25519() {
     const key = crypto.createPrivateKey(fs.readFileSync(pem));
     console.log(command === "sign"
       ? blob(crypto.sign(null, Buffer.from(message), key))
+      : command === "seed"
+      ? key.export({ format: "der", type: "pkcs8" }).subarray(-32).toString("base64url")
       : blob(crypto.createPublicKey(key).export({ format: "der", type: "spki" }).subarray(-32)));
   ' "$@"
 }
@@ -110,6 +123,21 @@ icp deploy wallet --mode reinstall --cycles 20t --yes --args "(variant { Init = 
   factory = null;
 } })"
 wallet=$(icp canister status wallet --id-only)
+page=http://$wallet.localhost:8000
+
+if $browser; then
+  cat <<DONE
+
+Wallet $wallet waits for its first owner. Open its claim link, sign in with
+the local Internet Identity, and claim it:
+
+  $page/claim#$(ed25519 seed "$state/claim.pem")
+
+The link holds the claim key, so whoever opens it first owns the wallet.
+Stop the network with: icp network stop
+DONE
+  exit 0
+fi
 
 signature=$(ed25519 sign "$state/claim.pem" "claim:$wallet:$me")
 icp canister call wallet claim "(record { signature = blob \"$signature\" })" "${did[@]}"
@@ -140,7 +168,7 @@ DONE
 fi
 cat <<DONE
 A wallet installed again at the same id keeps what its accounts hold. Its page,
-a placeholder until the UI step: http://wallet.local.localhost:8000/
+where you sign in with the local Internet Identity: $page/
 
 Call it with the interface file, which icp-cli cannot read from the canister;
 propose returns the id to execute. Send 1 ICP back to yourself:

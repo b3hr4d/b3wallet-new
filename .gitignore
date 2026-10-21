@@ -4,3 +4,6 @@ node_modules/
 .dfx/
 *.wasm
 *.wasm.gz
+# The UI's bindings, generated from candid/wallet.did on every build, and its scratch.
+ui/src/generated/
+ui/.build/

@@ -138,12 +138,14 @@ action that the policy module releases only after its quorum and timelock.
    the factory's timer tries again every five minutes until it controls none
    of the canisters it created.
 3. The browser builds the claim link
-   `https://<wallet id>.icp0.io/claim#<claim private key>`. The fragment never
-   reaches the gateway or any node.
-4. The future owner opens the link and signs in with Internet Identity, which
-   returns the principal for that domain.
-5. The browser signs `claim:<wallet id>:<caller principal>` with the claim key
-   and calls `claim`.
+   `https://<wallet id>.icp0.io/claim#<claim key>`, where the claim key is the
+   private key's 32-byte Ed25519 seed in base64url, without padding. The
+   fragment never reaches the gateway or any node.
+4. The future owner opens the link. The claim page reads the key once and
+   takes the fragment out of the address bar and the history. The owner signs
+   in with Internet Identity, which returns the principal for that domain.
+5. The page signs `claim:<wallet id>:<caller principal>` with the claim key
+   and calls `claim`; only the signature leaves the browser.
 6. The wallet checks the signature, the expiry, and that the signed principal is
    the caller. It adds the caller as Owner, deletes the claim key and logs the
    claim. A copied signature is useless to anyone else, because it names the
@@ -337,8 +339,10 @@ instructions an update may use.
 1. `init` and `post_upgrade` certify the files embedded in the release with
    `ic-asset-certification` and set the canister's certified data to their
    root hash. The certification tree lives on the heap only.
-2. `/` and `/index.html` are the start page. Any other path is the 404 page
-   with status 404, certified as the fallback for `/`.
+2. `/` and `/index.html` are the start page, `/claim` and `/claim.html` the
+   claim page, and `/app.js` and `/app.css` the app's script and styles. Any
+   other path is the 404 page with status 404, certified as the fallback for
+   `/`.
 3. Every page carries these headers, all certified: the Content-Security-Policy
    below, `x-content-type-options: nosniff`, `x-frame-options: DENY`,
    `referrer-policy: no-referrer`,
@@ -356,7 +360,19 @@ frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'none';
 form-action 'none'; upgrade-insecure-requests
 ```
 
-Until step 13 the start page is a placeholder and `/claim` is the 404.
+The files come from `ui/`, a React app built with a pinned Node, esbuild and
+lockfile ([decision 0006](decisions/0006-client-library.md) chose its client
+library). The build renders each page to HTML in Node, with what is the same
+for every visitor, and bundles the app that hydrates it; the HTML holds no
+inline script or style and loads only `/app.js` and `/app.css`. In the
+browser, the app works only at the wallet's own address
+(`https://<wallet id>.icp0.io`, or `http://<wallet id>.localhost` on
+icp-cli's network), takes the wallet's id from it, and fills in everything
+else from calls to the wallet. It makes its reads as replicated calls, which
+the subnet certifies, rather than as queries a single replica answers. CI
+builds the files twice, the second time from a clean copy in another
+directory, and checks that both builds and the committed files are the same
+bytes.
 
 ## Data model
 
@@ -439,7 +455,7 @@ exists in canister memory, but whoever can install code can move every fund.
 | Injected script or phishing on the wallet's page | Every byte certified; no third-party scripts; CSP `script-src 'self'`, `frame-src 'none'`, `frame-ancestors 'none'`; the UI is prerendered at build and ships inside the signed release, with no per-user data in HTML | Look-alike domains; the browser trusts the HTTP gateway to verify the page |
 | A malicious extension | Own canister and origin, never rendered by the firmware; own sub-wallet path and daily budget; signer window answers only registered origins; ICRC-21 consent for every call | Funds inside its own budget |
 | Strangers calling the wallet | Before the claim only `claim`, `status` and `http_request` answer; after it, also `whoami` and `request_join`. Every other method has a guard that rejects the call before its arguments are decoded unless the caller is a member (for `ext_request`, a registered extension) | Rejected update calls still cost the wallet cycles. Join requests are stored for good, but at most eight are open at once and each for an hour, so strangers add at most about 200 a day |
-| A dishonest replica answering a query | Every action and balance is an update call; pages are certified | Member lists and history read by query |
+| A dishonest replica answering a query | Every action and balance is an update call; pages are certified; the UI makes its reads as replicated calls, which the subnet certifies | Other clients that read member lists and history by query |
 | Node operators reading state | Keys are threshold keys held by the subnet; private notes and labels encrypted with vetKeys | Plaintext state stays readable without SEV |
 | A ledger call whose outcome the wallet never learns | Every retry reuses the call's `created_at_time`, so the ledger answers with the earlier block; the action stays open, and cannot be rejected, while the ledger can still find it | A transfer nobody executes again within 24 hours stays unknown to the wallet; the ledger holds the answer |
 | A Bitcoin send whose outcome the wallet never learns | The transaction is built and signed once and stored; every retry sends the same one, whose id no signature changes, and its outputs stay reserved; the action stays open and cannot be rejected | A transaction the network drops keeps its outputs reserved and its action open until the wallet learns to see that its outputs are still unspent |
