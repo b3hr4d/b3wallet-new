@@ -5,7 +5,7 @@ its own certified UI, keeps its accounts and approval policy, signs with
 threshold keys, is its own only controller, and upgrades itself only to a
 release its owners approved.
 
-**Status: step 10 of [the v0 plan](docs/plan-v0.md).** The wallet canister
+**Status: step 11 of [the v0 plan](docs/plan-v0.md).** The wallet canister
 installs, keeps its state in stable memory across upgrades, answers `status`,
 can be claimed once by its first owner, and shows its member list only to its
 members. Members change members and the policy through actions that wait for
@@ -21,8 +21,12 @@ Bitcoin canister, again at most once. Releases are published to a release
 channel canister, which serves a release only when two of its three signer
 keys signed its manifest and its chunks match the manifest
 ([decision 0004](docs/decisions/0004-release-signers.md)); `release-tool`
-makes and signs the manifests. Wallets do not install releases yet.
-Everything else is still design, in [docs/design.md](docs/design.md).
+makes and signs the manifests. A wallet installs a release on itself by an
+`Upgrade` action, once two of the three signer keys it pins signed the release
+and it was tested to upgrade from the version the wallet runs. A release
+whose upgrade traps leaves the version before it running and the upgrade
+marked `Failed`; nothing rescues a wallet from a release that breaks upgrades
+([decision 0005](docs/decisions/0005-rescue-path.md)). Everything else is still design, in [docs/design.md](docs/design.md).
 
 ## Principles
 
@@ -151,6 +155,26 @@ icp canister call release_channel publish_manifest --args-file manifest.did \
 `--wasm` first checks that the manifest names that Wasm. Signing hashes the
 manifest's Candid encoding as the Rust `candid` crate writes it; other
 encoders lay out the type table differently, so sign with this tool.
+
+## Upgrading a wallet
+
+A wallet installs releases only on itself, so it must be its own controller;
+until the factory hands it over (step 12), add the wallet as a controller of
+itself. A member asks whether its channel has a release the wallet would
+install, and an owner proposes it:
+
+```sh
+icp canister call wallet release_available '()' --candid candid/wallet.did
+icp canister call wallet propose '(variant { Upgrade = record {
+  version = "0.2.0"; wasm_sha256 = blob "..." } })' --candid candid/wallet.did
+```
+
+After the quorum and the timelock, `execute` stages the release's chunks in
+the wallet's chunk store and sends the install. It can take several calls:
+one that stops keeps the chunks staged so far, and one made while the wallet
+waits for another call's answer stages everything but does not install.
+`upgrade_status` (and `status`) shows `Staging`, `Installing`, `Idle` once
+the new version runs, or `Failed` an hour after an install that did not run.
 
 ## Checking the schema
 

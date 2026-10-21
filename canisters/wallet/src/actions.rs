@@ -16,6 +16,9 @@
 //! or sends that same transaction, so the network can confirm it at most
 //! once. Once a send may have reached the Bitcoin canister, the transfer
 //! stays open until an execution sees the Bitcoin canister take it.
+//!
+//! An upgrade whose install was sent stays open until the new version or
+//! the install's deadline ends it, and cannot be rejected meanwhile.
 
 use crate::policy::{DAY_NS, HOUR_NS, Terms};
 use crate::transfers::{CallFailure, DEDUP_WINDOW_NS, Reply, STALE_CALL_NS};
@@ -60,6 +63,9 @@ pub struct StoredPending {
     /// A Bitcoin transfer's transaction and its executions, once `execute`
     /// started one. Absent from actions stored before step 9.
     pub bitcoin: Option<BitcoinAttempt>,
+    /// Whether an upgrade's install was sent. Absent from actions stored
+    /// before step 11.
+    pub upgrade_sent: Option<bool>,
 }
 
 /// What the wallet knows of a transfer's calls to the ledger.
@@ -144,6 +150,7 @@ impl StoredPending {
             daily_limit: Some(terms.daily_limit),
             transfer: None,
             bitcoin: None,
+            upgrade_sent: None,
         };
         pending.release_at_quorum(now);
         pending
@@ -165,7 +172,7 @@ impl StoredPending {
     /// Bitcoin transfer stays open while an execution is in flight, and for
     /// good once its transaction may have been sent.
     fn open_until(&self) -> u64 {
-        if self.bitcoin_may_have_sent() {
+        if self.bitcoin_may_have_sent() || self.is_installing() {
             return u64::MAX;
         }
         let ledger = match &self.transfer {
@@ -195,6 +202,17 @@ impl StoredPending {
         self.bitcoin
             .as_ref()
             .is_some_and(|attempt| attempt.sending || attempt.tx.as_ref().is_some_and(|tx| tx.sent))
+    }
+
+    /// Whether this upgrade's install was sent and has not ended.
+    pub fn is_installing(&self) -> bool {
+        self.upgrade_sent == Some(true)
+            && matches!(self.state, ActionState::Waiting | ActionState::Ready)
+    }
+
+    /// Records that this upgrade's install was sent.
+    pub fn install_sent(&mut self) {
+        self.upgrade_sent = Some(true);
     }
 
     /// The Bitcoin transaction, once built.
@@ -261,6 +279,9 @@ impl StoredPending {
     /// rejected: only executing it again tells whether it was.
     pub fn reject(&mut self, id: ActionId, by: Principal, now: u64) -> Result<(), WalletError> {
         self.check_open(id, now)?;
+        if self.is_installing() {
+            return Err(WalletError::UpgradeInProgress);
+        }
         if self.may_have_sent() {
             let reason = if self.bitcoin_may_have_sent() {
                 "may have reached the Bitcoin canister; execute it again to send the same transaction"
@@ -620,6 +641,40 @@ mod tests {
             APPROVAL_WINDOW_NS,
             T0,
         )
+    }
+
+    #[test]
+    fn a_sent_upgrade_stays_open_and_cannot_be_rejected_until_it_ends() {
+        let upgrade = Action::Upgrade {
+            version: "1.0.0".to_string(),
+            wasm_sha256: ByteBuf::from(vec![0; 32]),
+        };
+        let terms = Terms {
+            quorum: 1,
+            timelock_ns: 0,
+            daily_limit: false,
+        };
+        let mut pending = StoredPending::new(
+            upgrade,
+            member(1),
+            vec![member(1)],
+            terms,
+            APPROVAL_WINDOW_NS,
+            T0,
+        );
+        let expiry = pending.expires_at_ns;
+        assert!(!pending.is_installing());
+        pending.install_sent();
+        assert!(pending.is_installing());
+        assert!(pending.is_open(expiry + DAY_NS));
+        assert_eq!(
+            pending.clone().reject(ID, member(1), expiry + DAY_NS),
+            Err(WalletError::UpgradeInProgress)
+        );
+        pending.finish(Err("trapped".to_string()));
+        assert!(!pending.is_installing());
+        assert!(!pending.is_open(T0));
+        assert!(pending.reject(ID, member(1), T0).is_err());
     }
 
     #[test]

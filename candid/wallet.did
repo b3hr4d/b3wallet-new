@@ -243,6 +243,11 @@ type ExtResponse = variant {
 
 // ---- Upgrade ------------------------------------------------------------------
 
+// Staging: an Upgrade action's execute is uploading the release's chunks to
+// the wallet's own chunk store; executing it again goes on from there.
+// Installing: the install was sent. Until the new version runs or the
+// deadline passes, the wallet calls nobody and refuses execute.
+// Failed: the deadline passed with the old version still running.
 type UpgradeState = variant {
   Idle;
   Staging : record {
@@ -380,7 +385,7 @@ service : (WalletArg) -> {
   propose : (Action) -> (PendingResult);
   approve : (ActionId) -> (PendingResult);
   reject : (ActionId) -> (PendingResult);
-  // A transfer makes one ledger or Bitcoin call at a time; a second execute
+  // A transfer or an upgrade makes one call at a time; a second execute
   // while it is in flight is refused.
   execute : (ActionId) -> (PendingResult);
   pending : () -> (PendingListResult) query;
@@ -390,7 +395,11 @@ service : (WalletArg) -> {
   extensions : () -> (ExtensionsResult) query;
   ext_request : (ExtRequest) -> (ExtResult);
 
-  // Upgrade. Update: reads the release channel and checks signatures and tested_from.
+  // Upgrade. release_available is an update: it reads the release channel's
+  // latest release and returns it if this wallet would install it (enough
+  // signatures by its pinned keys, tested from the module it runs), none if
+  // the channel has none or the wallet runs it, and ReleaseRejected
+  // otherwise. An Upgrade action's execute checks all of it again.
   release_available : () -> (ReleaseResult);
   upgrade_status : () -> (UpgradeState) query;
 

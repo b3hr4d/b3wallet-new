@@ -1,4 +1,5 @@
-//! Ed25519 checks for the claim key and the release signer keys.
+//! Ed25519 checks for the claim key. Release signer keys are the `release`
+//! crate's.
 
 use ed25519_dalek::{Signature, VerifyingKey};
 

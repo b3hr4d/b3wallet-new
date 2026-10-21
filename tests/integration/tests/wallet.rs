@@ -495,7 +495,9 @@ fn before_the_claim_only_the_public_methods_answer() {
                 "policy",
                 "propose",
                 "reject",
+                "release_available",
                 "request_join",
+                "upgrade_status",
                 "whoami"
             ]
         );
@@ -524,7 +526,9 @@ fn a_non_member_is_refused_by_every_method_for_members() {
                 "pending",
                 "policy",
                 "propose",
-                "reject"
+                "reject",
+                "release_available",
+                "upgrade_status"
             ]
         );
     }
