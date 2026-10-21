@@ -186,6 +186,15 @@ impl ReleaseManifest {
         }
         Ok(())
     }
+
+    /// Checks a whole Wasm: its size, then its chunks. `check_chunks` alone
+    /// never sees bytes past the last chunk the manifest names.
+    pub fn check_wasm(&self, wasm: &[u8]) -> Result<(), ChunkError> {
+        if wasm.len() as u64 != self.wasm_size {
+            return Err(ChunkError::WasmMismatch);
+        }
+        self.check_chunks(|index| chunks(wasm).nth(index))
+    }
 }
 
 /// Why a release's chunks do not make up the Wasm its manifest names.
@@ -198,7 +207,8 @@ pub enum ChunkError {
         index: u32,
     },
     /// Every chunk matches its hash, but the chunks are not cut at
-    /// `CHUNK_SIZE`, or together are not the Wasm of `wasm_sha256`.
+    /// `CHUNK_SIZE`, or together are not the Wasm of `wasm_sha256`; or a
+    /// whole Wasm is not `wasm_size` bytes.
     WasmMismatch,
 }
 

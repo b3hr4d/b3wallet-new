@@ -70,10 +70,16 @@ fn stderr(output: &Output) -> String {
 /// Writes the unsigned manifest of `wasm.wasm` to `manifest.did`.
 fn new_manifest(dir: &Dir) -> String {
     let wasm = dir.wasm("wasm.wasm", 0);
+    manifest_of(dir, &wasm);
+    wasm
+}
+
+/// Writes the unsigned manifest of the Wasm at `wasm` to `manifest.did`.
+fn manifest_of(dir: &Dir, wasm: &str) {
     let output = tool(&[
         "manifest",
         "--wasm",
-        &wasm,
+        wasm,
         "--version",
         "1.0.0",
         "--notes-url",
@@ -85,7 +91,6 @@ fn new_manifest(dir: &Dir) -> String {
     ]);
     assert!(output.status.success(), "{}", stderr(&output));
     std::fs::write(dir.path("manifest.did"), stdout(&output)).unwrap();
-    wasm
 }
 
 fn verify(dir: &Dir, signers: &[String], threshold: &str, wasm: Option<&str>) -> Output {
@@ -183,6 +188,58 @@ fn a_manifest_for_another_wasm_is_refused() {
         );
     }
     let mismatch = verify(&dir, &signers, "2", Some(&other));
+    assert_eq!(mismatch.status.code(), Some(1));
+    assert!(stderr(&mismatch).contains("does not name the Wasm"));
+}
+
+#[test]
+fn a_wasm_with_bytes_after_it_is_refused() {
+    let dir = Dir::new("bytes-after");
+    let signers = dir.keys(2);
+    // Two full chunks, so the extra bytes would be a third chunk of their own.
+    let wasm: Vec<u8> = (0..2 * CHUNK_SIZE).map(|i| i as u8).collect();
+    let wasm_path = dir.path("wasm.wasm");
+    std::fs::write(&wasm_path, &wasm).unwrap();
+    manifest_of(&dir, &wasm_path);
+    let longer = dir.path("longer.wasm");
+    std::fs::write(&longer, [wasm.as_slice(), b"extra"].concat()).unwrap();
+    let manifest_path = dir.path("manifest.did");
+    let before = std::fs::read(&manifest_path).unwrap();
+
+    let refused = tool(&[
+        "sign",
+        "--key",
+        &dir.path("key-1.pem"),
+        "--wasm",
+        &longer,
+        &manifest_path,
+    ]);
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(
+        stderr(&refused).contains("does not name the Wasm"),
+        "{}",
+        stderr(&refused)
+    );
+    assert!(stderr(&refused).contains("2097157 bytes"));
+    assert_eq!(std::fs::read(&manifest_path).unwrap(), before);
+
+    for key in ["key-1.pem", "key-2.pem"] {
+        let signed = tool(&[
+            "sign",
+            "--key",
+            &dir.path(key),
+            "--wasm",
+            &wasm_path,
+            &manifest_path,
+        ]);
+        assert!(signed.status.success(), "{}", stderr(&signed));
+    }
+    assert!(
+        verify(&dir, &signers, "2", Some(&wasm_path))
+            .status
+            .success()
+    );
+    let mismatch = verify(&dir, &signers, "2", Some(&longer));
     assert_eq!(mismatch.status.code(), Some(1));
     assert!(stderr(&mismatch).contains("does not name the Wasm"));
 }

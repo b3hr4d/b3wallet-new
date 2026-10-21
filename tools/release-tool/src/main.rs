@@ -210,14 +210,13 @@ fn describe(manifest: &ReleaseManifest) -> String {
 
 fn check_wasm(manifest: &ReleaseManifest, path: &str) -> Result<(), String> {
     let wasm = read(path)?;
-    manifest
-        .check_chunks(|index| release::chunks(&wasm).nth(index))
-        .map_err(|e| {
-            format!(
-                "the manifest does not name the Wasm in {path} (SHA-256 {}): {e:?}",
-                hex(&sha256(&wasm))
-            )
-        })
+    manifest.check_wasm(&wasm).map_err(|e| {
+        format!(
+            "the manifest does not name the Wasm in {path} ({} bytes, SHA-256 {}): {e:?}",
+            wasm.len(),
+            hex(&sha256(&wasm))
+        )
+    })
 }
 
 fn read_manifest(path: &str) -> Result<ReleaseManifest, String> {

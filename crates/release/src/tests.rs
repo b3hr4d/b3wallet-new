@@ -343,6 +343,22 @@ fn check_chunks_refuses_chunks_that_are_not_the_wasm() {
     );
 }
 
+#[test]
+fn check_wasm_refuses_bytes_past_the_wasm() {
+    let wasm: Vec<u8> = (0..2 * CHUNK_SIZE).map(|i| (i % 251) as u8).collect();
+    let manifest = manifest(&wasm);
+    assert_eq!(manifest.check_wasm(&wasm), Ok(()));
+
+    // The extra bytes make a third chunk, which the manifest never asks for.
+    let longer = [wasm.as_slice(), b"extra"].concat();
+    assert_eq!(manifest.check_chunks(|i| chunks(&longer).nth(i)), Ok(()));
+    assert_eq!(manifest.check_wasm(&longer), Err(ChunkError::WasmMismatch));
+    assert_eq!(
+        manifest.check_wasm(&wasm[..CHUNK_SIZE]),
+        Err(ChunkError::WasmMismatch)
+    );
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(16))]
 
