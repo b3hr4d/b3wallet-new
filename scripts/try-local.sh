@@ -3,8 +3,9 @@
 # claims it with your current icp-cli identity, and funds an ICP account and
 # a Bitcoin account. Each run installs a new wallet in place of the last.
 #
-# Needs icp-cli and ic-wasm, Node, and the Rust toolchain of
-# rust-toolchain.toml. Bitcoin Core's bitcoind and bitcoin-cli, on PATH or
+# Needs icp-cli and ic-wasm, Node, the Rust toolchain of rust-toolchain.toml,
+# and a clang that compiles to WebAssembly (on a Mac, Homebrew's LLVM).
+# Bitcoin Core's bitcoind and bitcoin-cli, on PATH or
 # named by BITCOIND and BITCOIN_CLI, add the Bitcoin account; without them
 # the wallet gets only its ICP account.
 set -euo pipefail
@@ -24,6 +25,17 @@ need icp "npm install -g @icp-sdk/icp-cli"
 need ic-wasm "npm install -g @icp-sdk/ic-wasm"
 need node "https://nodejs.org"
 need cargo "https://rustup.rs"
+# secp256k1's C code, under the bitcoin crate, needs a clang that compiles to
+# WebAssembly. Apple's cannot, so on a Mac the build uses Homebrew's LLVM.
+compiles_wasm() { echo 'int x;' | "$1" --target=wasm32-unknown-unknown -x c -c - -o /dev/null 2>/dev/null; }
+if ! compiles_wasm "${CC_wasm32_unknown_unknown:-clang}"; then
+  llvm=$(brew --prefix llvm 2>/dev/null)/bin || llvm=
+  if [ -z "${CC_wasm32_unknown_unknown:-}" ] && [ -n "$llvm" ] && compiles_wasm "$llvm/clang"; then
+    export CC_wasm32_unknown_unknown=$llvm/clang AR_wasm32_unknown_unknown=$llvm/llvm-ar
+  else
+    missing+=("  a clang that compiles to WebAssembly (Apple's cannot): brew install llvm")
+  fi
+fi
 if [ ${#missing[@]} -gt 0 ]; then
   echo "Install these first:" >&2
   printf '%s\n' "${missing[@]}" >&2

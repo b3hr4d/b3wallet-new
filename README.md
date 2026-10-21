@@ -48,7 +48,17 @@ Bitcoin canister, again at most once. Everything else is still design, in
 
 ## Development
 
-The toolchain is pinned in `rust-toolchain.toml`. CI runs the same commands:
+The toolchain is pinned in `rust-toolchain.toml`. The Wasm build also compiles
+secp256k1's C code, which needs a clang that compiles to WebAssembly. Apple's
+cannot, so on a Mac install Homebrew's LLVM and point the build at it:
+
+```sh
+brew install llvm
+export CC_wasm32_unknown_unknown="$(brew --prefix llvm)/bin/clang"
+export AR_wasm32_unknown_unknown="$(brew --prefix llvm)/bin/llvm-ar"
+```
+
+CI runs the same commands:
 
 ```sh
 cargo fmt --all --check
@@ -76,8 +86,9 @@ Wasm of the release before.
 node, installs a new wallet, claims it with your current icp-cli identity, and
 sends its accounts 10 local ICP and 50 regtest BTC. It then prints the calls
 that check a balance and propose and execute a transfer. It needs icp-cli and
-ic-wasm (`npm install -g @icp-sdk/icp-cli @icp-sdk/ic-wasm`), Node and the
-Rust toolchain. Bitcoin Core (`brew install bitcoin`), whose `bitcoind` and
+ic-wasm (`npm install -g @icp-sdk/icp-cli @icp-sdk/ic-wasm`), Node, the Rust
+toolchain, and on a Mac Homebrew's LLVM (`brew install llvm`), which it finds
+on its own. Bitcoin Core (`brew install bitcoin`), whose `bitcoind` and
 `bitcoin-cli` it finds on `PATH` or by `BITCOIND` and `BITCOIN_CLI`, adds the
 Bitcoin account; without it the wallet gets only the ICP one.
 
