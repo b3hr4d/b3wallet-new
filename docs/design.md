@@ -25,10 +25,12 @@ On a local network (icp-cli 1.2.0, ic-cdk 0.20.3), 2026-10-19 and 2026-10-20:
 - Threshold ECDSA keys per derivation path work, and their signatures verify
   offline.
 
-Not proved yet: a chunked self-upgrade for a Wasm over the 2 MB message limit,
-and cycle costs on mainnet. The wallet's Wasm has been over that limit since
-step 7; at step 9 it is 3.70 MB, or 894 KB gzipped (`gzip -9`), and the IC
-accepts a gzipped module under that limit. The wallet builds secp256k1 with
+At step 11 the wallet upgrades itself on PocketIC from v1 to v2 to v3 with
+its own Wasm, over the 2 MB message limit, staged as four 1 MiB chunks in its
+chunk store. Not proved yet: that self-upgrade on mainnet, and cycle costs
+there. The wallet's Wasm has been over that limit since step 7; at step 11 it
+is 3.93 MB, or 934 KB gzipped (`gzip -9`), and the IC accepts a gzipped module
+under that limit. The wallet builds secp256k1 with
 its `lowmemory` tables: the default ones made it 4.78 MB, or 1.97 MB
 gzipped, since precomputed points do not compress. About 410 KB of its code
 is the glob matcher (`globset` and its regex engine) that
@@ -282,20 +284,35 @@ instructions an update may use.
 1. The release channel publishes a manifest: version, Wasm SHA-256, chunk
    hashes, the module hashes it was tested to upgrade from, and signatures from
    the release signers.
-2. The wallet checks the manifest daily. It accepts it only when the
-   signatures meet the threshold of the signer keys pinned in the wallet, and
-   when its own module hash is in the tested list.
-3. An owner proposes `Upgrade`. After the quorum the timelock starts; the page
-   shows a banner and any owner can cancel.
-4. After the timelock, `execute` fetches each chunk, checks its hash, and calls
-   `upload_chunk` on the wallet's own chunk store.
-5. The wallet saves `Installing` with the expected hash to stable memory, then
-   sends `install_chunked_code` to itself one-way. An awaited call would trap on
-   the reply.
-6. The new version's `post_upgrade` marks the upgrade done and clears the chunk
-   store. If the install failed, the old code is still running; a timer sees
-   `Installing` past its deadline with an unchanged module hash and marks it
-   `Failed`.
+2. A member asks `release_available`. The wallet asks the channel for its
+   latest release and returns it only when the signatures meet the threshold
+   of the signer keys pinned in the wallet, and when its own module hash, read
+   with `canister_info`, is in the tested list. Nothing checks on a schedule:
+   the page asks when a member opens it.
+3. An owner proposes `Upgrade` with the version and its Wasm SHA-256. After the
+   quorum the timelock starts; the page shows a banner and any owner can
+   reject.
+4. After the timelock, `execute` checks the manifest again as in step 2, and
+   that the wallet is its own controller, which the install needs. It then
+   fetches each chunk, checks its hash, and calls `upload_chunk` on the
+   wallet's own chunk store. A failed call stops the execution and keeps the
+   chunks staged so far, and executing again goes on from there. A release that
+   fails a check ends the action `Failed`.
+5. Once every chunk is staged, and no call of the wallet waits for its answer,
+   the wallet saves `Installing` with the expected hash and a deadline an hour
+   away, then sends `install_chunked_code` to itself one-way in the same
+   message. An awaited call would trap on the reply, and the reply to any call
+   still in flight would reach the new version's code. So while it is
+   `Installing` the wallet calls nobody, and refuses to execute actions and the
+   methods that call out.
+6. The new version's `post_upgrade` marks the upgrade done and ends its action
+   `Executed`; a timer then clears the chunk store. If the install failed, the
+   new version's `post_upgrade` trapped or the IC refused it, and the old code
+   is still running. At the deadline the old version's timer, or the next
+   `execute`, marks the upgrade and its action `Failed` and clears the chunk
+   store. An install that landed after its deadline would run with the upgrade
+   marked `Failed`; the module hash `canister_info` reports tells which
+   version runs.
 
 ### Serve a page
 
@@ -340,7 +357,7 @@ is never reused or renumbered, even after its store goes away; the audit log's
 | 5 | Extensions | extension canister id to origin, permissions, budgets, spent this window | `StableBTreeMap` | Kept |
 | 6 | History | sequence to a transfer the wallet sent: account, chain, recipient, amount, ledger block or Bitcoin txid, Bitcoin fee, action | `StableBTreeMap` | Kept; the daily limit reads its last 24 hours |
 | 7 and 8 | Audit log | sequence to entry | `StableLog` | Kept, append-only |
-| 9 | Upgrade state | idle, staged, installing or failed, with the expected hash | `StableCell` | Read first in `post_upgrade` |
+| 9 | Upgrade state | idle, staging, installing or failed; the action, its manifest and the execution in flight | `StableCell` | Read in `post_upgrade`, which ends the install |
 | 10 | Open actions | the ids of the pending actions still waiting or ready | `StableBTreeMap` | Kept |
 | 11 | Transfer clock | the latest `created_at_time` given to a ledger call | `StableCell` | Kept |
 | 12 | Reserved Bitcoin outputs | an outpoint to the transfer whose transaction spends it; released if that transfer ends unsent, and kept once it may have been sent | `StableBTreeMap` | Kept |
@@ -388,7 +405,7 @@ exists in canister memory, but whoever can install code can move every fund.
 | --- | --- | --- |
 | A malicious or compromised release | Two of three release signer keys, pinned in the wallet; owner quorum; timelock with a banner during which any owner can cancel or withdraw | Owners who ignore the banner; two signers who sign a bad release |
 | A compromised release channel or publisher | The channel publishes only a manifest two signers signed, with chunks that match it; wallets check both again themselves | It can withhold releases |
-| An upgrade that bricks the wallet | One-way install keeps the old code when `post_upgrade` traps; `tested_from` refuses untested paths; every release is tested over the last two versions | No rescue if a release breaks its own upgrade method |
+| An upgrade that bricks the wallet | One-way install keeps the old code when `post_upgrade` traps, and the wallet marks the upgrade `Failed` an hour later; `tested_from` refuses untested paths; every release is tested over the last two versions | No rescue if a release breaks its own upgrade method ([decision 0005](decisions/0005-rescue-path.md)) |
 | One owner's device or anchor stolen | Quorum and timelock above the daily limit; any owner can reject; removing an owner needs the others | Losses up to the daily limit |
 | Claim link intercepted | Private key only in the fragment; one use; expiry; the signature names the caller | Whoever opens the link first owns the wallet |
 | Injected script or phishing on the wallet's page | Every byte certified; no third-party scripts; CSP `script-src 'self'`, `frame-src 'none'`, `frame-ancestors 'none'`; the UI is prerendered at build and ships inside the signed release, with no per-user data in HTML | Look-alike domains; the browser trusts the HTTP gateway to verify the page |
@@ -407,7 +424,6 @@ exists in canister memory, but whoever can install code can move every fund.
 
 | Decision | Options | Recommendation |
 | --- | --- | --- |
-| Rescue path | None, fully self-owned; or a guardian canister that can only reinstall a signed release after a long timelock | None for v0, with upgrade tests as the gate |
 | Upgrade timelock | 48 hours; 7 days | 7 days for upgrades, 24 hours for removing an owner; the default policy uses this, with 24 hours for role changes and 7 days for `SetPolicy` |
 | Default quorum | 1 while there is one owner; 2 once a second owner joins | Start at 1, prompt to raise it when a second owner joins; the default policy starts at 1 |
 | Chains in v0 | ICP and ICRC only; add Bitcoin; add EVM | ICP, ICRC and Bitcoin; EVM in v1 |

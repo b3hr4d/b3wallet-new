@@ -346,27 +346,8 @@ impl InitArgs {
         if !is_canister_id(&self.release_channel) {
             return Err("release_channel must be a canister id".to_string());
         }
-        if let Some(index) = self
-            .release_signers
-            .iter()
-            .position(|key| ed25519::public_key(key).is_none())
-        {
-            return Err(format!(
-                "release signer key {index} must be an Ed25519 public key"
-            ));
-        }
-        let mut signers: Vec<&[u8]> = self.release_signers.iter().map(|k| k.as_slice()).collect();
-        signers.sort_unstable();
-        signers.dedup();
-        if signers.len() != self.release_signers.len() {
-            return Err("release_signers must not repeat a key".to_string());
-        }
-        if self.release_threshold == 0 || usize::from(self.release_threshold) > signers.len() {
-            return Err(format!(
-                "release_threshold must be between 1 and the number of release signers ({})",
-                signers.len()
-            ));
-        }
+        // The same keys check every release the wallet installs.
+        release::Signers::new(&self.release_signers, self.release_threshold)?;
         Ok(())
     }
 }
@@ -458,6 +439,20 @@ mod tests {
     }
 
     #[test]
+    fn rejects_more_than_sixteen_signer_keys() {
+        let args = InitArgs {
+            release_signers: (1..=17).map(key).collect(),
+            ..valid()
+        };
+        assert!(args.validate(NOW).unwrap_err().contains("at most 16"));
+        let args = InitArgs {
+            release_signers: (1..=16).map(key).collect(),
+            ..valid()
+        };
+        assert_eq!(args.validate(NOW), Ok(()));
+    }
+
+    #[test]
     fn rejects_a_threshold_outside_the_signer_count() {
         for release_threshold in [0, 3] {
             let args = InitArgs {
@@ -467,7 +462,7 @@ mod tests {
             assert!(
                 args.validate(NOW)
                     .unwrap_err()
-                    .contains("release_threshold")
+                    .contains("release threshold")
             );
         }
     }

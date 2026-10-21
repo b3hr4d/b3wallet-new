@@ -103,16 +103,16 @@ impl Governance {
                 policy::validate(policy).map_err(WalletError::InvalidArgument)?;
                 next.policy = policy.clone();
             }
-            // A transfer changes no member or rule; `execute` sends it.
-            Action::Transfer(_) => {
-                return Err(WalletError::InvalidArgument(
-                    "a transfer is not a change to the members or the policy".to_string(),
-                ));
+            // A transfer or an upgrade changes no member or rule; `execute`
+            // sends the transfer and installs the upgrade.
+            Action::Transfer(_) | Action::Upgrade { .. } => {
+                return Err(WalletError::InvalidArgument(format!(
+                    "{:?} is not a change to the members or the policy",
+                    action.kind()
+                )));
             }
-            // Extensions and upgrades arrive in later steps.
-            Action::InstallExtension { .. }
-            | Action::UninstallExtension(_)
-            | Action::Upgrade { .. } => {
+            // Extensions arrive in a later step.
+            Action::InstallExtension { .. } | Action::UninstallExtension(_) => {
                 return Err(WalletError::InvalidArgument(format!(
                     "this release cannot execute {:?} actions yet",
                     action.kind()

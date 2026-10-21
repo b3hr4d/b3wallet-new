@@ -11,6 +11,7 @@ use crate::actions::StoredPending;
 use crate::btc;
 use crate::governance::Governance;
 use crate::policy::default_policy;
+use crate::upgrade::StoredUpgrade;
 use crate::{
     AccountId, ActionId, ActionState, AuditEntry, AuditEvent, Chain, InitArgs, Member, Policy, Role,
 };
@@ -34,6 +35,7 @@ const PENDING_MEMORY: MemoryId = MemoryId::new(4);
 const HISTORY_MEMORY: MemoryId = MemoryId::new(6);
 const AUDIT_INDEX_MEMORY: MemoryId = MemoryId::new(7);
 const AUDIT_DATA_MEMORY: MemoryId = MemoryId::new(8);
+const UPGRADE_MEMORY: MemoryId = MemoryId::new(9);
 const OPEN_MEMORY: MemoryId = MemoryId::new(10);
 const TRANSFER_CLOCK_MEMORY: MemoryId = MemoryId::new(11);
 const RESERVED_MEMORY: MemoryId = MemoryId::new(12);
@@ -145,7 +147,8 @@ candid_storable!(
     StoredAuditEntry,
     StoredMember,
     StoredPending,
-    StoredTransfer
+    StoredTransfer,
+    StoredUpgrade
 );
 
 fn to_candid<T: CandidType>(value: &T) -> Vec<u8> {
@@ -185,6 +188,11 @@ thread_local! {
     static OPEN: RefCell<StableBTreeMap<ActionId, (), Memory>> =
         RefCell::new(StableBTreeMap::init(memory(OPEN_MEMORY)));
 
+    /// The self-upgrade: staging, installing, or how the last one ended.
+    /// Absent until the first upgrade a wallet runs itself.
+    static UPGRADE: RefCell<StableCell<Option<StoredUpgrade>, Memory>> =
+        RefCell::new(StableCell::init(memory(UPGRADE_MEMORY), None));
+
     static AUDIT: RefCell<StableLog<StoredAuditEntry, Memory, Memory>> =
         RefCell::new(StableLog::init(memory(AUDIT_INDEX_MEMORY), memory(AUDIT_DATA_MEMORY)));
 
@@ -222,6 +230,14 @@ pub fn policy() -> Policy {
 
 pub fn config() -> Option<Config> {
     CONFIG.with_borrow(|cell| cell.get().clone())
+}
+
+pub fn upgrade() -> StoredUpgrade {
+    UPGRADE.with_borrow(|cell| cell.get().clone().unwrap_or_default())
+}
+
+pub fn set_upgrade(upgrade: StoredUpgrade) {
+    UPGRADE.with_borrow_mut(|cell| cell.set(Some(upgrade)));
 }
 
 pub fn is_claimed() -> bool {
@@ -482,6 +498,14 @@ pub fn check() -> Result<(), String> {
     PENDING.with_borrow(|actions| actions.values().for_each(drop));
     HISTORY.with_borrow(|history| history.values().for_each(drop));
     AUDIT.with_borrow(|log| log.iter().for_each(drop));
+    let upgrade = upgrade();
+    if let Some(id) = upgrade.action
+        && action(id).is_none()
+    {
+        return Err(format!(
+            "the upgrade belongs to action {id}, which is not stored"
+        ));
+    }
     if let Some(id) =
         RESERVED.with_borrow(|reserved| reserved.values().find(|id| action(*id).is_none()))
     {
