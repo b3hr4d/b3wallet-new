@@ -8,13 +8,16 @@ publish.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+bitcoin.workspace = true
 candid.workspace = true
 ed25519-dalek.workspace = true
 ic-asset-certification.workspace = true
 ic-cdk.workspace = true
+ic-cdk-bitcoin-canister.workspace = true
 ic-http-certification.workspace = true
 ic-stable-structures.workspace = true
 icrc-ledger-types.workspace = true
+secp256k1.workspace = true
 serde.workspace = true
 serde_bytes.workspace = true
 

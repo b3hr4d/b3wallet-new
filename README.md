@@ -5,7 +5,7 @@ its own certified UI, keeps its accounts and approval policy, signs with
 threshold keys, is its own only controller, and upgrades itself only to a
 release its owners approved.
 
-**Status: step 8 of [the v0 plan](docs/plan-v0.md).** The wallet canister
+**Status: step 9 of [the v0 plan](docs/plan-v0.md).** The wallet canister
 installs, keeps its state in stable memory across upgrades, answers `status`,
 can be claimed once by its first owner, and shows its member list only to its
 members. Members change members and the policy through actions that wait for
@@ -14,8 +14,11 @@ leaves one entry in an append-only audit log. It serves a placeholder start
 page and a 404, both certified and with a strict Content-Security-Policy. It
 holds ICP and ICRC tokens on its own principal and subaccounts, reads their
 balances from the ledgers, and sends them by `Transfer` actions, at most once
-each, with a daily limit below which a transfer needs no approvals.
-Everything else is still design, in [docs/design.md](docs/design.md).
+each, with a daily limit below which a transfer needs no approvals. Its
+Bitcoin accounts hold coins at addresses of its threshold ECDSA keys, and a
+`Transfer` from one sends a transaction it signs with those keys through the
+Bitcoin canister, again at most once. Everything else is still design, in
+[docs/design.md](docs/design.md).
 
 ## Principles
 
@@ -53,14 +56,18 @@ cargo clippy -p wallet --target wasm32-unknown-unknown --locked -- -D warnings
 cargo test -p wallet --locked -- --nocapture   # unit tests and the interface check
 cargo build -p wallet --target wasm32-unknown-unknown --release --locked
 POCKET_IC_BIN=/path/to/pocket-ic ICRC1_LEDGER_WASM=/path/to/ic-icrc1-ledger.wasm.gz \
-  cargo test -p integration --locked
+  BITCOIND=/path/to/bitcoind BITCOIN_CLI=/path/to/bitcoin-cli \
+  cargo test -p integration --locked -- --include-ignored
 ```
 
 The interface check compares every method the canister exports with the same
 method in `candid/wallet.did` and prints the methods not implemented yet. The
 PocketIC tests need the server version and the ICRC-1 ledger release pinned in
 `.github/workflows/ci.yml`; the ledger runs both as the ICP ledger, at its
-mainnet id, and as an ICRC token.
+mainnet id, and as an ICRC token. The Bitcoin tests start a regtest node of
+their own with the Bitcoin Core release pinned there, and PocketIC's Bitcoin
+canister follows it. The upgrade test also needs `PREVIOUS_WALLET_WASM`, the
+Wasm of the release before.
 
 ## Checking the schema
 

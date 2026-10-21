@@ -27,10 +27,12 @@ On a local network (icp-cli 1.2.0, ic-cdk 0.20.3), 2026-10-19 and 2026-10-20:
 
 Not proved yet: a chunked self-upgrade for a Wasm over the 2 MB message limit,
 and cycle costs on mainnet. The wallet's Wasm has been over that limit since
-step 7; at step 8 it is 3.10 MB, or 715 KB gzipped (`gzip -9`), and the IC
-accepts a gzipped module. About 410 KB of its code is the glob matcher
-(`globset` and its regex engine) that `ic-asset-certification` always pulls
-in.
+step 7; at step 9 it is 3.70 MB, or 894 KB gzipped (`gzip -9`), and the IC
+accepts a gzipped module under that limit. The wallet builds secp256k1 with
+its `lowmemory` tables: the default ones made it 4.78 MB, or 1.97 MB
+gzipped, since precomputed points do not compress. About 410 KB of its code
+is the glob matcher (`globset` and its regex engine) that
+`ic-asset-certification` always pulls in.
 
 The wallet itself runs no JavaScript: its pages are prerendered at build and
 embedded in the release ([decision 0001](decisions/0001-react-rendering.md)).
@@ -172,7 +174,11 @@ action that the policy module releases only after its quorum and timelock.
    index `n` of a chain is subaccount `n` as 32 big-endian bytes, so index 0
    is the plain principal ([decision 0002](decisions/0002-subaccounts.md)). The wallet reaches the ICP ledger through its
    ICRC-1 interface, and an `Icrc` chain never names it, so ICP tokens have
-   one daily limit. `balance` asks the account's ledger.
+   one daily limit. A Bitcoin account holds its coins at the P2WPKH address
+   of the threshold ECDSA key of path `wallet / bitcoin-<network> / n`, with
+   `n` as 4 big-endian bytes; `add_account` asks the management canister for
+   that key. `balance` asks the account's ledger, or the Bitcoin canister for
+   the satoshis in outputs with at least one confirmation.
 2. An owner calls `propose` with a `Transfer`. A chain's spending is what it
    sent in the last 24 hours plus what its open transfers under the daily
    limit may still send. A transfer that keeps it within the limit is
@@ -180,8 +186,10 @@ action that the policy module releases only after its quorum and timelock.
    timelock. Under a Transfer rule of one approval and no timelock, the limit
    changes nothing.
 3. Approvers call `approve` from their own devices; any owner can `reject`.
-4. On `execute` the chain adapter sends it, with one ledger call at a time. A
-   transfer under the daily limit is checked against it again first.
+4. On `execute` the chain adapter sends it, with one ledger or Bitcoin call at
+   a time. A transfer under the daily limit is checked against it again
+   first. A Bitcoin transfer's fee counts toward the limit; a ledger's fee
+   does not.
 5. ICP and ICRC tokens move by `icrc1_transfer` from the account's
    subaccount, in a bounded-wait call with a `created_at_time` that no other
    call has, so two identical transfers executed together are both sent.
@@ -197,9 +205,22 @@ action that the policy module releases only after its quorum and timelock.
    ledger (too little in the account, a wrong fee) ends the action `Failed`,
    unless an earlier call may have run: a ledger checks the fee before it
    looks for a repeat, so then the action stays ready.
-6. Bitcoin and EVM transactions are signed with threshold ECDSA on path
-   `wallet / chain / index` and sent through the Bitcoin canister or the EVM
-   RPC canister (step 9).
+6. A Bitcoin transfer is built once, on its first `execute`: it spends the
+   account's confirmed outputs, largest first, that no other open transfer
+   has reserved, pays the recipient in its first output and the change back
+   to the account in its second, and pays either the proposer's whole fee or
+   the median rate of recent transactions (at least 1 sat/vB; 2 sat/vB when
+   the Bitcoin canister offers none). Its outputs are reserved for the
+   action, a transfer under the daily limit is checked again with the real
+   fee, and every later `execute` sends that same transaction, signing it
+   first if it is not signed yet, so it cannot pay twice.
+   Each input is signed with threshold ECDSA in a bounded-wait call, and
+   each signature is checked before the transaction goes to the Bitcoin
+   canister. Once it may have reached the Bitcoin canister, the action stays
+   ready, cannot be rejected and never expires: `execute` sends the same
+   transaction again until the Bitcoin canister accepts it. A transfer that
+   ends without sending releases its outputs. Change is spendable only once
+   it confirms. EVM transactions follow in v1.
 7. The page shows the new balance and history from calls the agent verifies;
    the canister renders nothing.
 
@@ -279,14 +300,15 @@ is never reused or renumbered, even after its store goes away; the audit log's
 | 0 | Config | claim key until claimed, release channel, release signer keys and threshold, factory | `StableCell` | Kept |
 | 1 | Policy | action kind to quorum, daily limit, timelock | `StableCell` | Kept; changed only by a `SetPolicy` action |
 | 2 | Members | principal to role, label, added at, added by | `StableBTreeMap` | Kept |
-| 3 | Accounts | account id to chain, label, derivation index, holder, added at and by; never deleted | `StableBTreeMap` | Kept; addresses derived from the index |
-| 4 | Pending actions | action id to action, approvals, earliest execution, state; never deleted, so an id never names another action | `StableBTreeMap` | Kept; timelocks keep running |
+| 3 | Accounts | account id to chain, label, derivation index, holder, added at and by, and a Bitcoin account's public key; never deleted | `StableBTreeMap` | Kept; addresses derived from the index or the key |
+| 4 | Pending actions | action id to action, approvals, earliest execution, state, and a Bitcoin transfer's transaction and whether it may have been sent; never deleted, so an id never names another action | `StableBTreeMap` | Kept; timelocks keep running |
 | 5 | Extensions | extension canister id to origin, permissions, budgets, spent this window | `StableBTreeMap` | Kept |
-| 6 | History | sequence to a transfer the wallet sent: account, chain, recipient, amount, ledger block, action | `StableBTreeMap` | Kept; the daily limit reads its last 24 hours |
+| 6 | History | sequence to a transfer the wallet sent: account, chain, recipient, amount, ledger block or Bitcoin txid, Bitcoin fee, action | `StableBTreeMap` | Kept; the daily limit reads its last 24 hours |
 | 7 and 8 | Audit log | sequence to entry | `StableLog` | Kept, append-only |
 | 9 | Upgrade state | idle, staged, installing or failed, with the expected hash | `StableCell` | Read first in `post_upgrade` |
 | 10 | Open actions | the ids of the pending actions still waiting or ready | `StableBTreeMap` | Kept |
 | 11 | Transfer clock | the latest `created_at_time` given to a ledger call | `StableCell` | Kept |
+| 12 | Reserved Bitcoin outputs | an outpoint to the transfer whose transaction spends it; released if that transfer ends unsent, and kept once it may have been sent | `StableBTreeMap` | Kept |
 
 Every stored value is Candid with optional new fields, so a release can add
 fields without a migration. A store a release adds is filled in by
@@ -329,6 +351,7 @@ exists in canister memory, but whoever can install code can move every fund.
 | A dishonest replica answering a query | Every action and balance is an update call; pages are certified | Member lists and history read by query |
 | Node operators reading state | Keys are threshold keys held by the subnet; private notes and labels encrypted with vetKeys | Plaintext state stays readable without SEV |
 | A ledger call whose outcome the wallet never learns | Every retry reuses the call's `created_at_time`, so the ledger answers with the earlier block; the action stays open, and cannot be rejected, while the ledger can still find it | A transfer nobody executes again within 24 hours stays unknown to the wallet; the ledger holds the answer |
+| A Bitcoin send whose outcome the wallet never learns | The transaction is built and signed once and stored; every retry sends the same one, whose id no signature changes, and its outputs stay reserved; the action stays open and cannot be rejected | A transaction the network drops keeps its outputs reserved and its action open until the wallet learns to see that its outputs are still unspent |
 | A broken or hostile ledger named by an owner | Ledger calls wait a bounded time, so no ledger can keep the wallet from stopping or upgrading; a ledger is asked only about its own token | It can report any balance or block for its own token |
 | Cycles running out | Long freezing threshold; low-balance banner and audit event; anyone can top up | A wallet nobody tops up is deleted |
 | Custom domain taken over | II derivation origin pinned to the `icp0.io` domain; a custom domain is only an alias | Users who sign in on a fake alias |

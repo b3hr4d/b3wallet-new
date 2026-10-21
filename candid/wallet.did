@@ -56,7 +56,9 @@ type AccountHolder = variant {
 };
 
 // For ICP and ICRC, index n is the wallet's ICRC-1 subaccount n as 32
-// big-endian bytes; index 0 is the plain principal.
+// big-endian bytes; index 0 is the plain principal. For Bitcoin, index n is
+// the threshold ECDSA key of the path "wallet" / "bitcoin-<network>" / n as 4
+// big-endian bytes, and the address is that key's P2WPKH address.
 type Account = record {
   id : AccountId;
   chain : Chain;
@@ -105,13 +107,16 @@ type ActionId = nat64;
 
 type TransferRequest = record {
   from : AccountId;
-  // For ICP and ICRC, an ICRC-1 account in its text form.
+  // For ICP and ICRC, an ICRC-1 account in its text form; for Bitcoin, an
+  // address of the account's network.
   to : text;
-  // Base units of the account's chain.
+  // Base units of the account's chain: e8s, or satoshis.
   amount : nat;
-  // The ledger refuses a fee other than its own; none pays its own.
+  // The ledger refuses a fee other than its own; none pays its own. For
+  // Bitcoin, the whole fee in satoshis; none pays the median rate of recent
+  // transactions. A Bitcoin fee counts toward the daily limit.
   fee : opt nat;
-  // At most 32 bytes.
+  // At most 32 bytes. A Bitcoin transfer carries none.
   memo : opt blob;
 };
 
@@ -195,7 +200,9 @@ type Pending = record {
   // The end of the seven-day approval window (an hour for a join request);
   // once the action has its quorum, seven days after its timelock ends. A
   // transfer whose ledger call may have run stays open until 24 hours after
-  // that call, while the ledger can still find it.
+  // that call, while the ledger can still find it. A Bitcoin transfer whose
+  // transaction may have reached the Bitcoin canister never expires: execute
+  // it again to send the same transaction.
   expires_at_ns : nat64;
   state : ActionState;
 };
@@ -373,8 +380,8 @@ service : (WalletArg) -> {
   propose : (Action) -> (PendingResult);
   approve : (ActionId) -> (PendingResult);
   reject : (ActionId) -> (PendingResult);
-  // A transfer makes one ledger call at a time; a second execute while it is
-  // in flight is refused.
+  // A transfer makes one ledger or Bitcoin call at a time; a second execute
+  // while it is in flight is refused.
   execute : (ActionId) -> (PendingResult);
   pending : () -> (PendingListResult) query;
   policy : () -> (PolicyResult) query;

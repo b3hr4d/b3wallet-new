@@ -19,6 +19,10 @@ env:
   # token. The checksum is the one the release lists in its SHA256SUMS.
   ICRC1_LEDGER_RELEASE: ledger-suite-icrc-2025-09-01
   ICRC1_LEDGER_SHA256: 24e6b0b09ba44b1123453877994bb59ce75555c2e33f19f58163a3e0c6e62bd1
+  # The Bitcoin Core node the regtest tests start. The checksum is the one
+  # all 16 builders of the release signed in bitcoin-core/guix.sigs.
+  BITCOIN_CORE_VERSION: "31.1"
+  BITCOIN_CORE_SHA256: b80d9c3e04da78fb6f0569685673418cf686fadba9042d926d13fb87ff503f9e
 
 jobs:
   wallet:
@@ -78,5 +82,14 @@ jobs:
           echo "${ICRC1_LEDGER_SHA256}  ic-icrc1-ledger.wasm.gz" | sha256sum --check
           echo "ICRC1_LEDGER_WASM=${PWD}/ic-icrc1-ledger.wasm.gz" >> "${GITHUB_ENV}"
 
-      - name: PocketIC tests, with the upgrade from the previous release
+      - name: Download Bitcoin Core
+        run: |
+          curl -sSfL -o bitcoin-core.tar.gz \
+            "https://bitcoincore.org/bin/bitcoin-core-${BITCOIN_CORE_VERSION}/bitcoin-${BITCOIN_CORE_VERSION}-x86_64-linux-gnu.tar.gz"
+          echo "${BITCOIN_CORE_SHA256}  bitcoin-core.tar.gz" | sha256sum --check
+          tar -xzf bitcoin-core.tar.gz
+          echo "BITCOIND=${PWD}/bitcoin-${BITCOIN_CORE_VERSION}/bin/bitcoind" >> "${GITHUB_ENV}"
+          echo "BITCOIN_CLI=${PWD}/bitcoin-${BITCOIN_CORE_VERSION}/bin/bitcoin-cli" >> "${GITHUB_ENV}"
+
+      - name: PocketIC tests, with the upgrade from the previous release and regtest
         run: cargo test -p integration --locked -- --include-ignored

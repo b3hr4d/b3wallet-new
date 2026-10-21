@@ -176,6 +176,7 @@ mod tests {
             holder: AccountHolder::Wallet,
             added_at_ns: 0,
             added_by: Principal::self_authenticating([1; 32]),
+            public_key: None,
         }
     }
 
@@ -221,12 +222,12 @@ mod tests {
             );
         }
 
-        let bitcoin = StoredAccount {
-            chain: Chain::Bitcoin(crate::BitcoinNetwork::Regtest),
+        let evm = StoredAccount {
+            chain: Chain::Evm(1),
             ..account(0)
         };
         assert!(matches!(
-            check(&good, Some(&bitcoin)),
+            check(&good, Some(&evm)),
             Err(WalletError::InvalidArgument(reason)) if reason.contains("cannot hold")
         ));
     }
