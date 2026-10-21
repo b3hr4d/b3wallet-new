@@ -1,0 +1,21 @@
+# icp-cli project: the wallet canister and a local network whose Bitcoin
+# canister follows a regtest node on 127.0.0.1:18444, as scripts/try-local.sh
+# starts one.
+canisters:
+  - name: wallet
+    recipe:
+      type: "@dfinity/rust@v3.2.0"
+      configuration:
+        package: wallet
+        candid: candid/wallet.did
+
+networks:
+  - name: local
+    mode: managed
+    # An exact launcher, so starting the network never asks the GitHub API
+    # which release is the latest.
+    version: v16.0.0-2026-09-18-03-28
+    # The ICP ledger, at its mainnet id, with local ICP for your identity.
+    nns: true
+    bitcoind-addr:
+      - "127.0.0.1:18444"

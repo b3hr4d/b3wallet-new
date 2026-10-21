@@ -44,10 +44,21 @@ Bitcoin canister, again at most once. Everything else is still design, in
 | `candid/` | The target Candid interfaces of the wallet, release channel, factory and extensions |
 | `canisters/wallet/` | The wallet canister |
 | `tests/integration/` | PocketIC tests of the real wallet Wasm |
+| `scripts/try-local.sh`, `icp.yaml` | A local wallet to try, with icp-cli and a regtest Bitcoin node |
 
 ## Development
 
-The toolchain is pinned in `rust-toolchain.toml`. CI runs the same commands:
+The toolchain is pinned in `rust-toolchain.toml`. The Wasm build also compiles
+secp256k1's C code, which needs a clang that compiles to WebAssembly. Apple's
+cannot, so on a Mac install Homebrew's LLVM and point the build at it:
+
+```sh
+brew install llvm
+export CC_wasm32_unknown_unknown="$(brew --prefix llvm)/bin/clang"
+export AR_wasm32_unknown_unknown="$(brew --prefix llvm)/bin/llvm-ar"
+```
+
+CI runs the same commands:
 
 ```sh
 cargo fmt --all --check
@@ -68,6 +79,22 @@ mainnet id, and as an ICRC token. The Bitcoin tests start a regtest node of
 their own with the Bitcoin Core release pinned there, and PocketIC's Bitcoin
 canister follows it. The upgrade test also needs `PREVIOUS_WALLET_WASM`, the
 Wasm of the release before.
+
+## Trying it locally
+
+`scripts/try-local.sh` starts an icp-cli local network and a regtest Bitcoin
+node, installs a new wallet, claims it with your current icp-cli identity, and
+sends its accounts 10 local ICP and 50 regtest BTC. It then prints the calls
+that check a balance and propose and execute a transfer. It needs icp-cli and
+ic-wasm (`npm install -g @icp-sdk/icp-cli @icp-sdk/ic-wasm`), Node, the Rust
+toolchain, and on a Mac Homebrew's LLVM (`brew install llvm`), which it finds
+on its own. Bitcoin Core (`brew install bitcoin`), whose `bitcoind` and
+`bitcoin-cli` it finds on `PATH` or by `BITCOIND` and `BITCOIN_CLI`, adds the
+Bitcoin account; without it the wallet gets only the ICP one.
+
+```sh
+./scripts/try-local.sh
+```
 
 ## Checking the schema
 
