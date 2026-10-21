@@ -2669,3 +2669,111 @@ fn a_transfer_spends_outputs_100_blocks_old_before_a_larger_young_mining_reward(
     assert_eq!(second.input.len(), 1);
     assert_eq!(second.input[0].previous_output, change);
 }
+
+#[test]
+#[ignore = "needs bitcoind: set BITCOIND and BITCOIN_CLI"]
+fn a_policy_that_changes_while_a_transfer_signs_applies_before_it_sends() {
+    const SECOND_NS: u64 = 1_000_000_000;
+    // Every rule waits at most a second, so a new policy can apply while a
+    // transfer signs; transfers within `amount` a day wait for nothing.
+    let limited = |mut policy: Policy, amount: u64| {
+        for rule in &mut policy.rules {
+            rule.timelock_ns = rule.timelock_ns.min(SECOND_NS);
+            if rule.kind == ActionKind::Transfer {
+                rule.timelock_ns = SECOND_NS;
+                rule.daily_limits = vec![DailyLimit {
+                    chain: REGTEST,
+                    amount: amount.into(),
+                }];
+            }
+        }
+        policy
+    };
+    let net = wallet_on_regtest_after(|pic, wallet, owner| {
+        let policy = limited(policy(pic, wallet, owner), 100 * BTC);
+        let set_policy = propose(pic, wallet, owner, Action::SetPolicy(policy)).unwrap();
+        pic.advance_time(Duration::from_nanos(7 * DAY_NS));
+        act(pic, wallet, owner, "execute", set_policy.id).unwrap();
+    });
+    let main = net.add_bitcoin_account("btc");
+    // Three outputs of 50 BTC.
+    net.mine(3, &main.address);
+    net.mine(100, BURN);
+    let lower = net
+        .propose(Action::SetPolicy(limited(
+            policy(&net.pic, net.wallet, net.owner),
+            BTC,
+        )))
+        .unwrap();
+    net.pic.advance_time(Duration::from_secs(2));
+
+    // A transfer whose send may have reached the Bitcoin canister, as in
+    // the test above.
+    let maybe_sent = net
+        .propose(bitcoin_transfer(main.id, BURN, 30 * BTC, Some(10_000)))
+        .unwrap();
+    assert_eq!(maybe_sent.executable_after_ns, maybe_sent.proposed_at_ns);
+    let fees = net.bitcoin_fees();
+    net.set_bitcoin_fees(Fees {
+        send_transaction_base: 1_000 * 1_000_000_000_000,
+        ..fees.clone()
+    });
+    assert!(matches!(
+        net.execute(maybe_sent.id),
+        Err(WalletError::ChainError(reason)) if reason.contains("send the same one")
+    ));
+    net.set_bitcoin_fees(fees);
+
+    // Two outputs left, so this transfer asks for two signatures.
+    let transfer = net
+        .propose(bitcoin_transfer(main.id, BURN, 60 * BTC, Some(10_000)))
+        .unwrap();
+    assert_eq!(transfer.executable_after_ns, transfer.proposed_at_ns);
+
+    let call = net
+        .pic
+        .submit_call(
+            net.wallet,
+            net.owner,
+            "execute",
+            encode_one(transfer.id).unwrap(),
+        )
+        .unwrap();
+    // The wallet pays for reading its outputs, then for the first signature,
+    // each at least a billion cycles: by then the transaction is built and
+    // passed the daily limit.
+    let (start, mut last, mut paid) = (Instant::now(), net.pic.cycle_balance(net.wallet), 0);
+    while paid < 2 {
+        assert!(
+            start.elapsed() < Duration::from_secs(60),
+            "the transfer never asked for a signature"
+        );
+        net.pic.tick();
+        let balance = net.pic.cycle_balance(net.wallet);
+        if last > balance + 1_000_000_000 {
+            paid += 1;
+        }
+        last = balance;
+    }
+    let lowered = net.execute(lower.id).unwrap();
+    assert_eq!(lowered.state, ActionState::Executed(Outcome::Done));
+
+    let executed = decode_one::<PendingResult>(&net.pic.await_call(call).unwrap())
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(&executed.state, ActionState::Failed(reason) if reason.contains("no longer fits")),
+        "{executed:?}"
+    );
+    // The new limit does not hold back a transaction that may have been
+    // sent: it goes as it was signed.
+    let resent = net.send(maybe_sent.id);
+    assert_eq!(outputs(&resent)[0], (BURN.to_string(), 30 * BTC));
+    // The failed transfer released its outputs: after its timelock, a
+    // transfer spends one.
+    let small = net
+        .propose(bitcoin_transfer(main.id, BURN, BTC / 2, Some(10_000)))
+        .unwrap();
+    net.pic.advance_time(Duration::from_secs(2));
+    net.send(small.id);
+}

@@ -213,16 +213,17 @@ action that the policy module releases only after its quorum and timelock.
    pays either the proposer's whole fee or the median rate of recent
    transactions (at least 1 sat/vB; 2 sat/vB when the Bitcoin canister
    offers none). Its outputs are reserved for the action, a transfer under
-   the daily limit is checked again with the real fee, and every later
-   `execute` sends that same transaction, signing it first if it is not
-   signed yet, so it cannot pay twice. Each input is signed with threshold
-   ECDSA in a bounded-wait call, and each signature is checked before the
-   transaction goes to the Bitcoin canister. Once it may have reached the
-   Bitcoin canister, the action stays ready, cannot be rejected and never
-   expires: `execute` sends the same transaction again until the Bitcoin
-   canister accepts it. A transfer that ends without sending releases its
-   outputs. Change is spendable only once it confirms. EVM transactions
-   follow in v1.
+   the daily limit is checked against it again with the real fee, and again
+   just before each send until one may have reached the Bitcoin canister, so
+   a policy that changed while it was signed applies. Every later `execute`
+   sends that same transaction, signing it first if it is not signed yet, so
+   it cannot pay twice. Each input is signed with threshold ECDSA in a
+   bounded-wait call, and each signature is checked before the transaction
+   goes to the Bitcoin canister. Once it may have reached the Bitcoin
+   canister, the action stays ready, cannot be rejected and never expires:
+   `execute` sends the same transaction again until the Bitcoin canister
+   accepts it. A transfer that ends without sending releases its outputs.
+   Change is spendable only once it confirms. EVM transactions follow in v1.
 7. The page shows the new balance and history from calls the agent verifies;
    the canister renders nothing.
 

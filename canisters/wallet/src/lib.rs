@@ -530,7 +530,7 @@ fn chain_error(reason: String) -> Step {
 /// Executes a Bitcoin transfer: builds its transaction once, signs it, and
 /// hands it to the Bitcoin canister, one execution at a time. Until the
 /// transaction may have been sent, the transfer is checked again, against
-/// the daily limit too.
+/// the daily limit too, and the daily limit once more just before the send.
 async fn send_bitcoin(
     id: ActionId,
     mut pending: StoredPending,
@@ -691,6 +691,13 @@ async fn bitcoin_steps(
             signed
         }
     };
+    // A policy that changed while the transaction was signed applies, unless
+    // it may have been sent already: then only the same one can go.
+    if !pending.may_have_sent() && pending.daily_limit == Some(true) {
+        let spend = request.amount.clone() + tx.fee;
+        fits_daily_limit(id, &account.chain, &spend, ic_cdk::api::time())
+            .map_err(|error| Step::Fails(reason(&error)))?;
+    }
     pending.bitcoin_sending();
     storage::set_action(id, pending);
     let result = bitcoin_canister::send(network, btc::to_bytes(&signed)).await;
