@@ -1,0 +1,13 @@
+[package]
+name = "release-tool"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+candid.workspace = true
+candid_parser.workspace = true
+# Reads signing keys in PKCS#8 PEM and wipes them from memory when dropped.
+ed25519-dalek = { workspace = true, features = ["pem", "zeroize"] }
+release = { path = "../../crates/release" }
+serde_bytes.workspace = true

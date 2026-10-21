@@ -1,6 +1,13 @@
 [workspace]
 resolver = "3"
-members = ["canisters/wallet", "tests/integration"]
+members = [
+  "canisters/release_channel",
+  "canisters/wallet",
+  "crates/release",
+  "tests/caller",
+  "tests/integration",
+  "tools/release-tool",
+]
 
 [workspace.package]
 edition = "2024"
@@ -33,8 +40,15 @@ proptest = { version = "=1.11.0", default-features = false, features = ["std"] }
 secp256k1 = { version = "=0.29.1", default-features = false, features = ["lowmemory"] }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_bytes = "=0.11.19"
+# Chunk and manifest hashes; already under ed25519-dalek.
+sha2 = { version = "=0.10.9", default-features = false }
 
 [profile.release]
 codegen-units = 1
 lto = true
 opt-level = "s"
+
+# SHA-256 at "s" takes 127 instructions a byte in the Wasm, and at 3 about 75:
+# the release channel hashes every byte of a release twice in one call.
+[profile.release.package.sha2]
+opt-level = 3

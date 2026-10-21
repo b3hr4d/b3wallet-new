@@ -1,0 +1,20 @@
+[package]
+name = "release_channel"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+candid.workspace = true
+ic-cdk.workspace = true
+ic-stable-structures.workspace = true
+release = { path = "../../crates/release" }
+serde.workspace = true
+serde_bytes.workspace = true
+
+[dev-dependencies]
+candid_parser.workspace = true
+ed25519-dalek.workspace = true

@@ -39,22 +39,30 @@ type ExtensionManifest = record {
 };
 
 // An Ed25519 signature by one release signer over
-// SHA-256(Candid encoding of the manifest with `signatures = vec {}`).
+// SHA-256(Candid encoding of the manifest with `signatures = vec {}`), as
+// the Rust candid crate's encode_one writes it. Encoders differ in how they
+// lay out the type table, so signers sign with tools/release-tool, and a
+// test in crates/release pins those bytes.
 type ReleaseSignature = record {
   signer : blob;
   signature : blob;
 };
 
 type ReleaseManifest = record {
+  // 1 to 64 ASCII letters, digits and . + - _
   version : text;
   wasm_sha256 : blob;
+  // At most 100 MiB.
   wasm_size : nat64;
-  // One SHA-256 per chunk of at most 1 MiB, in install order.
+  // One SHA-256 per chunk, in install order. The Wasm is cut every 1 MiB,
+  // so every chunk but the last is 1 MiB.
   chunk_hashes : vec blob;
-  // Module hashes this release was tested to upgrade from. A wallet whose
-  // own module hash is missing here refuses the release.
+  // At most 64 module hashes this release was tested to upgrade from. A
+  // wallet whose own module hash is missing here refuses the release.
   tested_from : vec blob;
+  // An https URL of at most 512 printable ASCII characters.
   notes_url : text;
   published_at_ns : nat64;
+  // At most 16.
   signatures : vec ReleaseSignature;
 };

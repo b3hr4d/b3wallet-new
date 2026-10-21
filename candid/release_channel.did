@@ -1,8 +1,24 @@
 // Release channel: publishes signed firmware releases. Wallets do not trust
 // it; they check every manifest's signatures and every chunk's hash, so the
-// channel can withhold a release but cannot push a bad one. Draft 0, 2026-10-20.
+// channel can withhold a release but cannot push a bad one. Draft 0,
+// 2026-10-20; install arguments and errors from step 10, 2026-10-21.
 
 import "common.did";
+
+type ChannelConfig = record {
+  // The only callers of publish_chunk and publish_manifest.
+  publishers : vec principal;
+  // Ed25519 public keys, at most 16. A manifest goes live only when
+  // release_threshold of them signed it.
+  release_signers : vec blob;
+  release_threshold : nat8;
+};
+
+// An upgrade keeps the configuration, or replaces it with the one it names.
+type ChannelArg = variant {
+  Init : ChannelConfig;
+  Upgrade : opt ChannelConfig;
+};
 
 type ReleaseSummary = record {
   version : text;
@@ -23,24 +39,32 @@ type PublishChunk = record {
 };
 
 type ChannelError = variant {
-  NotPublisher;
-  UnknownVersion : text;
+  // A field out of its form or limit; the text says which.
+  Invalid : text;
+  MissingChunk : record { index : nat32 };
   HashMismatch : record { index : nat32 };
+  // Every chunk matches its hash, but together they are not the Wasm the
+  // manifest names, or are not cut at 1 MiB.
+  WasmMismatch;
   NotEnoughSignatures : record { have : nat8; need : nat8 };
   AlreadyPublished : text;
 };
 
 type ChannelResult = variant { Ok; Err : ChannelError };
 
-service : {
-  // Read side, used by wallets and the factory.
+service : (ChannelArg) -> {
+  // Read side, used by wallets and the factory. Only published releases;
+  // latest is the one published last.
   latest : () -> (opt ReleaseManifest) query;
   manifest : (text) -> (opt ReleaseManifest) query;
+  // In the order they were published.
   releases : () -> (vec ReleaseSummary) query;
   // A chunk of at most 1 MiB.
   chunk : (ChunkRequest) -> (opt blob) query;
 
-  // Write side, publishers only. A manifest goes live once all its chunks
+  // Write side, publishers only; other callers are rejected. Chunks are
+  // staged first, and a staged chunk can be replaced until its release is
+  // published. A manifest goes live, with its chunks, once all its chunks
   // match their hashes and its signatures meet the channel's threshold.
   publish_chunk : (PublishChunk) -> (ChannelResult);
   publish_manifest : (ReleaseManifest) -> (ChannelResult);
