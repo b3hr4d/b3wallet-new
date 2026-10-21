@@ -1,15 +1,16 @@
 //! Firmware of a self-owned chain-key wallet canister.
 //!
-//! Steps 1 to 6 of `docs/plan-v0.md`: the install arguments, `status`, state
+//! Steps 1 to 7 of `docs/plan-v0.md`: the install arguments, `status`, state
 //! in stable memory, the claim, members, the policy with its pending actions,
-//! and the audit log. The interface test lists the methods of
-//! `candid/wallet.did` not implemented yet.
+//! the audit log, and the certified pages. The interface test lists the
+//! methods of `candid/wallet.did` not implemented yet.
 
 mod access;
 mod actions;
 mod claim;
 mod ed25519;
 mod governance;
+mod http;
 mod policy;
 mod storage;
 mod types;
@@ -34,6 +35,7 @@ fn init(arg: WalletArg) {
     }
     storage::set_config(args.into());
     storage::set_policy(policy::default_policy());
+    http::certify();
 }
 
 // A trap here makes the IC keep the running version: an upgrade either reads
@@ -47,6 +49,7 @@ fn post_upgrade(arg: WalletArg) {
     if let Err(reason) = storage::check() {
         ic_cdk::trap(format!("the upgrade cannot read the state: {reason}"));
     }
+    http::certify();
 }
 
 /// Makes the caller the first owner. See `claim::check` for what it refuses.
@@ -293,6 +296,15 @@ fn status() -> Status {
         upgrade: UpgradeState::Idle,
         release_channel: config.release_channel,
     }
+}
+
+/// The wallet's pages, certified. Anyone may call it, also before the claim.
+#[ic_cdk::query]
+fn http_request(request: ic_http_certification::HttpRequest<'static>) -> HttpResponse {
+    let Some(certificate) = ic_cdk::api::data_certificate() else {
+        ic_cdk::trap("http_request answers only as a query");
+    };
+    http::serve(&certificate, &request)
 }
 
 ic_cdk::export_candid!();
