@@ -226,9 +226,9 @@ impl StoredPending {
 
     /// Starts a ledger call of this transfer and returns its
     /// `created_at_time`: the earlier one when an earlier call may have run,
-    /// so the ledger finds it, and otherwise `now`. Call `transfer_retry`
-    /// first.
-    pub fn begin_transfer(&mut self, now: u64) -> u64 {
+    /// so the ledger finds it, and otherwise one from `fresh`, which no other
+    /// call has. Call `transfer_retry` first.
+    pub fn begin_transfer(&mut self, now: u64, fresh: impl FnOnce() -> u64) -> u64 {
         let retry = self
             .transfer
             .as_ref()
@@ -240,7 +240,7 @@ impl StoredPending {
                 unknown: true,
             },
             None => TransferAttempt {
-                created_at_ns: now,
+                created_at_ns: fresh(),
                 in_flight_since_ns: Some(now),
                 unknown: false,
             },
@@ -601,12 +601,18 @@ mod tests {
         Reply::Unknown("timeout".to_string())
     }
 
+    /// The fresh time of a call that must reuse an earlier one.
+    fn no_fresh_time() -> u64 {
+        panic!("a retry takes no fresh time")
+    }
+
     #[test]
     fn a_sent_transfer_ends_executed_with_its_block() {
         let mut pending = transfer();
         assert_eq!(pending.daily_limit, Some(true));
         assert_eq!(pending.transfer_retry(ID, T0), Ok(false));
-        assert_eq!(pending.begin_transfer(T0), T0);
+        // A fresh call takes the time it is given, not `now`.
+        assert_eq!(pending.begin_transfer(T0, || T0 + 5), T0 + 5);
         let block = Nat::from(1_234u32);
         assert_eq!(
             end(&mut pending, Reply::Sent(block.clone()), T0 + 1),
@@ -626,26 +632,32 @@ mod tests {
     #[test]
     fn one_call_at_a_time_and_one_that_never_returned_is_retried_as_it_was() {
         let mut pending = transfer();
-        let created_at = pending.begin_transfer(T0);
+        let created_at = pending.begin_transfer(T0, || T0);
         assert!(matches!(
             pending.transfer_retry(ID, T0 + STALE_CALL_NS - 1),
             Err(WalletError::InvalidArgument(reason)) if reason.contains("in flight")
         ));
         assert_eq!(pending.transfer_retry(ID, T0 + STALE_CALL_NS), Ok(true));
-        assert_eq!(pending.begin_transfer(T0 + STALE_CALL_NS), created_at);
+        assert_eq!(
+            pending.begin_transfer(T0 + STALE_CALL_NS, no_fresh_time),
+            created_at
+        );
     }
 
     #[test]
     fn after_an_unknown_outcome_every_retry_reuses_its_created_at_time() {
         let mut pending = transfer();
-        let created_at = pending.begin_transfer(T0);
+        let created_at = pending.begin_transfer(T0, || T0);
         assert!(matches!(
             end(&mut pending, unknown(), T0),
             Err(WalletError::ChainError(reason)) if reason.contains("execute it again")
         ));
         assert_eq!(pending.state, ActionState::Ready);
         assert_eq!(pending.transfer_retry(ID, T0 + HOUR_NS), Ok(true));
-        assert_eq!(pending.begin_transfer(T0 + HOUR_NS), created_at);
+        assert_eq!(
+            pending.begin_transfer(T0 + HOUR_NS, no_fresh_time),
+            created_at
+        );
         // A call that did not run tells nothing of the earlier one.
         assert!(
             end(
@@ -655,7 +667,10 @@ mod tests {
             )
             .is_err()
         );
-        assert_eq!(pending.begin_transfer(T0 + 2 * HOUR_NS), created_at);
+        assert_eq!(
+            pending.begin_transfer(T0 + 2 * HOUR_NS, no_fresh_time),
+            created_at
+        );
         assert_eq!(
             end(&mut pending, Reply::Sent(Nat::from(3u8)), T0 + 2 * HOUR_NS),
             Ok(Some(Nat::from(3u8)))
@@ -665,20 +680,20 @@ mod tests {
     #[test]
     fn a_call_that_did_not_run_leaves_the_transfer_ready_for_a_fresh_one() {
         let mut pending = transfer();
-        pending.begin_transfer(T0);
+        pending.begin_transfer(T0, || T0);
         assert_eq!(
             end(&mut pending, Reply::NotRun("stopped".to_string()), T0),
             Err(WalletError::ChainError("stopped".to_string()))
         );
         assert_eq!(pending.state, ActionState::Ready);
         assert_eq!(pending.transfer_retry(ID, T0 + 1), Ok(false));
-        assert_eq!(pending.begin_transfer(T0 + 1), T0 + 1);
+        assert_eq!(pending.begin_transfer(T0 + 1, || T0 + 7), T0 + 7);
     }
 
     #[test]
     fn a_refusal_fails_the_transfer() {
         let mut pending = transfer();
-        pending.begin_transfer(T0);
+        pending.begin_transfer(T0, || T0);
         assert_eq!(
             end(&mut pending, Reply::Refused("poor".to_string()), T0),
             Ok(None)
@@ -689,7 +704,7 @@ mod tests {
     #[test]
     fn too_old_fails_only_a_transfer_that_may_have_been_sent() {
         let mut fresh = transfer();
-        fresh.begin_transfer(T0);
+        fresh.begin_transfer(T0, || T0);
         assert!(matches!(
             end(&mut fresh, Reply::TooOld, T0),
             Err(WalletError::ChainError(_))
@@ -698,9 +713,9 @@ mod tests {
         assert_eq!(fresh.transfer, None);
 
         let mut unseen = transfer();
-        unseen.begin_transfer(T0);
+        unseen.begin_transfer(T0, || T0);
         end(&mut unseen, unknown(), T0).unwrap_err();
-        unseen.begin_transfer(T0 + DEDUP_WINDOW_NS);
+        unseen.begin_transfer(T0 + DEDUP_WINDOW_NS, || T0 + DEDUP_WINDOW_NS);
         assert_eq!(
             end(&mut unseen, Reply::TooOld, T0 + DEDUP_WINDOW_NS),
             Ok(None)
@@ -716,7 +731,7 @@ mod tests {
         let mut pending = transfer();
         let expiry = pending.expires_at_ns;
         let started = expiry - HOUR_NS;
-        pending.begin_transfer(started);
+        pending.begin_transfer(started, || started);
         assert!(pending.is_open(expiry));
         end(&mut pending, unknown(), started).unwrap_err();
         assert!(pending.is_open(started + DEDUP_WINDOW_NS - 1));
@@ -734,7 +749,7 @@ mod tests {
         );
 
         let mut trapped = transfer();
-        trapped.begin_transfer(T0);
+        trapped.begin_transfer(T0, || T0);
         trapped.lose_transfer_call();
         assert!(trapped.may_have_sent());
         assert_eq!(trapped.transfer_retry(ID, T0), Ok(true));
@@ -804,7 +819,7 @@ mod tests {
                     if pending.check_executable(ID, now).is_err() || pending.transfer_retry(ID, now).is_err() {
                         return None;
                     }
-                    let created_at = pending.begin_transfer(now);
+                    let created_at = pending.begin_transfer(now, || now);
                     let too_old = now >= created_at + DEDUP_WINDOW_NS;
                     let found = sent == Some(created_at) && !too_old;
                     Some((created_at, sends && !too_old && !found))

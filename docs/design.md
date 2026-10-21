@@ -27,9 +27,10 @@ On a local network (icp-cli 1.2.0, ic-cdk 0.20.3), 2026-10-19 and 2026-10-20:
 
 Not proved yet: a chunked self-upgrade for a Wasm over the 2 MB message limit,
 and cycle costs on mainnet. The wallet's Wasm has been over that limit since
-step 7; at step 8 it is 3.09 MB, or 714 KB gzipped (`gzip -9`), and the IC
-accepts a gzipped module. About 410 KB of its code is the glob matcher (`globset` and its regex
-engine) that `ic-asset-certification` always pulls in.
+step 7; at step 8 it is 3.10 MB, or 715 KB gzipped (`gzip -9`), and the IC
+accepts a gzipped module. About 410 KB of its code is the glob matcher
+(`globset` and its regex engine) that `ic-asset-certification` always pulls
+in.
 
 The wallet itself runs no JavaScript: its pages are prerendered at build and
 embedded in the release ([decision 0001](decisions/0001-react-rendering.md)).
@@ -182,10 +183,11 @@ action that the policy module releases only after its quorum and timelock.
 4. On `execute` the chain adapter sends it, with one ledger call at a time. A
    transfer under the daily limit is checked against it again first.
 5. ICP and ICRC tokens move by `icrc1_transfer` from the account's
-   subaccount, in a bounded-wait call with a `created_at_time`. When the
-   wallet cannot tell whether a call ran (it timed out, its answer does not
-   decode, or the wallet's code after it trapped), the action stays ready
-   and cannot be rejected, and the next `execute` reuses that
+   subaccount, in a bounded-wait call with a `created_at_time` that no other
+   call has, so two identical transfers executed together are both sent.
+   When the wallet cannot tell whether a call ran (it timed out, its answer
+   does not decode, or the wallet's code after it trapped), the action stays
+   ready and cannot be rejected, and the next `execute` reuses that
    `created_at_time`: the ledger then answers with the earlier block instead
    of sending again. Ledgers find a repeated transfer for 24 hours, so the
    action stays open until 24 hours after that call. A refusal by the ledger
@@ -280,6 +282,7 @@ is never reused or renumbered, even after its store goes away; the audit log's
 | 7 and 8 | Audit log | sequence to entry | `StableLog` | Kept, append-only |
 | 9 | Upgrade state | idle, staged, installing or failed, with the expected hash | `StableCell` | Read first in `post_upgrade` |
 | 10 | Open actions | the ids of the pending actions still waiting or ready | `StableBTreeMap` | Kept |
+| 11 | Transfer clock | the latest `created_at_time` given to a ledger call | `StableCell` | Kept |
 
 Every stored value is Candid with optional new fields, so a release can add
 fields without a migration. A store a release adds is filled in by

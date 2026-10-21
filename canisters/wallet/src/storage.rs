@@ -34,6 +34,7 @@ const HISTORY_MEMORY: MemoryId = MemoryId::new(6);
 const AUDIT_INDEX_MEMORY: MemoryId = MemoryId::new(7);
 const AUDIT_DATA_MEMORY: MemoryId = MemoryId::new(8);
 const OPEN_MEMORY: MemoryId = MemoryId::new(10);
+const TRANSFER_CLOCK_MEMORY: MemoryId = MemoryId::new(11);
 
 /// What the wallet was installed with.
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -77,8 +78,8 @@ pub struct StoredTransfer {
     pub chain: Chain,
     pub to: String,
     pub amount: Nat,
-    /// The ledger block that holds it.
-    pub block: Nat,
+    /// The ledger block that holds it, in decimal: the receipt's `tx_id`.
+    pub tx_id: String,
     pub at_ns: u64,
     pub action: ActionId,
 }
@@ -180,6 +181,10 @@ thread_local! {
 
     static AUDIT: RefCell<StableLog<StoredAuditEntry, Memory, Memory>> =
         RefCell::new(StableLog::init(memory(AUDIT_INDEX_MEMORY), memory(AUDIT_DATA_MEMORY)));
+
+    /// The latest `created_at_time` the wallet gave a ledger call.
+    static TRANSFER_CLOCK: RefCell<StableCell<u64, Memory>> =
+        RefCell::new(StableCell::init(memory(TRANSFER_CLOCK_MEMORY), 0));
 }
 
 fn memory(id: MemoryId) -> Memory {
@@ -288,6 +293,18 @@ pub fn add_transfer(transfer: StoredTransfer) {
         let seq = history.last_key_value().map_or(0, |(last, _)| last + 1);
         history.insert(seq, transfer);
     });
+}
+
+/// A `created_at_time` for a new ledger call: `now`, or a nanosecond after
+/// the latest one when that is later. Messages of one round share their time,
+/// so without this two transfers with the same arguments executed together
+/// would look like one to the ledger.
+pub fn transfer_time(now: u64) -> u64 {
+    TRANSFER_CLOCK.with_borrow_mut(|clock| {
+        let time = now.max(clock.get().saturating_add(1));
+        clock.set(time);
+        time
+    })
 }
 
 /// What the wallet sent on `chain` at `since_ns` or later. It reads back
@@ -559,6 +576,16 @@ mod tests {
             APPROVAL_WINDOW_NS,
             proposed_at_ns,
         )
+    }
+
+    #[test]
+    fn every_ledger_call_gets_its_own_created_at_time() {
+        assert_eq!(transfer_time(100), 100);
+        // Messages of one round share their time.
+        assert_eq!(transfer_time(100), 101);
+        assert_eq!(transfer_time(100), 102);
+        assert_eq!(transfer_time(50), 103);
+        assert_eq!(transfer_time(1_000), 1_000);
     }
 
     #[test]

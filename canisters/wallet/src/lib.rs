@@ -377,7 +377,7 @@ async fn send(
         }
     };
     let ledger = accounts::ledger(&account.chain)?;
-    let created_at_ns = pending.begin_transfer(now);
+    let created_at_ns = pending.begin_transfer(now, || storage::transfer_time(now));
     storage::set_action(id, pending);
     let in_flight = InFlight(Some(id));
     let arg = transfers::ledger_arg(&request, &account, to, created_at_ns);
@@ -398,7 +398,7 @@ async fn send(
             chain: account.chain,
             to: request.to,
             amount: request.amount,
-            block: block.clone(),
+            tx_id: block.0.to_str_radix(10),
             at_ns: now,
             action: id,
         });

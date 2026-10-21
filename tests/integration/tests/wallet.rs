@@ -1871,6 +1871,38 @@ fn a_second_execute_while_the_first_is_in_flight_is_refused() {
     assert_eq!(ledger_balance(&pic, icp_ledger(), friend), E8S);
 }
 
+/// Two actions that send the same amount to the same account, executed in
+/// one round, are two transfers: each ledger call has its own
+/// `created_at_time`, so the ledger takes neither for a repeat of the other.
+#[test]
+fn identical_transfers_executed_together_are_both_sent() {
+    let Ledgers {
+        pic, wallet, owner, ..
+    } = wallet_with_ledgers();
+    add_account(&pic, wallet, owner, Chain::Icp, "main").unwrap();
+    let friend = LedgerAccount::from(user(20));
+    let first = propose(&pic, wallet, owner, transfer_action(1, friend, E8S)).unwrap();
+    let second = propose(&pic, wallet, owner, transfer_action(1, friend, E8S)).unwrap();
+
+    let execute = |action: ActionId| {
+        pic.submit_call(wallet, owner, "execute", encode_one(action).unwrap())
+            .unwrap()
+    };
+    let calls = [execute(first.id), execute(second.id)];
+    let blocks: Vec<String> = calls
+        .into_iter()
+        .map(|call| {
+            let result = decode_one::<PendingResult>(&pic.await_call(call).unwrap()).unwrap();
+            match result.map(|pending| pending.state) {
+                Ok(ActionState::Executed(Outcome::Sent(receipt))) => receipt.tx_id,
+                other => panic!("not sent: {other:?}"),
+            }
+        })
+        .collect();
+    assert_ne!(blocks[0], blocks[1]);
+    assert_eq!(ledger_balance(&pic, icp_ledger(), friend), 2 * E8S);
+}
+
 #[test]
 fn a_transfer_the_ledger_refuses_fails() {
     let Ledgers {
