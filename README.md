@@ -74,11 +74,12 @@ Wasm of the release before.
 
 `scripts/try-local.sh` starts an icp-cli local network and a regtest Bitcoin
 node, installs a new wallet, claims it with your current icp-cli identity, and
-sends its accounts 50 regtest BTC and 10 local ICP. It then prints the calls
+sends its accounts 10 local ICP and 50 regtest BTC. It then prints the calls
 that check a balance and propose and execute a transfer. It needs icp-cli and
-ic-wasm (`npm install -g @icp-sdk/icp-cli @icp-sdk/ic-wasm`), Node, the Rust
-toolchain, and Bitcoin Core's `bitcoind` and `bitcoin-cli` on `PATH` (or named
-by `BITCOIND` and `BITCOIN_CLI`).
+ic-wasm (`npm install -g @icp-sdk/icp-cli @icp-sdk/ic-wasm`), Node and the
+Rust toolchain. Bitcoin Core (`brew install bitcoin`), whose `bitcoind` and
+`bitcoin-cli` it finds on `PATH` or by `BITCOIND` and `BITCOIN_CLI`, adds the
+Bitcoin account; without it the wallet gets only the ICP one.
 
 ```sh
 ./scripts/try-local.sh
