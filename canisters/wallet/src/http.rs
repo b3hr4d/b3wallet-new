@@ -29,6 +29,8 @@ pub const CONTENT_SECURITY_POLICY: &str = "default-src 'none'; \
 // Built by `ui/` (`npm run build`), which prerenders the pages and bundles
 // the app they load; CI checks the files are that build's output.
 const INDEX_HTML: &[u8] = include_bytes!("../pages/index.html");
+const SEND_HTML: &[u8] = include_bytes!("../pages/send.html");
+const APPROVALS_HTML: &[u8] = include_bytes!("../pages/approvals.html");
 const CLAIM_HTML: &[u8] = include_bytes!("../pages/claim.html");
 const NOT_FOUND_HTML: &[u8] = include_bytes!("../pages/404.html");
 const APP_JS: &[u8] = include_bytes!("../pages/app.js");
@@ -62,11 +64,14 @@ thread_local! {
 }
 
 /// The embedded files, certified: `/` and `/index.html` are the start page,
-/// `/claim` and `/claim.html` the claim page, `/app.js` and `/app.css` the
-/// app they load, and any other path is the 404 page with status 404.
+/// `/send`, `/approvals` and `/claim` the other pages, each also at its
+/// `.html` path, `/app.js` and `/app.css` the app they load, and any other
+/// path is the 404 page with status 404.
 fn router() -> AssetRouter<'static> {
-    let files: [(&str, &[u8], &str, &[&str]); 5] = [
+    let files: [(&str, &[u8], &str, &[&str]); 7] = [
         ("index.html", INDEX_HTML, HTML, &["/"]),
+        ("send.html", SEND_HTML, HTML, &["/send"]),
+        ("approvals.html", APPROVALS_HTML, HTML, &["/approvals"]),
         ("claim.html", CLAIM_HTML, HTML, &["/claim"]),
         ("404.html", NOT_FOUND_HTML, HTML, &[]),
         ("app.js", APP_JS, JAVASCRIPT, &[]),
@@ -151,8 +156,12 @@ mod tests {
     }
 
     #[test]
-    fn the_claim_page_and_the_app_answer_at_their_paths() {
+    fn the_other_pages_and_the_app_answer_at_their_paths() {
         for (url, body, content_type) in [
+            ("/send", SEND_HTML, HTML),
+            ("/send.html", SEND_HTML, HTML),
+            ("/approvals", APPROVALS_HTML, HTML),
+            ("/approvals.html", APPROVALS_HTML, HTML),
             ("/claim", CLAIM_HTML, HTML),
             ("/claim.html", CLAIM_HTML, HTML),
             ("/claim?x=1", CLAIM_HTML, HTML),
@@ -175,6 +184,8 @@ mod tests {
         for url in [
             "/claims",
             "/claim/",
+            "/send/1",
+            "/approval",
             "/index.htm",
             "/a/b/c.js",
             "/404",
@@ -188,7 +199,15 @@ mod tests {
 
     #[test]
     fn every_response_carries_a_certificate_and_the_security_headers() {
-        for url in ["/", "/claim", "/app.js", "/app.css", "/nothing-here"] {
+        for url in [
+            "/",
+            "/send",
+            "/approvals",
+            "/claim",
+            "/app.js",
+            "/app.css",
+            "/nothing-here",
+        ] {
             let response = get(url);
             assert!(header(&response, "ic-certificate").is_some(), "{url}");
             for (name, value) in security_headers() {
@@ -219,7 +238,13 @@ mod tests {
     fn the_pages_hold_no_inline_script_or_style() {
         const SCRIPT: &str = r#"<script type="module" src="/app.js"></script>"#;
         const STYLES: &str = r#"<link rel="stylesheet" href="/app.css">"#;
-        for page in [INDEX_HTML, CLAIM_HTML, NOT_FOUND_HTML] {
+        for page in [
+            INDEX_HTML,
+            SEND_HTML,
+            APPROVALS_HTML,
+            CLAIM_HTML,
+            NOT_FOUND_HTML,
+        ] {
             let page = std::str::from_utf8(page).unwrap().to_ascii_lowercase();
             assert_eq!(page.matches(SCRIPT).count(), 1, "a page loads the app once");
             assert_eq!(

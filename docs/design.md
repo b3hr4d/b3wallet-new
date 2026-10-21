@@ -161,8 +161,9 @@ action that the policy module releases only after its quorum and timelock.
 2. A new device or anchor signs in, is not a member yet, and calls
    `request_join` with a label. The wallet creates a pending `AddMember` action
    that adds it as a viewer, open for an hour, and the page shows a short code
-   on both screens. At most eight join requests are open at once, counted
-   apart from the members' proposals.
+   on both screens: eight digits from the SHA-256 of the new principal's
+   text. At most eight join requests are open at once, counted apart from the
+   members' proposals.
 3. An owner checks the code and approves. Removing an owner needs the other
    owners' quorum and a timelock, so one stolen device cannot lock the others
    out.
@@ -308,7 +309,7 @@ instructions an update may use.
    latest release and returns it only when the signatures meet the threshold
    of the signer keys pinned in the wallet, and when its own module hash, read
    with `canister_info`, is in the tested list. Nothing checks on a schedule:
-   the page asks when a member opens it.
+   a member asks from the start page, with Check for a new version.
 3. An owner proposes `Upgrade` with the version and its Wasm SHA-256. After the
    quorum the timelock starts; the page shows a banner and any owner can
    reject.
@@ -339,10 +340,10 @@ instructions an update may use.
 1. `init` and `post_upgrade` certify the files embedded in the release with
    `ic-asset-certification` and set the canister's certified data to their
    root hash. The certification tree lives on the heap only.
-2. `/` and `/index.html` are the start page, `/claim` and `/claim.html` the
-   claim page, and `/app.js` and `/app.css` the app's script and styles. Any
-   other path is the 404 page with status 404, certified as the fallback for
-   `/`.
+2. `/` and `/index.html` are the start page; `/send`, `/approvals` and
+   `/claim` the send, approvals and claim pages, each also at its `.html`
+   path; and `/app.js` and `/app.css` the app's script and styles. Any other
+   path is the 404 page with status 404, certified as the fallback for `/`.
 3. Every page carries these headers, all certified: the Content-Security-Policy
    below, `x-content-type-options: nosniff`, `x-frame-options: DENY`,
    `referrer-policy: no-referrer`,
@@ -369,7 +370,13 @@ browser, the app works only at the wallet's own address
 (`https://<wallet id>.icp0.io`, or `http://<wallet id>.localhost` on
 icp-cli's network), takes the wallet's id from it, and fills in everything
 else from calls to the wallet. It makes its reads as replicated calls, which
-the subnet certifies, rather than as queries a single replica answers. CI
+the subnet certifies, rather than as queries a single replica answers, and
+reads a token's symbol, decimals and fee from its ledger's `icrc1_metadata`
+the same way. The start page shows a member the accounts with their
+balances and lets an owner add one, and asks to join for someone signed in
+who is not a member; the send page proposes a transfer and runs it when the
+policy lets it through at once; the approvals page lists the open actions
+with the buttons the member's role allows. CI
 builds the files twice, the second time from a clean copy in another
 directory, and checks that both builds and the committed files are the same
 bytes.

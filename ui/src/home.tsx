@@ -1,25 +1,21 @@
 import type { Principal } from "@candid-core/schema"
 import { formatUnits } from "@ic-reactor/core"
-import { useAuth } from "@ic-reactor/react"
-import { skipToken, useQuery } from "@tanstack/react-query"
-import { dateOf, useWallet } from "./canister.ts"
-import { failureText } from "./describe.ts"
-import type { Role, UpgradeState } from "./generated/wallet.ts"
+import { Accounts } from "./accounts.tsx"
+import { failureText, roleText } from "./describe.ts"
+import type { UpgradeState } from "./generated/wallet.ts"
+import { JoinRequest } from "./join.tsx"
+import { useMe } from "./member.tsx"
+import { Release } from "./release.tsx"
 import { Session } from "./session.tsx"
+import { dateOf } from "./time.ts"
 
-/** The wallet's start page: what it runs, and who you are to it. */
-export function Home({ wallet: id }: { wallet: Principal }) {
-  const auth = useAuth()
-  const { client, wallet } = useWallet(id)
-  const status = useQuery(client.queryOptions(wallet, "status"))
-  const claimed = status.data?.claimed === true
-  const me = useQuery(
-    client.queryOptions(
-      wallet,
-      "whoami",
-      auth.status === "signed-in" && claimed ? undefined : skipToken,
-    ),
-  )
+/**
+ * The wallet's start page: what it runs and who you are to it, then for a
+ * member its accounts and new versions, and for anyone else signed in a
+ * request to join.
+ */
+export function Home({ wallet: id, local }: { wallet: Principal; local: boolean }) {
+  const { auth, status, claimed, me } = useMe(id)
 
   return (
     <section>
@@ -48,36 +44,29 @@ export function Home({ wallet: id }: { wallet: Principal }) {
           )}
         </>
       )}
-      <Session />
       {auth.status === "signed-in" &&
         claimed &&
         (me.isError ? (
           <p className="error">{failureText(me.error)}</p>
         ) : me.isSuccess ? (
           me.data === null ? (
-            <p>You are not a member of this wallet. A member can add you.</p>
+            <JoinRequest wallet={id} />
           ) : (
-            <p>
-              You are {roleText(me.data.role)} of this wallet
-              {me.data.label ? `, as “${me.data.label}”` : ""}.
-            </p>
+            <>
+              <p>
+                You are {roleText(me.data.role)} of this wallet
+                {me.data.label ? `, as “${me.data.label}”` : ""}.
+              </p>
+              <Accounts wallet={id} me={me.data} local={local} />
+              <Release wallet={id} me={me.data} />
+            </>
           )
         ) : (
           <p className="quiet">Reading who you are to the wallet…</p>
         ))}
+      <Session />
     </section>
   )
-}
-
-function roleText(role: Role): string {
-  switch (role.tag) {
-    case "Owner":
-      return "an owner"
-    case "Approver":
-      return "an approver"
-    case "Viewer":
-      return "a viewer"
-  }
 }
 
 function upgradeText(upgrade: UpgradeState): string | undefined {

@@ -12,9 +12,12 @@ members. Members change members and the policy through actions that wait for
 their quorum and timelock, a new device can ask to join, and every change
 leaves one entry in an append-only audit log. It serves its own UI, certified
 and with a strict Content-Security-Policy: a React app from `ui/`, prerendered
-at build, whose start page shows the wallet's version and who you are to it,
-and whose claim page lets the holder of the claim link sign in with Internet
-Identity and claim the wallet
+at build. Its start page shows the wallet's version and who you are to it,
+shows members the accounts and their balances, lets owners add accounts, and
+lets someone signed in who is not a member ask to join; its send page
+proposes and runs a transfer, its approvals page approves, rejects and runs
+the open actions, and its claim page lets the holder of the claim link sign
+in with Internet Identity and claim the wallet
 ([decision 0006](docs/decisions/0006-client-library.md) chose ic-reactor 4 to
 call it). It
 holds ICP and ICRC tokens on its own principal and subaccounts, reads their
@@ -131,7 +134,9 @@ node, installs a new wallet, claims it with your current icp-cli identity, and
 sends its accounts 10 local ICP and 50 regtest BTC. It then prints the calls
 that check a balance and propose and execute a transfer. With `--browser` it
 prints the new wallet's claim link instead, to open in a browser, sign in with
-the network's own Internet Identity and claim the wallet there. It needs icp-cli and
+the network's own Internet Identity and claim the wallet there; you then add
+its accounts on its start page, and it prints the commands that send them
+local ICP and regtest BTC. It needs icp-cli and
 ic-wasm (`npm install -g @icp-sdk/icp-cli @icp-sdk/ic-wasm`), Node, the Rust
 toolchain, and on a Mac Homebrew's LLVM (`brew install llvm`), which it finds
 on its own. Bitcoin Core (`brew install bitcoin`), whose `bitcoind` and
