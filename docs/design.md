@@ -206,21 +206,23 @@ action that the policy module releases only after its quorum and timelock.
    unless an earlier call may have run: a ledger checks the fee before it
    looks for a repeat, so then the action stays ready.
 6. A Bitcoin transfer is built once, on its first `execute`: it spends the
-   account's confirmed outputs, largest first, that no other open transfer
-   has reserved, pays the recipient in its first output and the change back
-   to the account in its second, and pays either the proposer's whole fee or
-   the median rate of recent transactions (at least 1 sat/vB; 2 sat/vB when
-   the Bitcoin canister offers none). Its outputs are reserved for the
-   action, a transfer under the daily limit is checked again with the real
-   fee, and every later `execute` sends that same transaction, signing it
-   first if it is not signed yet, so it cannot pay twice.
-   Each input is signed with threshold ECDSA in a bounded-wait call, and
-   each signature is checked before the transaction goes to the Bitcoin
-   canister. Once it may have reached the Bitcoin canister, the action stays
-   ready, cannot be rejected and never expires: `execute` sends the same
-   transaction again until the Bitcoin canister accepts it. A transfer that
-   ends without sending releases its outputs. Change is spendable only once
-   it confirms. EVM transactions follow in v1.
+   account's confirmed outputs that no other open transfer has reserved,
+   those with 100 confirmations first and then the largest first ([decision
+   0003](decisions/0003-young-bitcoin-outputs.md)), pays the recipient in
+   its first output and the change back to the account in its second, and
+   pays either the proposer's whole fee or the median rate of recent
+   transactions (at least 1 sat/vB; 2 sat/vB when the Bitcoin canister
+   offers none). Its outputs are reserved for the action, a transfer under
+   the daily limit is checked again with the real fee, and every later
+   `execute` sends that same transaction, signing it first if it is not
+   signed yet, so it cannot pay twice. Each input is signed with threshold
+   ECDSA in a bounded-wait call, and each signature is checked before the
+   transaction goes to the Bitcoin canister. Once it may have reached the
+   Bitcoin canister, the action stays ready, cannot be rejected and never
+   expires: `execute` sends the same transaction again until the Bitcoin
+   canister accepts it. A transfer that ends without sending releases its
+   outputs. Change is spendable only once it confirms. EVM transactions
+   follow in v1.
 7. The page shows the new balance and history from calls the agent verifies;
    the canister renders nothing.
 
@@ -352,6 +354,7 @@ exists in canister memory, but whoever can install code can move every fund.
 | Node operators reading state | Keys are threshold keys held by the subnet; private notes and labels encrypted with vetKeys | Plaintext state stays readable without SEV |
 | A ledger call whose outcome the wallet never learns | Every retry reuses the call's `created_at_time`, so the ledger answers with the earlier block; the action stays open, and cannot be rejected, while the ledger can still find it | A transfer nobody executes again within 24 hours stays unknown to the wallet; the ledger holds the answer |
 | A Bitcoin send whose outcome the wallet never learns | The transaction is built and signed once and stored; every retry sends the same one, whose id no signature changes, and its outputs stay reserved; the action stays open and cannot be rejected | A transaction the network drops keeps its outputs reserved and its action open until the wallet learns to see that its outputs are still unspent |
+| A mining reward spent before it matures | Outputs with 100 confirmations are spent first, then the largest; the Bitcoin canister lists a mining reward from its first confirmation and does not mark it as one | A transfer that needs a reward younger than 100 blocks sends a transaction the network refuses, yet reads `Executed`; the reward stays reserved until the wallet learns to see that it is still unspent. Only accounts paid straight from a block can hit this |
 | A broken or hostile ledger named by an owner | Ledger calls wait a bounded time, so no ledger can keep the wallet from stopping or upgrading; a ledger is asked only about its own token | It can report any balance or block for its own token |
 | Cycles running out | Long freezing threshold; low-balance banner and audit event; anyone can top up | A wallet nobody tops up is deleted |
 | Custom domain taken over | II derivation origin pinned to the `icp0.io` domain; a custom domain is only an alias | Users who sign in on a fake alias |

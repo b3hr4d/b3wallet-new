@@ -2641,3 +2641,31 @@ fn a_send_that_may_have_reached_the_bitcoin_canister_sends_the_same_transaction_
     assert_eq!(outputs(&tx)[0], (BURN.to_string(), BTC));
     assert_eq!(net.node.mempool().matches('"').count(), 2);
 }
+
+#[test]
+#[ignore = "needs bitcoind: set BITCOIND and BITCOIN_CLI"]
+fn a_transfer_spends_outputs_100_blocks_old_before_a_larger_young_mining_reward() {
+    let net = wallet_on_regtest();
+    let main = net.add_bitcoin_account("btc");
+    net.mine(1, &main.address);
+    net.mine(100, BURN);
+    let first = net
+        .propose(bitcoin_transfer(main.id, BURN, 40 * BTC, None))
+        .unwrap();
+    let first = net.send(first.id);
+    assert_eq!(outputs(&first)[1].0, main.address);
+    let change = bitcoin::OutPoint::new(first.compute_txid(), 1);
+    // The change confirms in block 102.
+    net.mine(99, BURN);
+    // Block 201, where the change has exactly 100 confirmations, pays the
+    // account 25 BTC: more than the change, and unspendable before block 301.
+    net.mine(1, &main.address);
+    assert_eq!(net.balance(main.id), outputs(&first)[1].1 + 25 * BTC);
+
+    let second = net
+        .propose(bitcoin_transfer(main.id, BURN, 5 * BTC, None))
+        .unwrap();
+    let second = net.send(second.id);
+    assert_eq!(second.input.len(), 1);
+    assert_eq!(second.input[0].previous_output, change);
+}

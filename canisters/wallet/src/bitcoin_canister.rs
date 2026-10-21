@@ -3,7 +3,7 @@
 //! carries the cycles the Bitcoin canister charges for it.
 
 use crate::BitcoinNetwork;
-use crate::btc::Coin;
+use crate::btc::{self, Coin};
 use crate::calls::{self, call};
 use crate::transfers::CallFailure;
 use ic_cdk_bitcoin_canister::{
@@ -44,7 +44,7 @@ pub async fn balance(network: BitcoinNetwork, address: String) -> Result<u64, St
 }
 
 /// The outputs `address` can spend, with at least one confirmation, from
-/// the first `MAX_UTXO_PAGES` pages.
+/// the first `MAX_UTXO_PAGES` pages, each marked mature by its page's tip.
 pub async fn coins(network: BitcoinNetwork, address: String) -> Result<Vec<Coin>, String> {
     let mut coins = Vec::new();
     let mut filter = None;
@@ -58,10 +58,12 @@ pub async fn coins(network: BitcoinNetwork, address: String) -> Result<Vec<Coin>
         let page: GetUtxosResponse = call(canister(network), WHO, "bitcoin_get_utxos", arg, cycles)
             .await
             .map_err(calls::reason)?;
+        let tip_height = page.tip_height;
         coins.extend(page.utxos.into_iter().map(|utxo| Coin {
             txid: utxo.outpoint.txid.into(),
             vout: utxo.outpoint.vout,
             value: utxo.value,
+            mature: btc::mature(utxo.height, tip_height),
         }));
         match page.next_page {
             Some(next) => filter = Some(UtxosFilterInRequest::Page(next)),

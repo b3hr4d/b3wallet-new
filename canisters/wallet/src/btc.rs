@@ -4,8 +4,8 @@
 //! and `actions` records how they ended.
 //!
 //! An account's coins are held by the P2WPKH address of its threshold ECDSA
-//! key. A transfer spends the account's confirmed outputs, largest first,
-//! pays the recipient in its first output and the change back to the account
+//! key. A transfer spends the account's confirmed outputs, those 100 blocks
+//! old first and then the largest first, pays the recipient in its first output and the change back to the account
 //! in its second. Its id covers neither signature, so signing the same
 //! transaction again cannot make a second one.
 
@@ -136,6 +136,18 @@ pub fn vsize(inputs: usize, outputs: &[&Script]) -> u64 {
     weight.div_ceil(4)
 }
 
+/// The confirmations a mining reward needs before the network relays a
+/// transaction that spends it.
+pub const COINBASE_MATURITY: u32 = 100;
+
+/// Whether an output in the block at `height` has `COINBASE_MATURITY`
+/// confirmations when the chain's tip is at `tip_height`. The Bitcoin
+/// canister does not say which outputs are mining rewards, so only an output
+/// this old is sure to be spendable.
+pub fn mature(height: u32, tip_height: u32) -> bool {
+    tip_height.saturating_sub(height) + 1 >= COINBASE_MATURITY
+}
+
 /// An output the account can spend.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Coin {
@@ -144,17 +156,24 @@ pub struct Coin {
     pub txid: [u8; 32],
     pub vout: u32,
     pub value: u64,
+    /// Whether it has `COINBASE_MATURITY` confirmations.
+    pub mature: bool,
 }
 
 impl Coin {
-    /// The outpoint as 36 bytes: the transaction id, then the output index
-    /// in big-endian order, so the bytes sort as the outpoints do.
+    /// The outpoint as `outpoint_key` writes it.
     pub fn key(&self) -> [u8; 36] {
-        let mut key = [0; 36];
-        key[..32].copy_from_slice(&self.txid);
-        key[32..].copy_from_slice(&self.vout.to_be_bytes());
-        key
+        outpoint_key(&self.txid, self.vout)
     }
+}
+
+/// An outpoint as 36 bytes: the transaction id, then the output index in
+/// big-endian order, so the bytes sort as the outpoints do.
+pub fn outpoint_key(txid: &[u8; 32], vout: u32) -> [u8; 36] {
+    let mut key = [0; 36];
+    key[..32].copy_from_slice(txid);
+    key[32..].copy_from_slice(&vout.to_be_bytes());
+    key
 }
 
 /// How the fee is set: the proposer's whole fee, or a rate in millisatoshi
@@ -174,8 +193,9 @@ pub struct Plan {
     pub change: u64,
 }
 
-/// Chooses the outputs that pay `amount` to `to` and the fee, largest first.
-/// Change too small for the network to relay goes to the fee as well; change
+/// Chooses the outputs that pay `amount` to `to` and the fee: mature ones
+/// first, so a young mining reward is spent only when nothing else pays,
+/// and then the largest first. Change too small for the network to relay goes to the fee as well; change
 /// it would relay never does, so a fixed fee too low for the transaction
 /// with change fails.
 pub fn plan(
@@ -185,7 +205,12 @@ pub fn plan(
     change: &Script,
     fee: Fee,
 ) -> Result<Plan, String> {
-    coins.sort_by(|a, b| b.value.cmp(&a.value).then(a.key().cmp(&b.key())));
+    coins.sort_by(|a, b| {
+        b.mature
+            .cmp(&a.mature)
+            .then(b.value.cmp(&a.value))
+            .then(a.key().cmp(&b.key()))
+    });
     let available: u64 = coins.iter().map(|coin| coin.value).sum();
     let dust = change.minimal_non_dust().to_sat();
     let fee_for = |vsize: u64| match fee {
@@ -289,17 +314,15 @@ pub fn txid(tx: &Transaction) -> String {
     tx.compute_txid().to_string()
 }
 
-/// The outpoints a transaction spends, as `Coin::key` writes them.
+/// The outpoints a transaction spends, as `outpoint_key` writes them.
 pub fn spent_keys(tx: &Transaction) -> Vec<[u8; 36]> {
     tx.input
         .iter()
         .map(|input| {
-            Coin {
-                txid: input.previous_output.txid.to_byte_array(),
-                vout: input.previous_output.vout,
-                value: 0,
-            }
-            .key()
+            outpoint_key(
+                &input.previous_output.txid.to_byte_array(),
+                input.previous_output.vout,
+            )
         })
         .collect()
 }
@@ -397,6 +420,15 @@ pub(crate) mod tests {
             txid: [seed; 32],
             vout: u32::from(seed),
             value,
+            mature: true,
+        }
+    }
+
+    /// A coin with fewer than `COINBASE_MATURITY` confirmations.
+    fn young(seed: u8, value: u64) -> Coin {
+        Coin {
+            mature: false,
+            ..coin(seed, value)
         }
     }
 
@@ -489,6 +521,37 @@ pub(crate) mod tests {
         assert_eq!(plan.inputs, vec![coin(2, 50_000), coin(3, 30_000)]);
         assert_eq!(plan.fee, 2 * vsize(2, &[&to, &change]));
         assert_eq!(plan.change, 80_000 - 60_000 - plan.fee);
+    }
+
+    #[test]
+    fn an_output_is_mature_from_its_hundredth_confirmation() {
+        // In the tip's own block, an output has one confirmation.
+        assert!(!mature(102, 102));
+        assert!(!mature(102, 200));
+        assert!(mature(102, 201));
+        assert!(mature(1, 1_000));
+        // A tip behind the output's block, which the Bitcoin canister never
+        // reports, counts as one confirmation.
+        assert!(!mature(300, 200));
+    }
+
+    #[test]
+    fn a_plan_spends_mature_outputs_before_larger_young_ones() {
+        let (to, change) = (friend().script_pubkey(), own().script_pubkey());
+        let coins = vec![young(1, 90_000), coin(2, 30_000), coin(3, 40_000)];
+        let mature_pays = plan(coins.clone(), 50_000, &to, &change, Fee::Rate(1_000)).unwrap();
+        assert_eq!(mature_pays.inputs, vec![coin(3, 40_000), coin(2, 30_000)]);
+        // A young output is spent only once the mature ones fall short, and
+        // then after them.
+        let young_needed = plan(coins, 100_000, &to, &change, Fee::Rate(1_000)).unwrap();
+        assert_eq!(
+            young_needed.inputs,
+            vec![coin(3, 40_000), coin(2, 30_000), young(1, 90_000)]
+        );
+        // Among young outputs, the largest goes first.
+        let all_young = vec![young(1, 10_000), young(2, 50_000)];
+        let plan = plan(all_young, 20_000, &to, &change, Fee::Rate(1_000)).unwrap();
+        assert_eq!(plan.inputs, vec![young(2, 50_000)]);
     }
 
     #[test]

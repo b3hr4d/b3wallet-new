@@ -770,6 +770,7 @@ mod tests {
                 txid: [*seed; 32],
                 vout: u32::from(*seed),
                 value: 10_000,
+                mature: true,
             })
             .collect();
         let script = bitcoin::ScriptBuf::new_op_return([]);
