@@ -286,6 +286,11 @@ impl StoredPending {
                 }));
                 Ok(Some(block))
             }
+            // The refusal may have come before the ledger looked for the
+            // earlier call, so that one may still have been sent.
+            Reply::Refused(reason) if attempt.unknown => Err(WalletError::ChainError(format!(
+                "{reason}; an earlier attempt may have been sent, so execute it again to find out"
+            ))),
             Reply::Refused(reason) => {
                 self.state = ActionState::Failed(reason);
                 Ok(None)
@@ -702,6 +707,23 @@ mod tests {
     }
 
     #[test]
+    fn after_an_unknown_outcome_a_refusal_leaves_the_transfer_open() {
+        let mut pending = transfer();
+        let created_at = pending.begin_transfer(T0, || T0);
+        assert!(end(&mut pending, unknown(), T0).is_err());
+        assert_eq!(pending.begin_transfer(T0 + 1, no_fresh_time), created_at);
+        // A ledger checks the fee before it looks for the earlier transfer.
+        let refused = Reply::Refused("the ledger's fee is 20".to_string());
+        assert!(matches!(
+            end(&mut pending, refused, T0 + 1),
+            Err(WalletError::ChainError(reason)) if reason.contains("may have been sent")
+        ));
+        assert_eq!(pending.state, ActionState::Ready);
+        assert!(pending.may_have_sent());
+        assert!(pending.reject(ID, member(1), T0 + 1).is_err());
+    }
+
+    #[test]
     fn too_old_fails_only_a_transfer_that_may_have_been_sent() {
         let mut fresh = transfer();
         fresh.begin_transfer(T0, || T0);
@@ -765,7 +787,12 @@ mod tests {
         SendsUnheard,
         Loses,
         Busy,
+        /// Refuses after looking for an earlier transfer, as with too little
+        /// in the account.
         Refuses,
+        /// Refuses before looking for an earlier transfer, as with a changed
+        /// fee.
+        RefusesFirst,
         /// Sends, and the wallet's code after the call traps.
         SendsAndTraps,
     }
@@ -786,6 +813,7 @@ mod tests {
             Just(Ledger::Loses),
             Just(Ledger::Busy),
             Just(Ledger::Refuses),
+            Just(Ledger::RefusesFirst),
             Just(Ledger::SendsAndTraps),
         ];
         prop_oneof![
@@ -849,6 +877,8 @@ mod tests {
                         }
                         let reply = if now >= created_at + DEDUP_WINDOW_NS {
                             Reply::TooOld
+                        } else if matches!(ledger, Ledger::RefusesFirst) {
+                            Reply::Refused("fee".to_string())
                         } else if sent == Some(created_at) {
                             Reply::Sent(Nat::from(0u8))
                         } else {
@@ -857,6 +887,7 @@ mod tests {
                                 Ledger::SendsUnheard | Ledger::Loses => unknown(),
                                 Ledger::Busy => Reply::NotRun("busy".to_string()),
                                 Ledger::Refuses => Reply::Refused("poor".to_string()),
+                                Ledger::RefusesFirst => unreachable!(),
                                 Ledger::SendsAndTraps => unknown(),
                             }
                         };

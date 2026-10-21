@@ -190,9 +190,13 @@ action that the policy module releases only after its quorum and timelock.
    ready and cannot be rejected, and the next `execute` reuses that
    `created_at_time`: the ledger then answers with the earlier block instead
    of sending again. Ledgers find a repeated transfer for 24 hours, so the
-   action stays open until 24 hours after that call. A refusal by the ledger
-   (too little in the account, a wrong fee) ends the action `Failed`; a call
-   that did not run (a stopped or busy ledger) leaves it ready.
+   action stays open until 24 hours after that call. The wallet counts a
+   call as not run only when the IC rejected it before the ledger ran it;
+   a reject from the ledger itself, a stopped ledger's included, may follow
+   a committed transfer, so it leaves the outcome unknown. A refusal by the
+   ledger (too little in the account, a wrong fee) ends the action `Failed`,
+   unless an earlier call may have run: a ledger checks the fee before it
+   looks for a repeat, so then the action stays ready.
 6. Bitcoin and EVM transactions are signed with threshold ECDSA on path
    `wallet / chain / index` and sent through the Bitcoin canister or the EVM
    RPC canister (step 9).

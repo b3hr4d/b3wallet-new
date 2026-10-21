@@ -11,6 +11,7 @@ use crate::accounts::{self, StoredAccount};
 use crate::policy::{DAY_NS, HOUR_NS};
 use crate::{TransferRequest, WalletError};
 use candid::{Nat, Principal};
+use ic_cdk::call::RejectCode;
 use icrc_ledger_types::icrc1::account::Account as LedgerAccount;
 use icrc_ledger_types::icrc1::transfer::{Memo, TransferArg, TransferError};
 use std::str::FromStr;
@@ -87,14 +88,32 @@ pub enum CallFailure {
     Unknown(String),
 }
 
+/// How a ledger call the IC rejected failed, by its reject code (`None` for
+/// a code the wallet does not know). Only a reject by the system before the
+/// ledger ran the call proves it did not run. A ledger that committed a
+/// transfer and then trapped after an await of its own rejects with
+/// `CanisterError`, and one that rejects explicitly may also do so after
+/// committing, so those, like a bounded wait that ran out, leave it open.
+pub fn rejected(code: Option<RejectCode>, reason: String) -> CallFailure {
+    match code {
+        Some(RejectCode::SysFatal | RejectCode::SysTransient | RejectCode::DestinationInvalid) => {
+            CallFailure::NotRun(reason)
+        }
+        Some(RejectCode::CanisterReject | RejectCode::CanisterError | RejectCode::SysUnknown)
+        | None => CallFailure::Unknown(reason),
+    }
+}
+
 /// How an attempt ended, as far as the wallet can tell.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Reply {
     /// The ledger holds the transfer in this block, sent now or by an
     /// earlier attempt with the same `created_at_time`.
     Sent(Nat),
-    /// The ledger refused the transfer after looking for an earlier attempt,
-    /// so nothing was sent. Trying again would not help.
+    /// The ledger refused the transfer, so this attempt sent nothing.
+    /// Trying again would not help. A ledger may refuse before it looks for
+    /// an earlier attempt, as a changed fee is, so this tells nothing of
+    /// one.
     Refused(String),
     /// This attempt did not run; a later one may.
     NotRun(String),
@@ -230,7 +249,7 @@ mod tests {
     }
 
     #[test]
-    fn a_duplicate_is_the_earlier_block_and_only_a_timeout_is_unknown() {
+    fn a_duplicate_is_the_earlier_block_and_a_lost_answer_is_unknown() {
         let block = Nat::from(1_234_567u32);
         assert_eq!(
             read_reply(Ok(Ok(block.clone()))),
@@ -279,5 +298,32 @@ mod tests {
             read_reply(Err(CallFailure::Unknown("timeout".to_string()))),
             Reply::Unknown("timeout".to_string())
         );
+    }
+
+    #[test]
+    fn only_a_reject_by_the_system_proves_a_call_did_not_run() {
+        for code in [
+            RejectCode::SysFatal,
+            RejectCode::SysTransient,
+            RejectCode::DestinationInvalid,
+        ] {
+            assert_eq!(
+                rejected(Some(code), "r".to_string()),
+                CallFailure::NotRun("r".to_string())
+            );
+        }
+        // The ledger may have committed the transfer before it trapped or
+        // rejected; a bounded wait may have run out after it ran.
+        for code in [
+            Some(RejectCode::CanisterReject),
+            Some(RejectCode::CanisterError),
+            Some(RejectCode::SysUnknown),
+            None,
+        ] {
+            assert_eq!(
+                rejected(code, "r".to_string()),
+                CallFailure::Unknown("r".to_string())
+            );
+        }
     }
 }

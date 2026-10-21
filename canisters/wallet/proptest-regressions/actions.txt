@@ -8,3 +8,4 @@ cc 83347545b538ce3c316516627e7deaafcd88001b9c5945b93c0b34ba8ab82163 # shrinks to
 cc 3ab9ab4c807bbfe032df1926f06a9ffa593d3ec7ce1dc4611d33777c8de1cb9f # shrinks to steps = [Execute(SendsAndTraps), Reject, Execute(Sends)]
 cc c12c015a31cd36bb4262120a4e897a089ae496a72dd5bdf1c0f24fc21c26cfd8 # shrinks to steps = [Execute(SendsAndTraps), Reject]
 cc eef9bc0c49846c673496bb0da253eea3f65ae237ea3b68b194e2ba640eb781f0 # shrinks to start = 219070183706222, steps = [Wait(340474591348652), Execute(SendsUnheard), Wait(45255224945126)]
+cc a4c7657719d0bb999c20d11df874c2111246c529cb22d8362b9e090ac50b17d3 # shrinks to start = 0, steps = [Execute(SendsUnheard), Execute(RefusesFirst)]

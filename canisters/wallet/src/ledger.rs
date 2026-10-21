@@ -1,9 +1,9 @@
 //! Calls to ICRC-1 ledgers. Every call waits a bounded time, so a ledger that
 //! never answers cannot keep the wallet from stopping or upgrading.
 
-use crate::transfers::CallFailure;
+use crate::transfers::{self, CallFailure};
 use candid::{CandidType, Nat, Principal};
-use ic_cdk::call::{Call, CallFailed, RejectCode};
+use ic_cdk::call::{Call, CallFailed};
 use icrc_ledger_types::icrc1::account::Account as LedgerAccount;
 use icrc_ledger_types::icrc1::transfer::{TransferArg, TransferError};
 use serde::de::DeserializeOwned;
@@ -23,12 +23,7 @@ async fn call<R: CandidType + DeserializeOwned>(
                     rejected.raw_reject_code(),
                     rejected.reject_message()
                 );
-                // Only a bounded wait that ran out leaves the outcome open; an
-                // unknown code may be such a case, so it counts as one.
-                match rejected.reject_code() {
-                    Ok(RejectCode::SysUnknown) | Err(_) => CallFailure::Unknown(reason),
-                    Ok(_) => CallFailure::NotRun(reason),
-                }
+                transfers::rejected(rejected.reject_code().ok(), reason)
             }
             other => CallFailure::NotRun(format!("cannot call the ledger {ledger}: {other}")),
         })?;
