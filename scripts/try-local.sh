@@ -36,6 +36,13 @@ if ! compiles_wasm "${CC_wasm32_unknown_unknown:-clang}"; then
     missing+=("  a clang that compiles to WebAssembly (Apple's cannot): brew install llvm")
   fi
 fi
+# The script's calls name the interface file, which icp-cli 0.3.2 added.
+if command -v icp >/dev/null 2>&1; then
+  case $(icp canister call --help 2>&1) in
+    *--candid*) ;;
+    *) missing+=("  icp-cli 0.3.2 or later: npm install -g @icp-sdk/icp-cli@latest") ;;
+  esac
+fi
 if [ ${#missing[@]} -gt 0 ]; then
   echo "Install these first:" >&2
   printf '%s\n' "${missing[@]}" >&2
@@ -73,6 +80,15 @@ ed25519() {
       : blob(crypto.createPublicKey(key).export({ format: "der", type: "spki" }).subarray(-32)));
   ' "$@"
 }
+
+# icp.yaml pins the network launcher. ICP_CLI_NETWORK_LAUNCHER_PATH would run
+# another one in its place, and icp-cli cannot read canister settings from an
+# older one, so the script drops it and stops a network it may have started.
+if [ -n "${ICP_CLI_NETWORK_LAUNCHER_PATH:-}" ]; then
+  echo "Ignoring ICP_CLI_NETWORK_LAUNCHER_PATH: this runs the network launcher icp.yaml pins."
+  unset ICP_CLI_NETWORK_LAUNCHER_PATH
+  icp network stop >/dev/null 2>&1 || true
+fi
 
 mkdir -p "$state/bitcoin"
 if $bitcoin && ! btc getblockcount >/dev/null 2>&1; then
