@@ -6,19 +6,25 @@ use candid::types::{FuncMode, TypeInner};
 use candid::{CandidType, Deserialize, Principal, decode_one, encode_args, encode_one};
 use candid_parser::utils::CandidSource;
 use ed25519_dalek::{Signer, SigningKey};
+use ic_cdk_bitcoin_canister::{
+    Config, Fees, GetUtxosRequest, GetUtxosResponse, NetworkInRequest, SetConfigRequest,
+};
 use ic_http_certification::{HttpRequest, StatusCode};
 use ic_response_verification::types::VerifiedResponse;
 use ic_response_verification::verify_request_response_pair;
 use icrc_ledger_types::icrc1::account::Account as LedgerAccount;
+use pocket_ic::common::rest::{IcpFeatures, IcpFeaturesConfig};
 use pocket_ic::{ErrorCode, PocketIc, PocketIcBuilder, RejectCode, RejectResponse};
 use serde_bytes::ByteBuf;
-use std::path::Path;
-use std::time::Duration;
+use std::net::{SocketAddr, TcpListener};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant, SystemTime};
 use wallet::{
     Account, AccountHolder, Action, ActionId, ActionKind, ActionState, AddAccountArgs, AuditEntry,
-    AuditEvent, AuditRequest, Balance, Chain, ClaimArgs, DailyLimit, InitArgs, Member,
-    NOT_A_MEMBER, NOT_AN_APPROVER, NOT_AN_OWNER, NOT_CLAIMED, Outcome, Pending, Policy, Role,
-    Status, TransferRequest, UpgradeState, WalletArg, WalletError,
+    AuditEvent, AuditRequest, Balance, BitcoinNetwork, Chain, ClaimArgs, DailyLimit, InitArgs,
+    Member, NOT_A_MEMBER, NOT_AN_APPROVER, NOT_AN_OWNER, NOT_CLAIMED, Outcome, Pending, Policy,
+    Role, Status, TransferRequest, UpgradeState, WalletArg, WalletError,
 };
 
 const DAY_NS: u64 = 24 * 60 * 60 * 1_000_000_000;
@@ -1645,7 +1651,6 @@ fn accounts_are_the_wallets_principal_and_its_subaccounts() {
     assert_eq!(tokens.address, id.to_text());
 
     let refused = [
-        (Chain::Bitcoin(wallet::BitcoinNetwork::Regtest), "btc"),
         (Chain::Evm(1), "eth"),
         (Chain::Icrc(icp_ledger()), "icp again"),
         (Chain::Icrc(user(3)), "not a ledger"),
@@ -2029,4 +2034,746 @@ fn a_transfer_under_the_daily_limit_is_checked_again_when_it_runs() {
         "{failed:?}"
     );
     assert_eq!(ledger_balance(&pic, icp_ledger(), friend), 0);
+}
+
+// ---- Step 9: Bitcoin on regtest --------------------------------------------------
+
+const BTC: u64 = 100_000_000;
+const REGTEST: Chain = Chain::Bitcoin(BitcoinNetwork::Regtest);
+/// BIP-173's example regtest address, whose key nobody here holds.
+const BURN: &str = "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080";
+
+/// The Bitcoin canister of every network but mainnet.
+fn bitcoin_canister() -> Principal {
+    Principal::from_text("g4xu7-jiaaa-aaaan-aaaaq-cai").unwrap()
+}
+
+/// One regtest network at a time: each test runs `bitcoind` and a PocketIC
+/// instance with four subnets.
+static REGTEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn free_port() -> u16 {
+    TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+/// A regtest node of its own, from the binaries `BITCOIND` and `BITCOIN_CLI`
+/// name (Bitcoin Core 31.1 in CI), stopped and deleted on drop.
+struct Bitcoind {
+    process: Child,
+    p2p: u16,
+    rpc: u16,
+    dir: PathBuf,
+}
+
+impl Bitcoind {
+    fn start() -> Bitcoind {
+        let binary = std::env::var("BITCOIND").expect("BITCOIND names bitcoind");
+        let (p2p, rpc) = (free_port(), free_port());
+        let dir = std::env::temp_dir().join(format!("wallet-regtest-{p2p}-{rpc}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let process = Command::new(binary)
+            .args([
+                "-regtest",
+                "-listen=1",
+                "-bind=127.0.0.1",
+                &format!("-port={p2p}"),
+                &format!("-rpcport={rpc}"),
+                "-rpcuser=wallet",
+                "-rpcpassword=wallet",
+                &format!("-datadir={}", dir.display()),
+                "-server=1",
+                "-txindex=1",
+                "-printtoconsole=0",
+            ])
+            .stdout(Stdio::null())
+            .spawn()
+            .expect("bitcoind starts");
+        let node = Bitcoind {
+            process,
+            p2p,
+            rpc,
+            dir,
+        };
+        let start = Instant::now();
+        while node.cli(&["getblockchaininfo"]).is_err() {
+            assert!(
+                start.elapsed() < Duration::from_secs(30),
+                "bitcoind did not answer"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        node
+    }
+
+    fn cli(&self, args: &[&str]) -> Result<String, String> {
+        let binary = std::env::var("BITCOIN_CLI").expect("BITCOIN_CLI names bitcoin-cli");
+        let output = Command::new(binary)
+            .args([
+                "-regtest",
+                &format!("-rpcport={}", self.rpc),
+                "-rpcuser=wallet",
+                "-rpcpassword=wallet",
+            ])
+            .args(args)
+            .output()
+            .unwrap();
+        if output.status.success() {
+            Ok(String::from_utf8(output.stdout).unwrap().trim().to_string())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).to_string())
+        }
+    }
+
+    fn call(&self, args: &[&str]) -> String {
+        self.cli(args)
+            .unwrap_or_else(|error| panic!("bitcoin-cli {args:?}: {error}"))
+    }
+
+    /// A transaction in the mempool or a block.
+    fn transaction(&self, txid: &str) -> bitcoin::Transaction {
+        let hex = self.call(&["getrawtransaction", txid]);
+        bitcoin::consensus::encode::deserialize_hex(&hex).unwrap()
+    }
+
+    fn mempool(&self) -> String {
+        self.call(&["getrawmempool"])
+    }
+}
+
+impl Drop for Bitcoind {
+    fn drop(&mut self) {
+        let _ = self.process.kill();
+        let _ = self.process.wait();
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// A claimed wallet next to a regtest network that the Bitcoin canister
+/// follows.
+struct Regtest {
+    pic: PocketIc,
+    node: Bitcoind,
+    wallet: Principal,
+    owner: Principal,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+fn wallet_on_regtest() -> Regtest {
+    wallet_on_regtest_after(|_, _, _| ())
+}
+
+/// A wallet on regtest, after `prepare` ran on it while the IC's clock was
+/// still before the blocks' and could run ahead.
+fn wallet_on_regtest_after(prepare: impl FnOnce(&PocketIc, Principal, Principal)) -> Regtest {
+    let lock = REGTEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let node = Bitcoind::start();
+    let pic = PocketIcBuilder::new()
+        .with_nns_subnet()
+        .with_test_threshold_keys_subnet()
+        .with_bitcoin_subnet()
+        .with_application_subnet()
+        .with_bitcoind_addr(SocketAddr::from(([127, 0, 0, 1], node.p2p)))
+        .with_icp_features(IcpFeatures {
+            bitcoin: Some(IcpFeaturesConfig::DefaultConfig),
+            ..Default::default()
+        })
+        .build();
+    let subnet = pic.topology().get_app_subnets()[0];
+    let wallet = pic.create_canister_on_subnet(None, None, subnet);
+    pic.add_cycles(wallet, 100_000_000_000_000);
+    try_install(&pic, wallet, &WalletArg::Init(init_args(&pic))).unwrap();
+    let owner = user(7);
+    claim(&pic, wallet, owner, claim_signature(wallet, owner)).unwrap();
+    prepare(&pic, wallet, owner);
+    // The Bitcoin canister follows blocks only near the IC's time.
+    let now = SystemTime::now().into();
+    assert!(pic.get_time() < now, "the IC's clock ran past the blocks'");
+    pic.set_time(now);
+    Regtest {
+        pic,
+        node,
+        wallet,
+        owner,
+        _lock: lock,
+    }
+}
+
+impl Regtest {
+    /// Mines `blocks` to `to`, and waits until the Bitcoin canister has them.
+    fn mine(&self, blocks: u32, to: &str) {
+        self.node
+            .call(&["generatetoaddress", &blocks.to_string(), to]);
+        let height: u32 = self.node.call(&["getblockcount"]).parse().unwrap();
+        let start = Instant::now();
+        while self.tip_height() < Some(height) {
+            assert!(
+                start.elapsed() < Duration::from_secs(120),
+                "the Bitcoin canister did not reach height {height}"
+            );
+            self.pic.tick();
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    /// The Bitcoin canister's tip; `None` while it is not synced.
+    fn tip_height(&self) -> Option<u32> {
+        let request = GetUtxosRequest {
+            address: BURN.to_string(),
+            network: NetworkInRequest::Regtest,
+            filter: None,
+        };
+        self.pic
+            .query_call(
+                bitcoin_canister(),
+                Principal::anonymous(),
+                "bitcoin_get_utxos_query",
+                encode_one(request).unwrap(),
+            )
+            .ok()
+            .and_then(|reply| decode_one::<GetUtxosResponse>(&reply).ok())
+            .map(|response| response.tip_height)
+    }
+
+    fn add_bitcoin_account(&self, label: &str) -> Account {
+        add_account(&self.pic, self.wallet, self.owner, REGTEST, label).unwrap()
+    }
+
+    fn propose(&self, action: Action) -> PendingResult {
+        propose(&self.pic, self.wallet, self.owner, action)
+    }
+
+    fn execute(&self, action: ActionId) -> PendingResult {
+        act(&self.pic, self.wallet, self.owner, "execute", action)
+    }
+
+    /// Executes a ready transfer and returns its transaction.
+    fn send(&self, action: ActionId) -> bitcoin::Transaction {
+        let txid = self.send_txid(action);
+        let tx = self.node.transaction(&txid);
+        assert_eq!(tx.compute_txid().to_string(), txid);
+        tx
+    }
+
+    fn send_txid(&self, action: ActionId) -> String {
+        let executed = self.execute(action).unwrap();
+        let ActionState::Executed(Outcome::Sent(receipt)) = executed.state else {
+            panic!("not sent: {executed:?}");
+        };
+        assert_eq!(receipt.chain, REGTEST);
+        self.wait_for_mempool(&receipt.tx_id);
+        receipt.tx_id
+    }
+
+    /// Waits until the Bitcoin canister's adapter has passed a transaction
+    /// on to the node.
+    fn wait_for_mempool(&self, txid: &str) {
+        let start = Instant::now();
+        while !self.node.mempool().contains(txid) {
+            assert!(
+                start.elapsed() < Duration::from_secs(60),
+                "{txid} did not reach the mempool"
+            );
+            self.pic.tick();
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    fn balance(&self, account: u32) -> u64 {
+        balance(&self.pic, self.wallet, self.owner, account).unwrap()
+    }
+
+    fn pending(&self, action: ActionId) -> Pending {
+        pending(&self.pic, self.wallet, self.owner)
+            .into_iter()
+            .find(|pending| pending.id == action)
+            .unwrap()
+    }
+
+    /// Sets what the Bitcoin canister charges, as its controller.
+    fn set_bitcoin_fees(&self, fees: Fees) {
+        let controller = self.pic.get_controllers(bitcoin_canister())[0];
+        let request = SetConfigRequest {
+            fees: Some(fees),
+            ..Default::default()
+        };
+        update::<()>(
+            &self.pic,
+            bitcoin_canister(),
+            controller,
+            "set_config",
+            &request,
+        );
+    }
+
+    fn bitcoin_fees(&self) -> Fees {
+        query::<Config>(
+            &self.pic,
+            bitcoin_canister(),
+            Principal::anonymous(),
+            "get_config",
+        )
+        .fees
+    }
+}
+
+fn bitcoin_transfer(from: u32, to: &str, amount: u64, fee: Option<u64>) -> Action {
+    Action::Transfer(TransferRequest {
+        from,
+        to: to.to_string(),
+        amount: amount.into(),
+        fee: fee.map(Into::into),
+        memo: None,
+    })
+}
+
+/// The address an output pays.
+fn paid_to(output: &bitcoin::TxOut) -> String {
+    bitcoin::Address::from_script(&output.script_pubkey, bitcoin::Network::Regtest)
+        .unwrap()
+        .to_string()
+}
+
+fn outputs(tx: &bitcoin::Transaction) -> Vec<(String, u64)> {
+    tx.output
+        .iter()
+        .map(|output| (paid_to(output), output.value.to_sat()))
+        .collect()
+}
+
+#[test]
+#[ignore = "needs bitcoind: set BITCOIND and BITCOIN_CLI"]
+fn a_bitcoin_account_receives_at_its_keys_address_and_sends_once() {
+    let net = wallet_on_regtest();
+    let main = net.add_bitcoin_account("btc");
+    let savings = net.add_bitcoin_account("savings");
+    let icp = add_account(&net.pic, net.wallet, net.owner, Chain::Icp, "icp").unwrap();
+    assert_eq!((main.id, main.index), (1, 0));
+    assert_eq!((savings.id, savings.index), (2, 1));
+    assert_eq!(icp.index, 0);
+    assert_ne!(main.address, savings.address);
+    for account in [&main, &savings] {
+        // A P2WPKH address: a version 0 program of 20 bytes.
+        let info = net.node.call(&["validateaddress", &account.address]);
+        assert!(info.contains("\"isvalid\": true"), "{info}");
+        assert!(info.contains("\"witness_version\": 0"), "{info}");
+        assert!(account.address.starts_with("bcrt1q") && account.address.len() == 44);
+    }
+
+    // A coinbase output can be spent 100 blocks later.
+    net.mine(1, &main.address);
+    net.mine(100, BURN);
+    assert_eq!(net.balance(main.id), 50 * BTC);
+    assert_eq!(net.balance(savings.id), 0);
+
+    let proposed = net
+        .propose(bitcoin_transfer(main.id, &savings.address, BTC, None))
+        .unwrap();
+    assert_eq!(proposed.state, ActionState::Ready);
+    let tx = net.send(proposed.id);
+    // The network checked every signature; the transaction pays the
+    // recipient first and the change back to the account.
+    assert_eq!(tx.input.len(), 1);
+    let change = outputs(&tx)[1].1;
+    assert_eq!(
+        outputs(&tx),
+        [
+            (savings.address.clone(), BTC),
+            (main.address.clone(), change)
+        ]
+    );
+    // Two satoshi per vbyte: the rate without fee history.
+    let fee = 50 * BTC - BTC - change;
+    assert!(
+        fee >= 2 * tx.vsize() as u64 && fee < 3 * tx.vsize() as u64,
+        "{fee}"
+    );
+    assert!(matches!(
+        net.execute(proposed.id),
+        Err(WalletError::InvalidArgument(reason)) if reason.contains("already executed")
+    ));
+
+    net.mine(1, BURN);
+    assert_eq!(net.balance(savings.id), BTC);
+    assert_eq!(net.balance(main.id), change);
+
+    // The keys are the same after an upgrade: the savings account spends.
+    upgrade(&net.pic, net.wallet, &WalletArg::Upgrade).unwrap();
+    assert_eq!(
+        accounts(&net.pic, net.wallet, net.owner),
+        [main.clone(), savings.clone(), icp]
+    );
+    let back = net
+        .propose(bitcoin_transfer(savings.id, &main.address, BTC / 2, None))
+        .unwrap();
+    net.send(back.id);
+    net.mine(1, BURN);
+    assert_eq!(net.balance(main.id), change + BTC / 2);
+}
+
+#[test]
+#[ignore = "needs bitcoind: set BITCOIND and BITCOIN_CLI"]
+fn a_bitcoin_transfer_is_checked_and_spends_no_output_twice() {
+    let net = wallet_on_regtest();
+    let main = net.add_bitcoin_account("btc");
+    let mainnet = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4";
+    let with_memo = Action::Transfer(TransferRequest {
+        memo: Some(ByteBuf::from(vec![1])),
+        ..match bitcoin_transfer(main.id, BURN, BTC, None) {
+            Action::Transfer(request) => request,
+            _ => unreachable!(),
+        }
+    });
+    for action in [
+        bitcoin_transfer(main.id, mainnet, BTC, None),
+        bitcoin_transfer(main.id, "not an address", BTC, None),
+        // P2WPKH outputs below 294 satoshis are dust.
+        bitcoin_transfer(main.id, BURN, 293, None),
+        with_memo,
+    ] {
+        assert!(
+            matches!(
+                net.propose(action.clone()),
+                Err(WalletError::InvalidArgument(_))
+            ),
+            "{action:?}"
+        );
+    }
+
+    // Two outputs of 50 BTC.
+    net.mine(2, &main.address);
+    net.mine(100, BURN);
+    let first = net
+        .propose(bitcoin_transfer(main.id, BURN, 30 * BTC, None))
+        .unwrap();
+    let second = net
+        .propose(bitcoin_transfer(main.id, BURN, 30 * BTC, None))
+        .unwrap();
+    // Two executions of one transfer at once: one sends, one is refused.
+    let execute = || {
+        net.pic
+            .submit_call(
+                net.wallet,
+                net.owner,
+                "execute",
+                encode_one(first.id).unwrap(),
+            )
+            .unwrap()
+    };
+    let (one, two) = (execute(), execute());
+    let decode = |reply: Vec<u8>| decode_one::<PendingResult>(&reply).unwrap();
+    let mut results = [
+        decode(net.pic.await_call(one).unwrap()),
+        decode(net.pic.await_call(two).unwrap()),
+    ];
+    results.sort_by_key(|result| result.is_err());
+    let Ok(Pending {
+        state: ActionState::Executed(Outcome::Sent(receipt)),
+        ..
+    }) = &results[0]
+    else {
+        panic!("{results:?}");
+    };
+    assert!(
+        matches!(&results[1], Err(WalletError::InvalidArgument(reason)) if reason.contains("in flight")),
+        "{results:?}"
+    );
+    net.wait_for_mempool(&receipt.tx_id);
+    let first_tx = net.node.transaction(&receipt.tx_id);
+    // The second transfer cannot spend the output the first one spends,
+    // though neither is confirmed: both are in the mempool.
+    let second_tx = net.send(second.id);
+    let spent = |tx: &bitcoin::Transaction| -> Vec<bitcoin::OutPoint> {
+        tx.input.iter().map(|input| input.previous_output).collect()
+    };
+    assert!(
+        spent(&first_tx)
+            .iter()
+            .all(|outpoint| !spent(&second_tx).contains(outpoint))
+    );
+    assert!(net.node.mempool().contains(&receipt.tx_id));
+    net.mine(1, BURN);
+    let left = net.balance(main.id);
+    assert!(left < 40 * BTC && left > 40 * BTC - 10_000, "{left}");
+
+    let too_much = net
+        .propose(bitcoin_transfer(main.id, BURN, 40 * BTC, None))
+        .unwrap();
+    let failed = net.execute(too_much.id).unwrap();
+    assert!(
+        matches!(&failed.state, ActionState::Failed(reason) if reason.contains("can spend")),
+        "{failed:?}"
+    );
+    let too_low = net
+        .propose(bitcoin_transfer(main.id, BURN, BTC, Some(10)))
+        .unwrap();
+    let failed = net.execute(too_low.id).unwrap();
+    assert!(
+        matches!(&failed.state, ActionState::Failed(reason) if reason.contains("below 1 satoshi per vbyte")),
+        "{failed:?}"
+    );
+    // The failed transfers reserved nothing: both outputs are spent next.
+    let fixed = net
+        .propose(bitcoin_transfer(main.id, BURN, 39 * BTC, Some(5_000)))
+        .unwrap();
+    let tx = net.send(fixed.id);
+    assert_eq!(tx.input.len(), 2);
+    let paid: u64 = tx.output.iter().map(|output| output.value.to_sat()).sum();
+    assert_eq!(left - paid, 5_000);
+}
+
+#[test]
+#[ignore = "needs bitcoind: set BITCOIND and BITCOIN_CLI"]
+fn the_daily_limit_counts_the_bitcoin_fee() {
+    let net = wallet_on_regtest_after(|pic, wallet, owner| {
+        let mut policy = policy(pic, wallet, owner);
+        let rule = policy
+            .rules
+            .iter_mut()
+            .find(|rule| rule.kind == ActionKind::Transfer)
+            .unwrap();
+        rule.timelock_ns = DAY_NS;
+        rule.daily_limits = vec![DailyLimit {
+            chain: REGTEST,
+            amount: BTC.into(),
+        }];
+        let set_policy = propose(pic, wallet, owner, Action::SetPolicy(policy)).unwrap();
+        pic.advance_time(Duration::from_nanos(7 * DAY_NS));
+        act(pic, wallet, owner, "execute", set_policy.id).unwrap();
+    });
+    let main = net.add_bitcoin_account("btc");
+    net.mine(1, &main.address);
+    net.mine(100, BURN);
+    let at_once = |pending: &Pending| pending.executable_after_ns == pending.proposed_at_ns;
+
+    // Released, but its fee takes it over the limit when it runs.
+    let close = net
+        .propose(bitcoin_transfer(main.id, BURN, BTC - 100, None))
+        .unwrap();
+    assert!(at_once(&close));
+    let failed = net.execute(close.id).unwrap();
+    assert!(
+        matches!(&failed.state, ActionState::Failed(reason) if reason.contains("no longer fits")),
+        "{failed:?}"
+    );
+
+    let half = net
+        .propose(bitcoin_transfer(main.id, BURN, BTC / 2, Some(1_000)))
+        .unwrap();
+    assert!(at_once(&half));
+    net.send(half.id);
+    // A transfer spends only confirmed outputs, such as this change.
+    net.mine(1, BURN);
+    // Half a bitcoin and 1,000 satoshis are spent: this would pass the limit.
+    let over = net
+        .propose(bitcoin_transfer(main.id, BURN, BTC / 2, None))
+        .unwrap();
+    assert_eq!(over.executable_after_ns, over.proposed_at_ns + DAY_NS);
+    let rest = net
+        .propose(bitcoin_transfer(
+            main.id,
+            BURN,
+            BTC / 2 - 2_000,
+            Some(1_000),
+        ))
+        .unwrap();
+    assert!(at_once(&rest));
+    net.send(rest.id);
+}
+
+#[test]
+#[ignore = "needs bitcoind: set BITCOIND and BITCOIN_CLI"]
+fn a_send_that_may_have_reached_the_bitcoin_canister_sends_the_same_transaction_again() {
+    let net = wallet_on_regtest();
+    let main = net.add_bitcoin_account("btc");
+    net.mine(1, &main.address);
+    net.mine(100, BURN);
+    let transfer = net
+        .propose(bitcoin_transfer(main.id, BURN, BTC, None))
+        .unwrap();
+
+    // The Bitcoin canister refuses a transaction that carries fewer cycles
+    // than it asks, after its call began: the wallet cannot tell whether it
+    // passed the transaction on.
+    let fees = net.bitcoin_fees();
+    net.set_bitcoin_fees(Fees {
+        send_transaction_base: 1_000 * 1_000_000_000_000,
+        ..fees.clone()
+    });
+    let unknown = net.execute(transfer.id);
+    assert!(
+        matches!(&unknown, Err(WalletError::ChainError(reason)) if reason.contains("send the same one")),
+        "{unknown:?}"
+    );
+    let open = net.pending(transfer.id);
+    assert_eq!(open.state, ActionState::Ready);
+    assert_eq!(open.expires_at_ns, u64::MAX);
+    assert!(matches!(
+        act(&net.pic, net.wallet, net.owner, "reject", transfer.id),
+        Err(WalletError::InvalidArgument(reason)) if reason.contains("may have reached the Bitcoin canister")
+    ));
+    // Its only output stays reserved for it.
+    let other = net
+        .propose(bitcoin_transfer(main.id, BURN, BTC, None))
+        .unwrap();
+    let failed = net.execute(other.id).unwrap();
+    assert!(
+        matches!(&failed.state, ActionState::Failed(reason) if reason.contains("can spend 0")),
+        "{failed:?}"
+    );
+
+    net.set_bitcoin_fees(fees);
+    let tx = net.send(transfer.id);
+    let hash = net.node.call(&["getblockhash", "1"]);
+    let block: bitcoin::Block =
+        bitcoin::consensus::encode::deserialize_hex(&net.node.call(&["getblock", &hash, "0"]))
+            .unwrap();
+    assert_eq!(tx.input.len(), 1);
+    assert_eq!(
+        tx.input[0].previous_output.txid,
+        block.txdata[0].compute_txid()
+    );
+    assert_eq!(outputs(&tx)[0], (BURN.to_string(), BTC));
+    assert_eq!(net.node.mempool().matches('"').count(), 2);
+}
+
+#[test]
+#[ignore = "needs bitcoind: set BITCOIND and BITCOIN_CLI"]
+fn a_transfer_spends_outputs_100_blocks_old_before_a_larger_young_mining_reward() {
+    let net = wallet_on_regtest();
+    let main = net.add_bitcoin_account("btc");
+    net.mine(1, &main.address);
+    net.mine(100, BURN);
+    let first = net
+        .propose(bitcoin_transfer(main.id, BURN, 40 * BTC, None))
+        .unwrap();
+    let first = net.send(first.id);
+    assert_eq!(outputs(&first)[1].0, main.address);
+    let change = bitcoin::OutPoint::new(first.compute_txid(), 1);
+    // The change confirms in block 102.
+    net.mine(99, BURN);
+    // Block 201, where the change has exactly 100 confirmations, pays the
+    // account 25 BTC: more than the change, and unspendable before block 301.
+    net.mine(1, &main.address);
+    assert_eq!(net.balance(main.id), outputs(&first)[1].1 + 25 * BTC);
+
+    let second = net
+        .propose(bitcoin_transfer(main.id, BURN, 5 * BTC, None))
+        .unwrap();
+    let second = net.send(second.id);
+    assert_eq!(second.input.len(), 1);
+    assert_eq!(second.input[0].previous_output, change);
+}
+
+#[test]
+#[ignore = "needs bitcoind: set BITCOIND and BITCOIN_CLI"]
+fn a_policy_that_changes_while_a_transfer_signs_applies_before_it_sends() {
+    const SECOND_NS: u64 = 1_000_000_000;
+    // Every rule waits at most a second, so a new policy can apply while a
+    // transfer signs; transfers within `amount` a day wait for nothing.
+    let limited = |mut policy: Policy, amount: u64| {
+        for rule in &mut policy.rules {
+            rule.timelock_ns = rule.timelock_ns.min(SECOND_NS);
+            if rule.kind == ActionKind::Transfer {
+                rule.timelock_ns = SECOND_NS;
+                rule.daily_limits = vec![DailyLimit {
+                    chain: REGTEST,
+                    amount: amount.into(),
+                }];
+            }
+        }
+        policy
+    };
+    let net = wallet_on_regtest_after(|pic, wallet, owner| {
+        let policy = limited(policy(pic, wallet, owner), 100 * BTC);
+        let set_policy = propose(pic, wallet, owner, Action::SetPolicy(policy)).unwrap();
+        pic.advance_time(Duration::from_nanos(7 * DAY_NS));
+        act(pic, wallet, owner, "execute", set_policy.id).unwrap();
+    });
+    let main = net.add_bitcoin_account("btc");
+    // Three outputs of 50 BTC.
+    net.mine(3, &main.address);
+    net.mine(100, BURN);
+    let lower = net
+        .propose(Action::SetPolicy(limited(
+            policy(&net.pic, net.wallet, net.owner),
+            BTC,
+        )))
+        .unwrap();
+    net.pic.advance_time(Duration::from_secs(2));
+
+    // A transfer whose send may have reached the Bitcoin canister, as in
+    // the test above.
+    let maybe_sent = net
+        .propose(bitcoin_transfer(main.id, BURN, 30 * BTC, Some(10_000)))
+        .unwrap();
+    assert_eq!(maybe_sent.executable_after_ns, maybe_sent.proposed_at_ns);
+    let fees = net.bitcoin_fees();
+    net.set_bitcoin_fees(Fees {
+        send_transaction_base: 1_000 * 1_000_000_000_000,
+        ..fees.clone()
+    });
+    assert!(matches!(
+        net.execute(maybe_sent.id),
+        Err(WalletError::ChainError(reason)) if reason.contains("send the same one")
+    ));
+    net.set_bitcoin_fees(fees);
+
+    // Two outputs left, so this transfer asks for two signatures.
+    let transfer = net
+        .propose(bitcoin_transfer(main.id, BURN, 60 * BTC, Some(10_000)))
+        .unwrap();
+    assert_eq!(transfer.executable_after_ns, transfer.proposed_at_ns);
+
+    let call = net
+        .pic
+        .submit_call(
+            net.wallet,
+            net.owner,
+            "execute",
+            encode_one(transfer.id).unwrap(),
+        )
+        .unwrap();
+    // The wallet pays for reading its outputs, then for the first signature,
+    // each at least a billion cycles: by then the transaction is built and
+    // passed the daily limit.
+    let (start, mut last, mut paid) = (Instant::now(), net.pic.cycle_balance(net.wallet), 0);
+    while paid < 2 {
+        assert!(
+            start.elapsed() < Duration::from_secs(60),
+            "the transfer never asked for a signature"
+        );
+        net.pic.tick();
+        let balance = net.pic.cycle_balance(net.wallet);
+        if last > balance + 1_000_000_000 {
+            paid += 1;
+        }
+        last = balance;
+    }
+    let lowered = net.execute(lower.id).unwrap();
+    assert_eq!(lowered.state, ActionState::Executed(Outcome::Done));
+
+    let executed = decode_one::<PendingResult>(&net.pic.await_call(call).unwrap())
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(&executed.state, ActionState::Failed(reason) if reason.contains("no longer fits")),
+        "{executed:?}"
+    );
+    // The new limit does not hold back a transaction that may have been
+    // sent: it goes as it was signed.
+    let resent = net.send(maybe_sent.id);
+    assert_eq!(outputs(&resent)[0], (BURN.to_string(), 30 * BTC));
+    // The failed transfer released its outputs: after its timelock, a
+    // transfer spends one.
+    let small = net
+        .propose(bitcoin_transfer(main.id, BURN, BTC / 2, Some(10_000)))
+        .unwrap();
+    net.pic.advance_time(Duration::from_secs(2));
+    net.send(small.id);
 }

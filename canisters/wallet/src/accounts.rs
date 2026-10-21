@@ -6,7 +6,11 @@
 //! `n` of a chain is the ICRC-1 subaccount that holds `n` as a 32-byte
 //! big-endian number, so index 0 is the default subaccount and the plain
 //! principal. The ICP ledger is reached through its ICRC-1 interface.
+//!
+//! Bitcoin is held by the threshold ECDSA key of the account's derivation
+//! path (see `signer`), whose public key is stored with the account.
 
+use crate::btc;
 use crate::governance::check_label;
 use crate::{
     Account, AccountHolder, AccountId, AddAccountArgs, Chain, WalletError, is_canister_id,
@@ -14,6 +18,7 @@ use crate::{
 use candid::{CandidType, Principal};
 use icrc_ledger_types::icrc1::account::{Account as LedgerAccount, Subaccount};
 use serde::Deserialize;
+use serde_bytes::ByteBuf;
 
 /// The ICP ledger, `ryjl3-tyaaa-aaaaa-aaaba-cai`.
 pub const ICP_LEDGER: Principal = Principal::from_slice(&[0, 0, 0, 0, 0, 0, 0, 2, 1, 1]);
@@ -30,6 +35,10 @@ pub struct StoredAccount {
     pub holder: AccountHolder,
     pub added_at_ns: u64,
     pub added_by: Principal,
+    /// The compressed SEC1 public key of a Bitcoin account. Absent for other
+    /// chains, and from accounts stored before step 9, none of which is a
+    /// Bitcoin account.
+    pub public_key: Option<ByteBuf>,
 }
 
 impl StoredAccount {
@@ -42,17 +51,36 @@ impl StoredAccount {
         }
     }
 
+    /// The address of a Bitcoin account.
+    pub fn bitcoin_address(&self) -> Result<bitcoin::Address, WalletError> {
+        let (Chain::Bitcoin(network), Some(key)) = (&self.chain, &self.public_key) else {
+            return Err(WalletError::InvalidArgument(format!(
+                "a {:?} account has no Bitcoin address",
+                self.chain
+            )));
+        };
+        btc::address(key, *network).map_err(WalletError::InvalidArgument)
+    }
+
     /// The account as the interface shows it.
     pub fn view(&self, id: AccountId, wallet: Principal) -> Account {
+        let address = match &self.chain {
+            // A stored Bitcoin account always has its key.
+            Chain::Bitcoin(_) => self
+                .bitcoin_address()
+                .map(|address| address.to_string())
+                .unwrap_or_default(),
+            // ICRC-1 text: the principal, then for a subaccount its checksum
+            // and its hex without leading zeros.
+            _ => self.ledger_account(wallet).to_string(),
+        };
         Account {
             id,
             chain: self.chain.clone(),
             label: self.label.clone(),
             index: self.index,
             holder: self.holder.clone(),
-            // ICRC-1 text: the principal, then for a subaccount its checksum
-            // and its hex without leading zeros.
-            address: self.ledger_account(wallet).to_string(),
+            address,
         }
     }
 }
@@ -72,10 +100,15 @@ pub fn ledger(chain: &Chain) -> Result<Principal, WalletError> {
     match chain {
         Chain::Icp => Ok(ICP_LEDGER),
         Chain::Icrc(ledger) => Ok(*ledger),
-        Chain::Bitcoin(_) | Chain::Evm(_) => Err(WalletError::InvalidArgument(format!(
-            "this release cannot hold {chain:?} accounts yet"
-        ))),
+        Chain::Bitcoin(_) => Err(WalletError::InvalidArgument(
+            "a Bitcoin account has no ledger".to_string(),
+        )),
+        Chain::Evm(_) => Err(cannot_hold(chain)),
     }
+}
+
+fn cannot_hold(chain: &Chain) -> WalletError {
+    WalletError::InvalidArgument(format!("this release cannot hold {chain:?} accounts yet"))
 }
 
 /// Checks a chain an account or a daily limit may name: the ICP ledger is
@@ -101,7 +134,9 @@ pub fn check_new<'a>(
 ) -> Result<u32, WalletError> {
     check_label(&args.label)?;
     check_chain(&args.chain).map_err(WalletError::InvalidArgument)?;
-    ledger(&args.chain)?;
+    if let Chain::Evm(_) = args.chain {
+        return Err(cannot_hold(&args.chain));
+    }
     let (mut count, mut on_chain) = (0usize, 0u32);
     for account in existing {
         count += 1;
@@ -139,6 +174,7 @@ mod tests {
             holder: AccountHolder::Wallet,
             added_at_ns: 0,
             added_by: Principal::self_authenticating([1; 32]),
+            public_key: None,
         }
     }
 
@@ -188,21 +224,38 @@ mod tests {
 
     #[test]
     fn indices_count_per_chain_from_zero() {
+        let regtest = Chain::Bitcoin(BitcoinNetwork::Regtest);
         let existing = [
             stored(Chain::Icp, 0),
             stored(Chain::Icrc(ledger_x()), 0),
             stored(Chain::Icp, 1),
+            stored(regtest.clone(), 0),
         ];
         assert_eq!(check_new(&args(Chain::Icp), &existing), Ok(2));
         assert_eq!(check_new(&args(Chain::Icrc(ledger_x())), &existing), Ok(1));
         assert_eq!(check_new(&args(Chain::Icrc(wallet())), &existing), Ok(0));
+        assert_eq!(check_new(&args(regtest), &existing), Ok(1));
+        assert_eq!(
+            check_new(&args(Chain::Bitcoin(BitcoinNetwork::Mainnet)), &existing),
+            Ok(0)
+        );
         assert_eq!(check_new(&args(Chain::Icp), &[]), Ok(0));
+    }
+
+    #[test]
+    fn a_bitcoin_account_shows_the_address_of_its_key() {
+        use crate::btc::tests::{BIP173_KEY, BIP173_REGTEST, hex};
+        let account = StoredAccount {
+            public_key: Some(ByteBuf::from(hex(BIP173_KEY))),
+            ..stored(Chain::Bitcoin(BitcoinNetwork::Regtest), 0)
+        };
+        assert_eq!(account.view(1, wallet()).address, BIP173_REGTEST);
+        assert!(stored(Chain::Icp, 0).bitcoin_address().is_err());
     }
 
     #[test]
     fn refuses_other_chains_the_icp_ledger_as_icrc_and_bad_labels() {
         let refused = [
-            args(Chain::Bitcoin(BitcoinNetwork::Mainnet)),
             args(Chain::Evm(1)),
             args(Chain::Icrc(ICP_LEDGER)),
             args(Chain::Icrc(Principal::self_authenticating([2; 32]))),

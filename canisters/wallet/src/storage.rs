@@ -8,6 +8,7 @@
 
 use crate::accounts::StoredAccount;
 use crate::actions::StoredPending;
+use crate::btc;
 use crate::governance::Governance;
 use crate::policy::default_policy;
 use crate::{
@@ -35,6 +36,7 @@ const AUDIT_INDEX_MEMORY: MemoryId = MemoryId::new(7);
 const AUDIT_DATA_MEMORY: MemoryId = MemoryId::new(8);
 const OPEN_MEMORY: MemoryId = MemoryId::new(10);
 const TRANSFER_CLOCK_MEMORY: MemoryId = MemoryId::new(11);
+const RESERVED_MEMORY: MemoryId = MemoryId::new(12);
 
 /// What the wallet was installed with.
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -78,10 +80,14 @@ pub struct StoredTransfer {
     pub chain: Chain,
     pub to: String,
     pub amount: Nat,
-    /// The ledger block that holds it, in decimal: the receipt's `tx_id`.
+    /// The ledger block that holds it, in decimal, or the Bitcoin
+    /// transaction id: the receipt's `tx_id`.
     pub tx_id: String,
     pub at_ns: u64,
     pub action: ActionId,
+    /// The fee a Bitcoin transaction paid, which counts toward the daily
+    /// limit. Absent for ledger transfers, whose fee does not.
+    pub fee: Option<Nat>,
 }
 
 impl StoredMember {
@@ -185,6 +191,13 @@ thread_local! {
     /// The latest `created_at_time` the wallet gave a ledger call.
     static TRANSFER_CLOCK: RefCell<StableCell<u64, Memory>> =
         RefCell::new(StableCell::init(memory(TRANSFER_CLOCK_MEMORY), 0));
+
+    /// The Bitcoin outputs a built transaction spends, as `btc::Coin::key`
+    /// writes them, to the action whose transaction it is. No other
+    /// transaction spends them. They stay reserved once the transaction may
+    /// have been sent: the Bitcoin canister lists them until it confirms.
+    static RESERVED: RefCell<StableBTreeMap<[u8; 36], ActionId, Memory>> =
+        RefCell::new(StableBTreeMap::init(memory(RESERVED_MEMORY)));
 }
 
 fn memory(id: MemoryId) -> Memory {
@@ -307,8 +320,9 @@ pub fn transfer_time(now: u64) -> u64 {
     })
 }
 
-/// What the wallet sent on `chain` at `since_ns` or later. It reads back
-/// from the newest transfer and stops at the first older one.
+/// What the wallet sent on `chain` at `since_ns` or later, with the fees
+/// of Bitcoin transactions. It reads back from the newest transfer and stops
+/// at the first older one.
 pub fn sent_since(chain: &Chain, since_ns: u64) -> Nat {
     HISTORY.with_borrow(|history| {
         history
@@ -316,8 +330,35 @@ pub fn sent_since(chain: &Chain, since_ns: u64) -> Nat {
             .rev()
             .take_while(|transfer| transfer.at_ns >= since_ns)
             .filter(|transfer| &transfer.chain == chain)
-            .fold(Nat::from(0u8), |sum, transfer| sum + transfer.amount)
+            .fold(Nat::from(0u8), |sum, transfer| {
+                sum + transfer.amount + transfer.fee.unwrap_or_default()
+            })
     })
+}
+
+/// Reserves the outputs of `keys` for the transaction of action `id`.
+pub fn reserve(keys: &[[u8; 36]], id: ActionId) {
+    RESERVED.with_borrow_mut(|reserved| {
+        for key in keys {
+            reserved.insert(*key, id);
+        }
+    });
+}
+
+/// Whether a built transaction spends the output of `key`.
+pub fn is_reserved(key: &[u8; 36]) -> bool {
+    RESERVED.with_borrow(|reserved| reserved.contains_key(key))
+}
+
+/// Releases the outputs of `keys` that action `id` reserved.
+fn release(keys: &[[u8; 36]], id: ActionId) {
+    RESERVED.with_borrow_mut(|reserved| {
+        for key in keys {
+            if reserved.get(key) == Some(id) {
+                reserved.remove(key);
+            }
+        }
+    });
 }
 
 /// Stores a new action under the next id. Ids start at 1 and only grow, and
@@ -336,8 +377,18 @@ pub fn action(id: ActionId) -> Option<StoredPending> {
     PENDING.with_borrow(|actions| actions.get(&id))
 }
 
+/// Stores an action. One that closed without its Bitcoin transaction ever
+/// being sent releases the outputs that transaction would have spent.
 pub fn set_action(id: ActionId, pending: StoredPending) {
     let closed = !matches!(pending.state, ActionState::Waiting | ActionState::Ready);
+    if closed
+        && !pending.may_have_sent()
+        && let Some(tx) = pending.bitcoin_tx()
+    {
+        // A stored transaction always decodes: the wallet encoded it.
+        let unsigned = btc::from_bytes(&tx.unsigned).expect("a stored transaction decodes");
+        release(&btc::spent_keys(&unsigned), id);
+    }
     PENDING.with_borrow_mut(|actions| actions.insert(id, pending));
     if closed {
         OPEN.with_borrow_mut(|open| open.remove(&id));
@@ -431,6 +482,13 @@ pub fn check() -> Result<(), String> {
     PENDING.with_borrow(|actions| actions.values().for_each(drop));
     HISTORY.with_borrow(|history| history.values().for_each(drop));
     AUDIT.with_borrow(|log| log.iter().for_each(drop));
+    if let Some(id) =
+        RESERVED.with_borrow(|reserved| reserved.values().find(|id| action(*id).is_none()))
+    {
+        return Err(format!(
+            "Bitcoin outputs are reserved for action {id}, which is not stored"
+        ));
+    }
     if let Some(id) = OPEN.with_borrow(|open| open.keys().find(|id| action(*id).is_none())) {
         return Err(format!("open action {id} is not stored"));
     }
@@ -678,5 +736,84 @@ mod tests {
         let newest = &audit_page(None, 1)[0];
         assert_eq!(newest.at_ns, 4);
         assert_eq!(newest.event, AuditEvent::Proposed(4));
+    }
+
+    fn sent(chain: Chain, amount: u64, fee: Option<u64>, at_ns: u64) -> StoredTransfer {
+        StoredTransfer {
+            account: 1,
+            chain,
+            to: "someone".to_string(),
+            amount: Nat::from(amount),
+            tx_id: "1".to_string(),
+            at_ns,
+            action: 1,
+            fee: fee.map(Nat::from),
+        }
+    }
+
+    #[test]
+    fn the_spending_of_a_chain_counts_bitcoin_fees() {
+        let bitcoin = Chain::Bitcoin(crate::BitcoinNetwork::Regtest);
+        add_transfer(sent(bitcoin.clone(), 1_000, Some(200), 10));
+        add_transfer(sent(Chain::Icp, 5, None, 20));
+        add_transfer(sent(bitcoin.clone(), 3_000, Some(400), 30));
+        assert_eq!(sent_since(&bitcoin, 0), Nat::from(4_600u32));
+        assert_eq!(sent_since(&bitcoin, 30), Nat::from(3_400u32));
+        assert_eq!(sent_since(&Chain::Icp, 0), Nat::from(5u8));
+    }
+
+    /// A transfer whose transaction spends the outputs `seeds`.
+    fn bitcoin_transfer(seeds: &[u8]) -> (StoredPending, Vec<[u8; 36]>) {
+        let coins: Vec<btc::Coin> = seeds
+            .iter()
+            .map(|seed| btc::Coin {
+                txid: [*seed; 32],
+                vout: u32::from(*seed),
+                value: 10_000,
+                mature: true,
+            })
+            .collect();
+        let script = bitcoin::ScriptBuf::new_op_return([]);
+        let plan = btc::Plan {
+            inputs: coins.clone(),
+            fee: 1_000,
+            change: 0,
+        };
+        let tx = btc::unsigned(&plan, 5_000, &script, &script);
+        let mut pending = action_at(1);
+        pending.state = ActionState::Ready;
+        pending.begin_bitcoin(1, 1).unwrap();
+        pending.bitcoin_built(crate::actions::BitcoinTx {
+            unsigned: ByteBuf::from(btc::to_bytes(&tx)),
+            values: coins.iter().map(|coin| coin.value).collect(),
+            fee: 1_000,
+            signed: None,
+            sent: false,
+        });
+        (pending, coins.iter().map(btc::Coin::key).collect())
+    }
+
+    #[test]
+    fn a_closed_transfer_releases_its_outputs_unless_its_transaction_may_have_been_sent() {
+        let (mut unsent, unsent_keys) = bitcoin_transfer(&[1, 2]);
+        let (mut sent, sent_keys) = bitcoin_transfer(&[3]);
+        let unsent_id = add_action(unsent.clone());
+        let sent_id = add_action(sent.clone());
+        reserve(&unsent_keys, unsent_id);
+        reserve(&sent_keys, sent_id);
+        // Another action's reservation of the same output stays.
+        let (_, other_keys) = bitcoin_transfer(&[2]);
+        assert_eq!(other_keys[0], unsent_keys[1]);
+
+        sent.bitcoin_sending();
+        sent.finish(Err("stopped".to_string()));
+        set_action(sent_id, sent);
+        assert!(sent_keys.iter().all(is_reserved));
+
+        unsent.state = ActionState::Rejected(Principal::anonymous());
+        reserve(&other_keys, 99);
+        set_action(unsent_id, unsent);
+        assert!(!is_reserved(&unsent_keys[0]));
+        assert!(is_reserved(&unsent_keys[1]), "action 99 holds it now");
     }
 }
