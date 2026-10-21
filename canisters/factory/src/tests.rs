@@ -1,5 +1,6 @@
 use crate::storage::HandOver;
 use crate::types::*;
+use crate::{Busy, next_retry};
 use candid::{Nat, Principal};
 use ed25519_dalek::SigningKey;
 use serde_bytes::ByteBuf;
@@ -147,6 +148,24 @@ fn the_cycles_ledger_is_the_one_on_mainnet() {
         crate::cycles_ledger::id().to_text(),
         "um5iw-rqaaa-aaaaq-qaaba-cai"
     );
+}
+
+#[test]
+fn a_canister_busy_elsewhere_stays_busy() {
+    let canister = Principal::from_slice(&[0, 0, 0, 0, 0, 0, 0, 9, 1, 1]);
+    let creation = Busy::start(canister);
+    assert!(Busy::try_start(canister).is_none());
+    // The refused attempt left the creation's mark.
+    assert!(Busy::try_start(canister).is_none());
+    drop(creation);
+    assert!(Busy::try_start(canister).is_some());
+}
+
+#[test]
+fn a_retry_already_set_keeps_its_deadline() {
+    assert_eq!(next_retry(0, NOW), NOW);
+    assert_eq!(next_retry(NOW - 1, NOW), NOW - 1);
+    assert_eq!(next_retry(NOW + 1, NOW), NOW);
 }
 
 mod interface {

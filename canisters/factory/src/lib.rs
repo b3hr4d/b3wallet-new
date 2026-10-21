@@ -236,10 +236,12 @@ thread_local! {
 struct Busy(Principal);
 
 impl Busy {
-    /// None if the canister is busy already.
+    /// None if the canister is busy already. The guard is made only once the
+    /// canister is marked: a guard dropped here would unmark it for the
+    /// creation or timer pass that holds it.
     fn try_start(canister: Principal) -> Option<Busy> {
         BUSY.with_borrow_mut(|busy| busy.insert(canister))
-            .then_some(Busy(canister))
+            .then(|| Busy(canister))
     }
 
     fn start(canister: Principal) -> Busy {
@@ -257,15 +259,25 @@ impl Drop for Busy {
 const RETRY_NS: u64 = 5 * 60 * 1_000_000_000;
 
 /// Sets the IC's one timer while a canister waits for its hand-over, or
-/// turns it off.
+/// turns it off. A timer already set keeps its deadline, so creations that
+/// follow each other cannot keep pushing a retry back.
 fn schedule_timer() {
-    let waiting = !storage::hand_overs().is_empty();
-    let at = if waiting {
-        ic_cdk::api::time().saturating_add(RETRY_NS)
-    } else {
-        0
-    };
-    ic_cdk::api::global_timer_set(at);
+    if storage::hand_overs().is_empty() {
+        ic_cdk::api::global_timer_set(0);
+        return;
+    }
+    let at = ic_cdk::api::time().saturating_add(RETRY_NS);
+    let previous = ic_cdk::api::global_timer_set(at);
+    let deadline = next_retry(previous, at);
+    if deadline != at {
+        ic_cdk::api::global_timer_set(deadline);
+    }
+}
+
+/// The timer's deadline: `at`, unless the timer was already set (`previous`
+/// is not 0) for earlier.
+fn next_retry(previous: u64, at: u64) -> u64 {
+    if previous == 0 { at } else { previous.min(at) }
 }
 
 /// Hands over every canister on record that no creation works on: to itself

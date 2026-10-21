@@ -684,9 +684,17 @@ fn the_timer_hands_over_a_wallet_whose_hand_over_failed() {
     assert_eq!(created.unwrap().wallet, wallet);
     assert!(net.pic.get_controllers(wallet).contains(&net.factory));
 
-    // Thawed, the factory hands the wallet over at its next timer.
+    // Thawed, the factory hands the wallet over at its next timer, five
+    // minutes on, though another wallet was created in between.
     freeze(30 * 24 * 60 * 60);
-    net.pic.advance_time(Duration::from_secs(5 * 60));
+    net.pic.advance_time(Duration::from_secs(4 * 60));
+    net.approve(creator(), net.factory, MIN_CYCLES + FEE);
+    let other = net
+        .create(net.factory, creator(), &net.args(None, MIN_CYCLES))
+        .unwrap();
+    assert_self_owned(&net, &other, &release);
+    assert!(net.pic.get_controllers(wallet).contains(&net.factory));
+    net.pic.advance_time(Duration::from_secs(60));
     for _ in 0..10 {
         net.pic.tick();
     }
