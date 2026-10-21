@@ -8,7 +8,7 @@ import {
   sourceOf,
   stateText,
 } from "../src/describe.ts"
-import type { Account, Pending } from "../src/generated/wallet.ts"
+import type { Account, Action, Pending } from "../src/generated/wallet.ts"
 import { dateOf } from "../src/time.ts"
 
 const owner = "fvski-cdv2h-g6ldz-eacds-4wfcf-px5sn-yfwv7-bwtxb-wvytu-cm3qa-sae" as never
@@ -46,6 +46,23 @@ test("a transfer names its amount and account once they are known", () => {
   assert.equal(
     actionText(transfer.action, undefined, undefined),
     `Send 150000000 base units from account 1 to ${owner}`,
+  )
+})
+
+test("a transfer names a fee set in its proposal", () => {
+  const btc = { symbol: "BTC", decimals: 8, fee: null }
+  const coins: Account = { ...main, chain: { tag: "Bitcoin", value: { tag: "Mainnet" } } }
+  const action: Action = {
+    tag: "Transfer",
+    value: { from: 1, to: "bc1qexample", amount: 10_000n, fee: 500_000n, memo: null },
+  }
+  assert.equal(
+    actionText(action, coins, btc),
+    "Send 0.0001 BTC from “Main” to bc1qexample, paying a fee of 0.005 BTC",
+  )
+  assert.equal(
+    actionText(action, undefined, undefined),
+    "Send 10000 base units from account 1 to bc1qexample, paying a fee of 500000 base units",
   )
 })
 

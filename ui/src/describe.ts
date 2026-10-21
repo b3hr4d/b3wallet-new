@@ -94,8 +94,9 @@ export function isJoinRequest(pending: Pending): boolean {
 
 /**
  * What an action does, in a sentence without its full stop. A transfer names
- * the account it sends from, `from`, and its amount in `token` once they are
- * known, and its base units until then.
+ * the account it sends from, `from`, and its amounts in `token` once they are
+ * known, and in base units until then. It names a fee set in the proposal: a
+ * Bitcoin transfer spends it on top of the amount.
  */
 export function actionText(
   action: Action,
@@ -104,10 +105,11 @@ export function actionText(
 ): string {
   switch (action.tag) {
     case "Transfer": {
-      const { amount, to } = action.value
-      const what = token ? amountText(amount, token) : `${amount} base units`
+      const { amount, to, fee } = action.value
+      const units = (value: bigint) => (token ? amountText(value, token) : `${value} base units`)
       const source = from ? `“${from.label}”` : `account ${action.value.from}`
-      return `Send ${what} from ${source} to ${to}`
+      const paying = fee === null ? "" : `, paying a fee of ${units(fee)}`
+      return `Send ${units(amount)} from ${source} to ${to}${paying}`
     }
     case "AddMember":
       return `Add ${action.value.id} as ${roleText(action.value.role)}, “${action.value.label}”`
