@@ -1,6 +1,13 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { actionText, canRun, isJoinRequest, joinRequestText, stateText } from "../src/describe.ts"
+import {
+  actionText,
+  canRun,
+  isJoinRequest,
+  joinRequestText,
+  sourceOf,
+  stateText,
+} from "../src/describe.ts"
 import type { Account, Pending } from "../src/generated/wallet.ts"
 import { dateOf } from "../src/time.ts"
 
@@ -40,6 +47,14 @@ test("a transfer names its amount and account once they are known", () => {
     actionText(transfer.action, undefined, undefined),
     `Send 150000000 base units from account 1 to ${owner}`,
   )
+})
+
+test("a transfer's source is the account it names", () => {
+  const cycles: Account = { ...main, id: 2, label: "Cycles" }
+  assert.equal(sourceOf(transfer.action, [cycles, main]), main)
+  assert.equal(sourceOf(transfer.action, [cycles]), undefined)
+  assert.equal(sourceOf(transfer.action, undefined), undefined)
+  assert.equal(sourceOf({ tag: "RemoveMember", value: owner }, [main]), undefined)
 })
 
 test("a join request is an AddMember of its own proposer", () => {

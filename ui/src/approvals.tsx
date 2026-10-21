@@ -8,6 +8,7 @@ import {
   failureText,
   isJoinRequest,
   joinRequestText,
+  sourceOf,
   stateText,
 } from "./describe.ts"
 import type { Account, Member, Pending } from "./generated/wallet.ts"
@@ -113,10 +114,7 @@ function OpenAction({
   onExecute: () => void
 }) {
   const { action, state } = pending
-  const from =
-    action.tag === "Transfer"
-      ? accounts?.find((account) => account.id === action.value.from)
-      : undefined
+  const from = sourceOf(action, accounts)
   const { token } = useToken(from?.chain)
   const join = isJoinRequest(pending)
   const owner = me.role.tag === "Owner"

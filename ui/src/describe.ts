@@ -126,6 +126,13 @@ export function actionText(
   }
 }
 
+/** The account a transfer sends from, once `accounts` are read. */
+export function sourceOf(action: Action, accounts: Account[] | undefined): Account | undefined {
+  return action.tag === "Transfer"
+    ? accounts?.find((account) => account.id === action.value.from)
+    : undefined
+}
+
 /** What a join request asks, in a sentence without its full stop. */
 export function joinRequestText(pending: Pending): string {
   const label = pending.action.tag === "AddMember" ? pending.action.value.label : ""

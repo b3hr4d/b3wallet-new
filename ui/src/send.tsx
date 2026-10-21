@@ -2,11 +2,11 @@ import type { Principal } from "@candid-core/schema"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { useState } from "react"
 import { useWallet } from "./canister.ts"
-import { actionText, canRun, failureText, roleText, stateText } from "./describe.ts"
+import { actionText, canRun, failureText, roleText, sourceOf, stateText } from "./describe.ts"
 import type { Account, Pending } from "./generated/wallet.ts"
 import { AsMember } from "./member.tsx"
 import { useNowNs } from "./now.ts"
-import { amountText, chainText, readAmount, useToken, type Token } from "./tokens.ts"
+import { amountText, chainText, readAmount, useToken } from "./tokens.ts"
 
 /** The send page: an owner proposes a transfer, and runs it once it may. */
 export function Send({ wallet }: { wallet: Principal }) {
@@ -48,8 +48,7 @@ function SendForm({ wallet: id }: { wallet: Principal }) {
       <Proposed
         wallet={id}
         proposed={propose.data}
-        from={from}
-        token={token}
+        accounts={accounts.data}
         onAgain={() => {
           propose.reset()
           setTo("")
@@ -142,20 +141,22 @@ function SendForm({ wallet: id }: { wallet: Principal }) {
 /**
  * A transfer just proposed. One the policy lets through at once is ready, and
  * runs on Send now; one that needs more approvals waits on the Approvals page.
+ * It names the account the wallet returned, since the form's selection may
+ * have changed while the proposal was on its way.
  */
 function Proposed({
   wallet: id,
   proposed,
-  from,
-  token,
+  accounts,
   onAgain,
 }: {
   wallet: Principal
   proposed: Pending
-  from: Account | undefined
-  token: Token | undefined
+  accounts: Account[] | undefined
   onAgain: () => void
 }) {
+  const from = sourceOf(proposed.action, accounts)
+  const { token } = useToken(from?.chain)
   const { client, wallet } = useWallet(id)
   // A transfer changes the open actions and a balance, and nothing else read here.
   const execute = useMutation(
