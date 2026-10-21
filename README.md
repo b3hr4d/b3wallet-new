@@ -44,6 +44,7 @@ Bitcoin canister, again at most once. Everything else is still design, in
 | `candid/` | The target Candid interfaces of the wallet, release channel, factory and extensions |
 | `canisters/wallet/` | The wallet canister |
 | `tests/integration/` | PocketIC tests of the real wallet Wasm |
+| `scripts/try-local.sh`, `icp.yaml` | A local wallet to try, with icp-cli and a regtest Bitcoin node |
 
 ## Development
 
@@ -68,6 +69,20 @@ mainnet id, and as an ICRC token. The Bitcoin tests start a regtest node of
 their own with the Bitcoin Core release pinned there, and PocketIC's Bitcoin
 canister follows it. The upgrade test also needs `PREVIOUS_WALLET_WASM`, the
 Wasm of the release before.
+
+## Trying it locally
+
+`scripts/try-local.sh` starts an icp-cli local network and a regtest Bitcoin
+node, installs a new wallet, claims it with your current icp-cli identity, and
+sends its accounts 50 regtest BTC and 10 local ICP. It then prints the calls
+that check a balance and propose and execute a transfer. It needs icp-cli and
+ic-wasm (`npm install -g @icp-sdk/icp-cli @icp-sdk/ic-wasm`), Node, the Rust
+toolchain, and Bitcoin Core's `bitcoind` and `bitcoin-cli` on `PATH` (or named
+by `BITCOIND` and `BITCOIN_CLI`).
+
+```sh
+./scripts/try-local.sh
+```
 
 ## Checking the schema
 
