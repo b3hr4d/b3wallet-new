@@ -5,7 +5,7 @@ its own certified UI, keeps its accounts and approval policy, signs with
 threshold keys, is its own only controller, and upgrades itself only to a
 release its owners approved.
 
-**Status: step 11 of [the v0 plan](docs/plan-v0.md).** The wallet canister
+**Status: step 12 of [the v0 plan](docs/plan-v0.md).** The wallet canister
 installs, keeps its state in stable memory across upgrades, answers `status`,
 can be claimed once by its first owner, and shows its member list only to its
 members. Members change members and the policy through actions that wait for
@@ -26,7 +26,12 @@ makes and signs the manifests. A wallet installs a release on itself by an
 and it was tested to upgrade from the version the wallet runs. A release
 whose upgrade traps leaves the version before it running and the upgrade
 marked `Failed`; nothing rescues a wallet from a release that breaks upgrades
-([decision 0005](docs/decisions/0005-rescue-path.md)). Everything else is still design, in [docs/design.md](docs/design.md).
+([decision 0005](docs/decisions/0005-rescue-path.md)). A factory canister
+creates wallets: the cycles ledger takes a new wallet's cycles from its
+creator's account, the factory installs the channel's release once two of
+the three signer keys signed it, and the wallet becomes its own only
+controller, with no rights left to the factory. Everything else is still
+design, in [docs/design.md](docs/design.md).
 
 ## Principles
 
@@ -52,9 +57,10 @@ marked `Failed`; nothing rescues a wallet from a release that breaks upgrades
 | `candid/` | The target Candid interfaces of the wallet, release channel, factory and extensions |
 | `canisters/wallet/` | The wallet canister |
 | `canisters/release_channel/` | The release channel canister |
+| `canisters/factory/` | The factory canister, which creates wallets |
 | `crates/release/` | Release manifests and their checks, shared by the channel, wallets and the tool |
 | `tools/release-tool/` | The command-line tool that makes, signs and checks manifests |
-| `tests/integration/` | PocketIC tests of the real wallet and release channel Wasm |
+| `tests/integration/` | PocketIC tests of the real wallet, release channel and factory Wasm |
 | `tests/caller/` | A canister the PocketIC tests call through, to call as a canister |
 | `scripts/try-local.sh`, `icp.yaml` | A local wallet to try, with icp-cli and a regtest Bitcoin node |
 
@@ -75,9 +81,9 @@ CI runs the same commands:
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo clippy -p wallet -p release_channel -p caller --target wasm32-unknown-unknown --locked -- -D warnings
+cargo clippy -p wallet -p release_channel -p factory -p caller --target wasm32-unknown-unknown --locked -- -D warnings
 cargo test --workspace --exclude integration --locked -- --nocapture   # unit, interface and tool tests
-cargo build -p wallet -p release_channel -p caller --target wasm32-unknown-unknown --release --locked
+cargo build -p wallet -p release_channel -p factory -p caller --target wasm32-unknown-unknown --release --locked
 POCKET_IC_BIN=/path/to/pocket-ic ICRC1_LEDGER_WASM=/path/to/ic-icrc1-ledger.wasm.gz \
   BITCOIND=/path/to/bitcoind BITCOIN_CLI=/path/to/bitcoin-cli \
   cargo test -p integration --locked -- --include-ignored
@@ -91,8 +97,9 @@ PocketIC tests need the server version and the ICRC-1 ledger release pinned in
 `.github/workflows/ci.yml`; the ledger runs both as the ICP ledger, at its
 mainnet id, and as an ICRC token. The Bitcoin tests start a regtest node of
 their own with the Bitcoin Core release pinned there, and PocketIC's Bitcoin
-canister follows it. The upgrade test also needs `PREVIOUS_WALLET_WASM`, the
-Wasm of the release before.
+canister follows it. The factory tests run on the cycles minting canister and
+cycles ledger PocketIC installs itself. The upgrade test also needs
+`PREVIOUS_WALLET_WASM`, the Wasm of the release before.
 
 ## Trying it locally
 
@@ -156,11 +163,55 @@ icp canister call release_channel publish_manifest --args-file manifest.did \
 manifest's Candid encoding as the Rust `candid` crate writes it; other
 encoders lay out the type table differently, so sign with this tool.
 
+## Creating a wallet
+
+The factory is installed with the release channel and the signer keys and
+threshold every wallet it creates pins, the same as the channel's. In the
+repository root, whose `icp.yaml` names the factory:
+
+```sh
+icp deploy factory --args '(variant { Init = record {
+  release_channel = principal "<release channel>";
+  release_signers = vec { blob "..."; blob "..."; blob "..." };
+  release_threshold = 2 : nat8;
+} })'
+```
+
+A creator pays with cycles from their account on the cycles ledger. They let
+the factory take the wallet's cycles, at least 1T, and the ledger's fee of
+100M, then call `create_wallet` with the public half of a fresh Ed25519 claim
+key and when the claim expires, at least an hour away:
+
+```sh
+openssl genpkey -algorithm ed25519 -out claim.pem
+release-tool public-key --candid --key claim.pem
+icp canister call um5iw-rqaaa-aaaaq-qaaba-cai icrc2_approve '(record {
+  spender = record { owner = principal "<factory>" };
+  amount = 3_000_100_000_000 : nat;
+})'
+icp canister call factory create_wallet '(record {
+  claim_public_key = blob "...";
+  claim_expires_at_ns = <nanoseconds since 1970> : nat64;
+  version = null;
+  cycles = 3_000_000_000_000 : nat;
+  from_subaccount = null;
+})' --candid candid/factory.did
+```
+
+The factory checks the release's signatures before the ledger takes anything,
+installs it, and answers with the wallet's id once the wallet is its own only
+controller. Anyone can check that with `icp canister status <wallet>`, which
+shows its controllers and module hash. Whoever holds the claim key then claims
+it (`scripts/try-local.sh` signs a claim with Node). If the release does not
+install, the call fails with `InstallFailed` and the creator is the canister's
+only controller, with the cycles left in it. `current_release` shows the
+release a wallet created now gets.
+
 ## Upgrading a wallet
 
-A wallet installs releases only on itself, so it must be its own controller;
-until the factory hands it over (step 12), add the wallet as a controller of
-itself. A member asks whether its channel has a release the wallet would
+A wallet installs releases only on itself, so it must be its own controller.
+One the factory created is; one installed by hand, as `scripts/try-local.sh`
+installs it, needs the wallet added as a controller of itself. A member asks whether its channel has a release the wallet would
 install, and an owner proposes it:
 
 ```sh
