@@ -9,14 +9,16 @@ use ed25519_dalek::{Signer, SigningKey};
 use ic_http_certification::{HttpRequest, StatusCode};
 use ic_response_verification::types::VerifiedResponse;
 use ic_response_verification::verify_request_response_pair;
+use icrc_ledger_types::icrc1::account::Account as LedgerAccount;
 use pocket_ic::{ErrorCode, PocketIc, PocketIcBuilder, RejectCode, RejectResponse};
 use serde_bytes::ByteBuf;
 use std::path::Path;
 use std::time::Duration;
 use wallet::{
-    Action, ActionId, ActionState, AuditEntry, AuditEvent, AuditRequest, ClaimArgs, InitArgs,
-    Member, NOT_A_MEMBER, NOT_AN_APPROVER, NOT_AN_OWNER, NOT_CLAIMED, Outcome, Pending, Policy,
-    Role, Status, TransferRequest, UpgradeState, WalletArg, WalletError,
+    Account, AccountHolder, Action, ActionId, ActionKind, ActionState, AddAccountArgs, AuditEntry,
+    AuditEvent, AuditRequest, Balance, Chain, ClaimArgs, DailyLimit, InitArgs, Member,
+    NOT_A_MEMBER, NOT_AN_APPROVER, NOT_AN_OWNER, NOT_CLAIMED, Outcome, Pending, Policy, Role,
+    Status, TransferRequest, UpgradeState, WalletArg, WalletError,
 };
 
 const DAY_NS: u64 = 24 * 60 * 60 * 1_000_000_000;
@@ -476,8 +478,11 @@ fn before_the_claim_only_the_public_methods_answer() {
         assert_eq!(
             refused,
             [
+                "accounts",
+                "add_account",
                 "approve",
                 "audit_log",
+                "balance",
                 "execute",
                 "members",
                 "pending",
@@ -503,8 +508,11 @@ fn a_non_member_is_refused_by_every_method_for_members() {
         assert_eq!(
             refused,
             [
+                "accounts",
+                "add_account",
                 "approve",
                 "audit_log",
+                "balance",
                 "execute",
                 "members",
                 "pending",
@@ -886,9 +894,13 @@ fn the_last_owner_stays_and_unsupported_actions_are_refused() {
         fee: None,
         memo: None,
     });
-    assert!(matches!(
+    assert_eq!(
         propose(&pic, id, owner, transfer),
-        Err(WalletError::InvalidArgument(reason)) if reason.contains("cannot execute Transfer")
+        Err(WalletError::NotFound("account 0".to_string()))
+    );
+    assert!(matches!(
+        propose(&pic, id, owner, Action::UninstallExtension(user(3))),
+        Err(WalletError::InvalidArgument(reason)) if reason.contains("cannot execute UninstallExtension")
     ));
     assert_eq!(pending(&pic, id, owner), []);
 }
@@ -904,7 +916,9 @@ fn each_role_is_refused_what_it_may_not_do() {
     let refusals = [
         (approver, "propose", NOT_AN_OWNER),
         (approver, "reject", NOT_AN_OWNER),
+        (approver, "add_account", NOT_AN_OWNER),
         (viewer, "propose", NOT_AN_OWNER),
+        (viewer, "add_account", NOT_AN_OWNER),
         (viewer, "reject", NOT_AN_OWNER),
         (viewer, "approve", NOT_AN_APPROVER),
         (viewer, "execute", NOT_AN_APPROVER),
@@ -916,12 +930,14 @@ fn each_role_is_refused_what_it_may_not_do() {
     }
     // Viewers read.
     assert_eq!(pending(&pic, id, viewer), []);
+    assert_eq!(accounts(&pic, id, viewer), []);
     assert_eq!(policy(&pic, id, viewer), policy(&pic, id, owner));
     assert_eq!(members(&pic, id, viewer).unwrap().len(), 3);
 }
 
-/// A wallet that the previous release installed and that its owner claimed
-/// upgrades to this one, keeps its owner, and runs this release's code. CI
+/// A wallet that the previous release installed, that its owner claimed and
+/// that holds an open action, upgrades to this one, keeps its owner and the
+/// action, and runs this release's code. CI
 /// builds the previous release from the pull request's base commit (on
 /// `main`, from the commit before) and names it in `PREVIOUS_WALLET_WASM`.
 /// A change that leaves the Wasm as it was upgrades a wallet to itself.
@@ -937,12 +953,17 @@ fn a_wallet_from_the_previous_release_upgrades_to_this_one() {
     pic.install_canister(id, previous, arg, None);
     let owner = user(7);
     claim(&pic, id, owner, claim_signature(id, owner)).unwrap();
+    let open = propose(&pic, id, owner, add_member_action(user(8), Role::Viewer)).unwrap();
 
     upgrade(&pic, id, &WalletArg::Upgrade).unwrap();
     assert!(status(&pic, id).claimed);
     assert_eq!(whoami(&pic, id, owner).map(|m| m.role), Some(Role::Owner));
     assert_eq!(members(&pic, id, owner).unwrap().len(), 1);
-    run_at_once(&pic, id, owner, add_member_action(user(8), Role::Viewer));
+    assert_eq!(pending(&pic, id, owner), std::slice::from_ref(&open));
+    let executed = act(&pic, id, owner, "execute", open.id).unwrap();
+    assert_eq!(executed.state, ActionState::Executed(Outcome::Done));
+    assert_eq!(members(&pic, id, owner).unwrap().len(), 2);
+    add_account(&pic, id, owner, Chain::Icp, "main").unwrap();
 }
 
 // ---- Step 6: the audit log ------------------------------------------------------
@@ -1361,4 +1382,619 @@ fn http_request_answers_only_as_a_query() {
             .contains("http_request answers only as a query"),
         "{reject:?}"
     );
+}
+
+// ---- Step 8: ICP and ICRC accounts ------------------------------------------
+
+/// The ICP ledger's mainnet id, where the tests install an ICRC-1 ledger.
+fn icp_ledger() -> Principal {
+    Principal::from_text("ryjl3-tyaaa-aaaaa-aaaba-cai").unwrap()
+}
+
+const ICP_FEE: u64 = 10_000;
+const TOKEN_FEE: u64 = 10;
+const E8S: u64 = 100_000_000;
+
+/// The ICRC-1 ledger Wasm named by `ICRC1_LEDGER_WASM`, as CI downloads it.
+fn ledger_wasm() -> Vec<u8> {
+    let path = std::env::var("ICRC1_LEDGER_WASM").expect(
+        "ICRC1_LEDGER_WASM names ic-icrc1-ledger.wasm.gz from the dfinity/ic release \
+         ledger-suite-icrc-2025-09-01 (sha256 \
+         24e6b0b09ba44b1123453877994bb59ce75555c2e33f19f58163a3e0c6e62bd1)",
+    );
+    std::fs::read(&path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"))
+}
+
+#[derive(CandidType)]
+enum LedgerArg {
+    Init(LedgerInit),
+}
+
+#[derive(CandidType)]
+#[allow(dead_code)]
+enum MetadataValue {
+    Nat(candid::Nat),
+    Int(candid::Int),
+    Text(String),
+    Blob(ByteBuf),
+}
+
+#[derive(CandidType)]
+struct FeatureFlags {
+    icrc2: bool,
+}
+
+#[derive(CandidType)]
+struct ArchiveOptions {
+    num_blocks_to_archive: u64,
+    max_transactions_per_response: Option<u64>,
+    trigger_threshold: u64,
+    max_message_size_bytes: Option<u64>,
+    cycles_for_archive_creation: Option<u64>,
+    node_max_memory_size_bytes: Option<u64>,
+    controller_id: Principal,
+    more_controller_ids: Option<Vec<Principal>>,
+}
+
+#[derive(CandidType)]
+struct LedgerInit {
+    minting_account: LedgerAccount,
+    fee_collector_account: Option<LedgerAccount>,
+    transfer_fee: candid::Nat,
+    decimals: Option<u8>,
+    max_memo_length: Option<u16>,
+    token_symbol: String,
+    token_name: String,
+    metadata: Vec<(String, MetadataValue)>,
+    initial_balances: Vec<(LedgerAccount, candid::Nat)>,
+    feature_flags: Option<FeatureFlags>,
+    archive_options: ArchiveOptions,
+    index_principal: Option<Principal>,
+}
+
+/// Subaccount `index` of the wallet, written out here as the mapping the
+/// wallet must use: none for 0, else `index` as 32 big-endian bytes.
+fn wallet_account(wallet: Principal, index: u32) -> LedgerAccount {
+    let subaccount = (index != 0).then(|| {
+        let mut bytes = [0; 32];
+        bytes[28..].copy_from_slice(&index.to_be_bytes());
+        bytes
+    });
+    LedgerAccount {
+        owner: wallet,
+        subaccount,
+    }
+}
+
+fn install_ledger(
+    pic: &PocketIc,
+    id: Principal,
+    symbol: &str,
+    fee: u64,
+    balances: Vec<(LedgerAccount, u64)>,
+) {
+    pic.add_cycles(id, 2_000_000_000_000);
+    let init = LedgerInit {
+        minting_account: LedgerAccount::from(user(100)),
+        fee_collector_account: None,
+        transfer_fee: fee.into(),
+        decimals: Some(8),
+        max_memo_length: Some(32),
+        token_symbol: symbol.to_string(),
+        token_name: symbol.to_string(),
+        metadata: vec![],
+        initial_balances: balances
+            .into_iter()
+            .map(|(account, amount)| (account, amount.into()))
+            .collect(),
+        feature_flags: Some(FeatureFlags { icrc2: false }),
+        archive_options: ArchiveOptions {
+            num_blocks_to_archive: 1_000,
+            max_transactions_per_response: None,
+            trigger_threshold: 2_000,
+            max_message_size_bytes: None,
+            cycles_for_archive_creation: None,
+            node_max_memory_size_bytes: None,
+            controller_id: user(100),
+            more_controller_ids: None,
+        },
+        index_principal: None,
+    };
+    pic.install_canister(
+        id,
+        ledger_wasm(),
+        encode_one(LedgerArg::Init(init)).unwrap(),
+        None,
+    );
+}
+
+/// A claimed wallet on an application subnet, the ICP ledger at its mainnet
+/// id on the NNS subnet, and an ICRC token ledger on the wallet's subnet. The
+/// wallet's ICP account 0 holds 5 ICP and its token account 0 holds 1,000.
+struct Ledgers {
+    pic: PocketIc,
+    wallet: Principal,
+    owner: Principal,
+    token: Principal,
+}
+
+fn wallet_with_ledgers() -> Ledgers {
+    let pic = PocketIcBuilder::new()
+        .with_nns_subnet()
+        .with_application_subnet()
+        .build();
+    let subnet = pic.topology().get_app_subnets()[0];
+    let wallet = pic.create_canister_on_subnet(None, None, subnet);
+    pic.add_cycles(wallet, 2_000_000_000_000);
+    try_install(&pic, wallet, &WalletArg::Init(init_args(&pic))).unwrap();
+    let owner = user(7);
+    claim(&pic, wallet, owner, claim_signature(wallet, owner)).unwrap();
+
+    pic.create_canister_with_id(None, None, icp_ledger())
+        .unwrap();
+    install_ledger(
+        &pic,
+        icp_ledger(),
+        "ICP",
+        ICP_FEE,
+        vec![(wallet_account(wallet, 0), 5 * E8S)],
+    );
+    let token = pic.create_canister_on_subnet(None, None, subnet);
+    install_ledger(
+        &pic,
+        token,
+        "TKN",
+        TOKEN_FEE,
+        vec![(wallet_account(wallet, 0), 1_000)],
+    );
+    Ledgers {
+        pic,
+        wallet,
+        owner,
+        token,
+    }
+}
+
+fn add_account(
+    pic: &PocketIc,
+    id: Principal,
+    caller: Principal,
+    chain: Chain,
+    label: &str,
+) -> Result<Account, WalletError> {
+    let args = AddAccountArgs {
+        chain,
+        label: label.to_string(),
+    };
+    update(pic, id, caller, "add_account", &args)
+}
+
+fn accounts(pic: &PocketIc, id: Principal, caller: Principal) -> Vec<Account> {
+    query::<Result<Vec<Account>, WalletError>>(pic, id, caller, "accounts").unwrap()
+}
+
+fn balance(
+    pic: &PocketIc,
+    id: Principal,
+    caller: Principal,
+    account: u32,
+) -> Result<u64, WalletError> {
+    update::<Result<Balance, WalletError>>(pic, id, caller, "balance", &account).map(|balance| {
+        assert_eq!(balance.account, account);
+        u64::try_from(balance.amount.0).unwrap()
+    })
+}
+
+/// The balance of `account`, asked of the ledger directly.
+fn ledger_balance(pic: &PocketIc, ledger: Principal, account: LedgerAccount) -> u64 {
+    let reply = pic
+        .query_call(
+            ledger,
+            Principal::anonymous(),
+            "icrc1_balance_of",
+            encode_one(account).unwrap(),
+        )
+        .expect("icrc1_balance_of answers");
+    u64::try_from(decode_one::<candid::Nat>(&reply).unwrap().0).unwrap()
+}
+
+fn transfer_action(from: u32, to: LedgerAccount, amount: u64) -> Action {
+    Action::Transfer(TransferRequest {
+        from,
+        to: to.to_string(),
+        amount: amount.into(),
+        fee: None,
+        memo: None,
+    })
+}
+
+/// Executes a ready transfer and returns its ledger block.
+fn send(pic: &PocketIc, id: Principal, caller: Principal, action: ActionId) -> u64 {
+    let executed = act(pic, id, caller, "execute", action).unwrap();
+    let ActionState::Executed(Outcome::Sent(receipt)) = executed.state else {
+        panic!("not sent: {executed:?}");
+    };
+    receipt.tx_id.parse().unwrap()
+}
+
+#[test]
+fn accounts_are_the_wallets_principal_and_its_subaccounts() {
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    let viewer = user(9);
+    run_at_once(&pic, id, owner, add_member_action(viewer, Role::Viewer));
+    let token = Principal::from_text("mxzaz-hqaaa-aaaar-qaada-cai").unwrap();
+
+    let main = add_account(&pic, id, owner, Chain::Icp, "main").unwrap();
+    assert_eq!(
+        main,
+        Account {
+            id: 1,
+            chain: Chain::Icp,
+            label: "main".to_string(),
+            index: 0,
+            holder: AccountHolder::Wallet,
+            address: id.to_text(),
+        }
+    );
+    let savings = add_account(&pic, id, owner, Chain::Icp, "savings").unwrap();
+    assert_eq!((savings.id, savings.index), (2, 1));
+    assert_eq!(savings.address, wallet_account(id, 1).to_string());
+    let tokens = add_account(&pic, id, owner, Chain::Icrc(token), "tokens").unwrap();
+    assert_eq!((tokens.id, tokens.index), (3, 0));
+    assert_eq!(tokens.address, id.to_text());
+
+    let refused = [
+        (Chain::Bitcoin(wallet::BitcoinNetwork::Regtest), "btc"),
+        (Chain::Evm(1), "eth"),
+        (Chain::Icrc(icp_ledger()), "icp again"),
+        (Chain::Icrc(user(3)), "not a ledger"),
+        (Chain::Icp, ""),
+    ];
+    for (chain, label) in refused {
+        assert!(
+            matches!(
+                add_account(&pic, id, owner, chain.clone(), label),
+                Err(WalletError::InvalidArgument(_))
+            ),
+            "{chain:?}"
+        );
+    }
+    let reject = pic
+        .update_call(
+            id,
+            viewer,
+            "add_account",
+            encode_one(AddAccountArgs {
+                chain: Chain::Icp,
+                label: "mine".to_string(),
+            })
+            .unwrap(),
+        )
+        .unwrap_err();
+    assert_eq!(reject.reject_message, NOT_AN_OWNER);
+
+    let all = vec![main, savings, tokens];
+    assert_eq!(accounts(&pic, id, viewer), all);
+    upgrade(&pic, id, &WalletArg::Upgrade).unwrap();
+    assert_eq!(accounts(&pic, id, owner), all);
+    assert_eq!(
+        audit_since(&pic, id, owner, 3),
+        [
+            (Some(owner), AuditEvent::AccountAdded(1)),
+            (Some(owner), AuditEvent::AccountAdded(2)),
+            (Some(owner), AuditEvent::AccountAdded(3)),
+        ]
+    );
+}
+
+#[test]
+fn balance_asks_the_ledger_for_the_accounts_subaccount() {
+    let Ledgers {
+        pic,
+        wallet,
+        owner,
+        token,
+    } = wallet_with_ledgers();
+    let viewer = user(9);
+    run_at_once(&pic, wallet, owner, add_member_action(viewer, Role::Viewer));
+    add_account(&pic, wallet, owner, Chain::Icp, "main").unwrap();
+    add_account(&pic, wallet, owner, Chain::Icp, "savings").unwrap();
+    add_account(&pic, wallet, owner, Chain::Icrc(token), "tokens").unwrap();
+
+    assert_eq!(balance(&pic, wallet, viewer, 1), Ok(5 * E8S));
+    assert_eq!(balance(&pic, wallet, viewer, 2), Ok(0));
+    assert_eq!(balance(&pic, wallet, owner, 3), Ok(1_000));
+    assert_eq!(
+        balance(&pic, wallet, owner, 4),
+        Err(WalletError::NotFound("account 4".to_string()))
+    );
+
+    pic.stop_canister(token, None).unwrap();
+    assert!(matches!(
+        balance(&pic, wallet, owner, 3),
+        Err(WalletError::ChainError(reason)) if reason.contains("icrc1_balance_of")
+    ));
+    pic.start_canister(token, None).unwrap();
+    assert_eq!(balance(&pic, wallet, owner, 3), Ok(1_000));
+}
+
+#[test]
+fn a_transfer_sends_from_its_accounts_subaccount_once() {
+    let Ledgers {
+        pic, wallet, owner, ..
+    } = wallet_with_ledgers();
+    add_account(&pic, wallet, owner, Chain::Icp, "main").unwrap();
+    let savings = add_account(&pic, wallet, owner, Chain::Icp, "savings").unwrap();
+    let friend = LedgerAccount::from(user(20));
+    let before = audit(&pic, wallet, owner).len();
+
+    // From account 0 to the wallet's own subaccount 1, with a memo.
+    let to_savings = Action::Transfer(TransferRequest {
+        from: 1,
+        to: savings.address.clone(),
+        amount: (2 * E8S).into(),
+        fee: Some(ICP_FEE.into()),
+        memo: Some(ByteBuf::from(b"to savings".to_vec())),
+    });
+    let proposed = propose(&pic, wallet, owner, to_savings).unwrap();
+    assert_eq!(proposed.state, ActionState::Ready);
+    let executed = act(&pic, wallet, owner, "execute", proposed.id).unwrap();
+    let ActionState::Executed(Outcome::Sent(receipt)) = &executed.state else {
+        panic!("not sent: {executed:?}");
+    };
+    assert_eq!((receipt.account, &receipt.chain), (1, &Chain::Icp));
+    // Block 0 holds the initial balance.
+    assert_eq!(receipt.tx_id, "1");
+    assert_eq!(
+        ledger_balance(&pic, icp_ledger(), wallet_account(wallet, 1)),
+        2 * E8S
+    );
+    assert_eq!(
+        ledger_balance(&pic, icp_ledger(), wallet_account(wallet, 0)),
+        3 * E8S - ICP_FEE
+    );
+    assert!(matches!(
+        act(&pic, wallet, owner, "execute", proposed.id),
+        Err(WalletError::InvalidArgument(reason)) if reason.contains("already executed")
+    ));
+
+    // From subaccount 1 to someone else.
+    let proposed = propose(&pic, wallet, owner, transfer_action(2, friend, E8S)).unwrap();
+    assert_eq!(send(&pic, wallet, owner, proposed.id), 2);
+    assert_eq!(ledger_balance(&pic, icp_ledger(), friend), E8S);
+    assert_eq!(balance(&pic, wallet, owner, 2), Ok(E8S - ICP_FEE));
+    assert_eq!(
+        audit_since(&pic, wallet, owner, before),
+        [
+            (Some(owner), AuditEvent::Proposed(1)),
+            (Some(owner), AuditEvent::Executed(1)),
+            (Some(owner), AuditEvent::Proposed(2)),
+            (Some(owner), AuditEvent::Executed(2)),
+        ]
+    );
+}
+
+#[test]
+fn propose_checks_a_transfer() {
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    add_account(&pic, id, owner, Chain::Icp, "main").unwrap();
+    let friend = LedgerAccount::from(user(20)).to_string();
+    let request = |from, to: &str, amount: u64, memo: usize| {
+        Action::Transfer(TransferRequest {
+            from,
+            to: to.to_string(),
+            amount: amount.into(),
+            fee: None,
+            memo: Some(ByteBuf::from(vec![1; memo])),
+        })
+    };
+    assert_eq!(
+        propose(&pic, id, owner, request(2, &friend, 1, 0)),
+        Err(WalletError::NotFound("account 2".to_string()))
+    );
+    for action in [
+        request(1, "someone", 1, 0),
+        request(1, &Principal::anonymous().to_text(), 1, 0),
+        request(1, &friend, 0, 0),
+        request(1, &friend, 1, 33),
+    ] {
+        assert!(
+            matches!(
+                propose(&pic, id, owner, action.clone()),
+                Err(WalletError::InvalidArgument(_))
+            ),
+            "{action:?}"
+        );
+    }
+    assert!(propose(&pic, id, owner, request(1, &friend, 1, 32)).is_ok());
+}
+
+#[test]
+fn a_transfer_to_a_stopped_ledger_stays_ready_and_is_sent_once_it_runs() {
+    let Ledgers {
+        pic,
+        wallet,
+        owner,
+        token,
+    } = wallet_with_ledgers();
+    add_account(&pic, wallet, owner, Chain::Icrc(token), "tokens").unwrap();
+    let friend = LedgerAccount::from(user(20));
+    let proposed = propose(&pic, wallet, owner, transfer_action(1, friend, 100)).unwrap();
+
+    pic.stop_canister(token, None).unwrap();
+    assert!(matches!(
+        act(&pic, wallet, owner, "execute", proposed.id),
+        Err(WalletError::ChainError(reason)) if reason.contains("icrc1_transfer")
+    ));
+    assert_eq!(pending(&pic, wallet, owner)[0].state, ActionState::Ready);
+
+    pic.start_canister(token, None).unwrap();
+    send(&pic, wallet, owner, proposed.id);
+    assert_eq!(ledger_balance(&pic, token, friend), 100);
+    assert_eq!(
+        ledger_balance(&pic, token, wallet_account(wallet, 0)),
+        1_000 - 100 - TOKEN_FEE
+    );
+}
+
+#[test]
+fn a_second_execute_while_the_first_is_in_flight_is_refused() {
+    let Ledgers {
+        pic, wallet, owner, ..
+    } = wallet_with_ledgers();
+    add_account(&pic, wallet, owner, Chain::Icp, "main").unwrap();
+    let friend = LedgerAccount::from(user(20));
+    let proposed = propose(&pic, wallet, owner, transfer_action(1, friend, E8S)).unwrap();
+
+    let execute = || {
+        pic.submit_call(wallet, owner, "execute", encode_one(proposed.id).unwrap())
+            .unwrap()
+    };
+    let (first, second) = (execute(), execute());
+    let decode = |reply: Vec<u8>| decode_one::<PendingResult>(&reply).unwrap();
+    let mut results = [
+        decode(pic.await_call(first).unwrap()),
+        decode(pic.await_call(second).unwrap()),
+    ];
+    // Either message may run first.
+    results.sort_by_key(|result| result.is_err());
+    assert!(
+        matches!(&results[0], Ok(pending) if matches!(pending.state, ActionState::Executed(Outcome::Sent(_)))),
+        "{results:?}"
+    );
+    assert!(
+        matches!(&results[1], Err(WalletError::InvalidArgument(reason)) if reason.contains("in flight")),
+        "{results:?}"
+    );
+    assert_eq!(ledger_balance(&pic, icp_ledger(), friend), E8S);
+}
+
+#[test]
+fn a_transfer_the_ledger_refuses_fails() {
+    let Ledgers {
+        pic, wallet, owner, ..
+    } = wallet_with_ledgers();
+    add_account(&pic, wallet, owner, Chain::Icp, "main").unwrap();
+    let friend = LedgerAccount::from(user(20));
+
+    let too_much = propose(&pic, wallet, owner, transfer_action(1, friend, 5 * E8S)).unwrap();
+    let failed = act(&pic, wallet, owner, "execute", too_much.id).unwrap();
+    assert_eq!(
+        failed.state,
+        ActionState::Failed(format!(
+            "the account holds {}, less than the amount and the fee",
+            5 * E8S
+        ))
+    );
+
+    let wrong_fee = Action::Transfer(TransferRequest {
+        from: 1,
+        to: friend.to_string(),
+        amount: E8S.into(),
+        fee: Some(1u8.into()),
+        memo: None,
+    });
+    let wrong_fee = propose(&pic, wallet, owner, wrong_fee).unwrap();
+    let failed = act(&pic, wallet, owner, "execute", wrong_fee.id).unwrap();
+    assert_eq!(
+        failed.state,
+        ActionState::Failed(format!("the ledger's fee is {ICP_FEE}"))
+    );
+    assert_eq!(balance(&pic, wallet, owner, 1), Ok(5 * E8S));
+    let entries = audit(&pic, wallet, owner);
+    assert_eq!(
+        entries[entries.len() - 2..],
+        [
+            (Some(owner), AuditEvent::Proposed(wrong_fee.id)),
+            (Some(owner), AuditEvent::Executed(wrong_fee.id)),
+        ]
+    );
+}
+
+/// Sets a Transfer rule of one approval and a day's timelock, with a daily
+/// limit of 2 ICP, which takes the SetPolicy timelock of seven days.
+fn icp_daily_limit(pic: &PocketIc, id: Principal, owner: Principal) {
+    let mut policy = policy(pic, id, owner);
+    let rule = policy
+        .rules
+        .iter_mut()
+        .find(|rule| rule.kind == ActionKind::Transfer)
+        .unwrap();
+    rule.timelock_ns = DAY_NS;
+    rule.daily_limits = vec![DailyLimit {
+        chain: Chain::Icp,
+        amount: (2 * E8S).into(),
+    }];
+    let proposed = propose(pic, id, owner, Action::SetPolicy(policy)).unwrap();
+    pic.advance_time(Duration::from_nanos(7 * DAY_NS));
+    act(pic, id, owner, "execute", proposed.id).unwrap();
+}
+
+#[test]
+fn the_daily_limit_releases_small_transfers_at_once() {
+    let Ledgers {
+        pic, wallet, owner, ..
+    } = wallet_with_ledgers();
+    add_account(&pic, wallet, owner, Chain::Icp, "main").unwrap();
+    icp_daily_limit(&pic, wallet, owner);
+    let friend = LedgerAccount::from(user(20));
+    let at_once = |pending: &Pending| pending.executable_after_ns == pending.proposed_at_ns;
+
+    let first = propose(&pic, wallet, owner, transfer_action(1, friend, 3 * E8S / 2)).unwrap();
+    assert!(at_once(&first));
+    send(&pic, wallet, owner, first.id);
+    // 1.5 sent and 0.4 open stay within 2 ICP; 0.2 more would not.
+    let second = propose(&pic, wallet, owner, transfer_action(1, friend, 2 * E8S / 5)).unwrap();
+    assert!(at_once(&second));
+    let third = propose(&pic, wallet, owner, transfer_action(1, friend, E8S / 5)).unwrap();
+    assert_eq!(third.executable_after_ns, third.proposed_at_ns + DAY_NS);
+    assert!(matches!(
+        act(&pic, wallet, owner, "execute", third.id),
+        Err(WalletError::TimelockActive { .. })
+    ));
+    send(&pic, wallet, owner, second.id);
+
+    // A day later the first two no longer count, and the third does.
+    pic.advance_time(Duration::from_nanos(DAY_NS + 1));
+    send(&pic, wallet, owner, third.id);
+    let fourth = propose(&pic, wallet, owner, transfer_action(1, friend, 3 * E8S / 2)).unwrap();
+    assert!(at_once(&fourth));
+    let fifth = propose(&pic, wallet, owner, transfer_action(1, friend, 2 * E8S / 5)).unwrap();
+    assert!(!at_once(&fifth));
+    send(&pic, wallet, owner, fourth.id);
+    assert_eq!(
+        ledger_balance(&pic, icp_ledger(), friend),
+        3 * E8S / 2 + 2 * E8S / 5 + E8S / 5 + 3 * E8S / 2
+    );
+}
+
+#[test]
+fn a_transfer_under_the_daily_limit_is_checked_again_when_it_runs() {
+    let Ledgers {
+        pic, wallet, owner, ..
+    } = wallet_with_ledgers();
+    add_account(&pic, wallet, owner, Chain::Icp, "main").unwrap();
+    icp_daily_limit(&pic, wallet, owner);
+    let mut lower = policy(&pic, wallet, owner);
+    for rule in &mut lower.rules {
+        for limit in &mut rule.daily_limits {
+            limit.amount = (E8S / 2).into();
+        }
+    }
+    let set_policy = propose(&pic, wallet, owner, Action::SetPolicy(lower)).unwrap();
+    pic.advance_time(Duration::from_nanos(7 * DAY_NS - HOUR_NS));
+    let friend = LedgerAccount::from(user(20));
+    let transfer = propose(&pic, wallet, owner, transfer_action(1, friend, E8S)).unwrap();
+    assert_eq!(transfer.executable_after_ns, transfer.proposed_at_ns);
+
+    pic.advance_time(Duration::from_nanos(HOUR_NS));
+    act(&pic, wallet, owner, "execute", set_policy.id).unwrap();
+    let failed = act(&pic, wallet, owner, "execute", transfer.id).unwrap();
+    assert!(
+        matches!(&failed.state, ActionState::Failed(reason) if reason.contains("no longer fits")),
+        "{failed:?}"
+    );
+    assert_eq!(ledger_balance(&pic, icp_ledger(), friend), 0);
 }

@@ -27,8 +27,8 @@ On a local network (icp-cli 1.2.0, ic-cdk 0.20.3), 2026-10-19 and 2026-10-20:
 
 Not proved yet: a chunked self-upgrade for a Wasm over the 2 MB message limit,
 and cycle costs on mainnet. The wallet's Wasm has been over that limit since
-step 7: 2.74 MB, or 656 KB gzipped (`gzip -9`), and the IC accepts a gzipped
-module. About 410 KB of its code is the glob matcher (`globset` and its regex
+step 7; at step 8 it is 3.09 MB, or 714 KB gzipped (`gzip -9`), and the IC
+accepts a gzipped module. About 410 KB of its code is the glob matcher (`globset` and its regex
 engine) that `ic-asset-certification` always pulls in.
 
 The wallet itself runs no JavaScript: its pages are prerendered at build and
@@ -165,15 +165,36 @@ action that the policy module releases only after its quorum and timelock.
 
 ### Send a transfer
 
-1. An owner calls `propose` with a `Transfer`. Under the daily limit the policy
-   releases it at once; above it, the action waits for approvals and its
-   timelock.
-2. Approvers call `approve` from their own devices; any owner can `reject`.
-3. On `execute` the chain adapter sends it. ICP and ICRC tokens move by a
-   ledger call from the wallet's own subaccount. Bitcoin and EVM transactions
-   are signed with threshold ECDSA on path `wallet / chain / index` and sent
-   through the Bitcoin canister or the EVM RPC canister.
-4. The page shows the new balance and history from calls the agent verifies;
+1. An owner adds an account with `add_account`: a chain and a label. It needs
+   no approval, since it moves nothing, and a wallet has at most 64 accounts.
+   ICP and ICRC accounts are ICRC-1 accounts of the wallet's own principal:
+   index `n` of a chain is subaccount `n` as 32 big-endian bytes, so index 0
+   is the plain principal ([decision 0002](decisions/0002-subaccounts.md)). The wallet reaches the ICP ledger through its
+   ICRC-1 interface, and an `Icrc` chain never names it, so ICP tokens have
+   one daily limit. `balance` asks the account's ledger.
+2. An owner calls `propose` with a `Transfer`. A chain's spending is what it
+   sent in the last 24 hours plus what its open transfers under the daily
+   limit may still send. A transfer that keeps it within the limit is
+   released at once; above it, the action waits for approvals and its
+   timelock. Under a Transfer rule of one approval and no timelock, the limit
+   changes nothing.
+3. Approvers call `approve` from their own devices; any owner can `reject`.
+4. On `execute` the chain adapter sends it, with one ledger call at a time. A
+   transfer under the daily limit is checked against it again first.
+5. ICP and ICRC tokens move by `icrc1_transfer` from the account's
+   subaccount, in a bounded-wait call with a `created_at_time`. When the
+   wallet cannot tell whether a call ran (it timed out, its answer does not
+   decode, or the wallet's code after it trapped), the action stays ready
+   and cannot be rejected, and the next `execute` reuses that
+   `created_at_time`: the ledger then answers with the earlier block instead
+   of sending again. Ledgers find a repeated transfer for 24 hours, so the
+   action stays open until 24 hours after that call. A refusal by the ledger
+   (too little in the account, a wrong fee) ends the action `Failed`; a call
+   that did not run (a stopped or busy ledger) leaves it ready.
+6. Bitcoin and EVM transactions are signed with threshold ECDSA on path
+   `wallet / chain / index` and sent through the Bitcoin canister or the EVM
+   RPC canister (step 9).
+7. The page shows the new balance and history from calls the agent verifies;
    the canister renders nothing.
 
 ### Install and use an extension
@@ -252,10 +273,10 @@ is never reused or renumbered, even after its store goes away; the audit log's
 | 0 | Config | claim key until claimed, release channel, release signer keys and threshold, factory | `StableCell` | Kept |
 | 1 | Policy | action kind to quorum, daily limit, timelock | `StableCell` | Kept; changed only by a `SetPolicy` action |
 | 2 | Members | principal to role, label, added at, added by | `StableBTreeMap` | Kept |
-| 3 | Accounts | account id to chain, label, derivation index, address | `StableBTreeMap` | Kept; addresses re-derivable from the path |
+| 3 | Accounts | account id to chain, label, derivation index, holder, added at and by; never deleted | `StableBTreeMap` | Kept; addresses derived from the index |
 | 4 | Pending actions | action id to action, approvals, earliest execution, state; never deleted, so an id never names another action | `StableBTreeMap` | Kept; timelocks keep running |
 | 5 | Extensions | extension canister id to origin, permissions, budgets, spent this window | `StableBTreeMap` | Kept |
-| 6 | History | account id and sequence to transfer record | `StableBTreeMap` | Kept |
+| 6 | History | sequence to a transfer the wallet sent: account, chain, recipient, amount, ledger block, action | `StableBTreeMap` | Kept; the daily limit reads its last 24 hours |
 | 7 and 8 | Audit log | sequence to entry | `StableLog` | Kept, append-only |
 | 9 | Upgrade state | idle, staged, installing or failed, with the expected hash | `StableCell` | Read first in `post_upgrade` |
 | 10 | Open actions | the ids of the pending actions still waiting or ready | `StableBTreeMap` | Kept |
@@ -264,7 +285,8 @@ Every stored value is Candid with optional new fields, so a release can add
 fields without a migration. A store a release adds is filled in by
 `post_upgrade` first: a wallet from before the policy store gets the default
 policy, and one from before the audit log starts an empty log, so its log
-begins at that upgrade. `post_upgrade` then decodes every stored value before
+begins at that upgrade. One from before step 8 starts with no accounts and no
+history. `post_upgrade` then decodes every stored value before
 it returns, so a release that cannot read the state traps there and the IC
 keeps the running version. CI installs the pull request's base, claims it and
 upgrades it to the change. Pages are not state: they are embedded in the
@@ -299,6 +321,8 @@ exists in canister memory, but whoever can install code can move every fund.
 | Strangers calling the wallet | Before the claim only `claim`, `status` and `http_request` answer; after it, also `whoami` and `request_join`. Every other method has a guard that rejects the call before its arguments are decoded unless the caller is a member (for `ext_request`, a registered extension) | Rejected update calls still cost the wallet cycles. Join requests are stored for good, but at most eight are open at once and each for an hour, so strangers add at most about 200 a day |
 | A dishonest replica answering a query | Every action and balance is an update call; pages are certified | Member lists and history read by query |
 | Node operators reading state | Keys are threshold keys held by the subnet; private notes and labels encrypted with vetKeys | Plaintext state stays readable without SEV |
+| A ledger call whose outcome the wallet never learns | Every retry reuses the call's `created_at_time`, so the ledger answers with the earlier block; the action stays open, and cannot be rejected, while the ledger can still find it | A transfer nobody executes again within 24 hours stays unknown to the wallet; the ledger holds the answer |
+| A broken or hostile ledger named by an owner | Ledger calls wait a bounded time, so no ledger can keep the wallet from stopping or upgrading; a ledger is asked only about its own token | It can report any balance or block for its own token |
 | Cycles running out | Long freezing threshold; low-balance banner and audit event; anyone can top up | A wallet nobody tops up is deleted |
 | Custom domain taken over | II derivation origin pinned to the `icp0.io` domain; a custom domain is only an alias | Users who sign in on a fake alias |
 

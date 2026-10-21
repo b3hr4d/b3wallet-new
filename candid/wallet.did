@@ -55,6 +55,8 @@ type AccountHolder = variant {
   Extension : principal;
 };
 
+// For ICP and ICRC, index n is the wallet's ICRC-1 subaccount n as 32
+// big-endian bytes; index 0 is the plain principal.
 type Account = record {
   id : AccountId;
   chain : Chain;
@@ -103,10 +105,13 @@ type ActionId = nat64;
 
 type TransferRequest = record {
   from : AccountId;
+  // For ICP and ICRC, an ICRC-1 account in its text form.
   to : text;
   // Base units of the account's chain.
   amount : nat;
+  // The ledger refuses a fee other than its own; none pays its own.
   fee : opt nat;
+  // At most 32 bytes.
   memo : opt blob;
 };
 
@@ -188,7 +193,9 @@ type Pending = record {
   // Zero until the action has its quorum; then the end of its timelock.
   executable_after_ns : nat64;
   // The end of the seven-day approval window (an hour for a join request);
-  // once the action has its quorum, seven days after its timelock ends.
+  // once the action has its quorum, seven days after its timelock ends. A
+  // transfer whose ledger call may have run stays open until 24 hours after
+  // that call, while the ledger can still find it.
   expires_at_ns : nat64;
   state : ActionState;
 };
@@ -263,6 +270,7 @@ type Status = record {
 type AuditEvent = variant {
   Claimed;
   JoinRequested : principal;
+  AccountAdded : AccountId;
   Proposed : ActionId;
   Approved : ActionId;
   Rejected : ActionId;
@@ -354,7 +362,7 @@ service : (WalletArg) -> {
   // that adds the caller as a Viewer. Asking again returns the open request.
   request_join : (text) -> (PendingResult);
 
-  // Accounts.
+  // Accounts. add_account is for owners and needs no approval: it moves nothing.
   accounts : () -> (AccountsResult) query;
   add_account : (AddAccountArgs) -> (AccountResult);
   // Update: asks the ledger, the Bitcoin canister or the EVM RPC canister.
@@ -365,6 +373,8 @@ service : (WalletArg) -> {
   propose : (Action) -> (PendingResult);
   approve : (ActionId) -> (PendingResult);
   reject : (ActionId) -> (PendingResult);
+  // A transfer makes one ledger call at a time; a second execute while it is
+  // in flight is refused.
   execute : (ActionId) -> (PendingResult);
   pending : () -> (PendingListResult) query;
   policy : () -> (PolicyResult) query;

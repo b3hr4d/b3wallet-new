@@ -6,11 +6,14 @@
 //! Stored values are Candid. A release may add a field to a stored record only
 //! as an `opt` field, so the values an earlier release wrote still decode.
 
+use crate::accounts::StoredAccount;
 use crate::actions::StoredPending;
 use crate::governance::Governance;
 use crate::policy::default_policy;
-use crate::{ActionId, ActionState, AuditEntry, AuditEvent, InitArgs, Member, Policy, Role};
-use candid::{CandidType, Principal, decode_one, encode_one};
+use crate::{
+    AccountId, ActionId, ActionState, AuditEntry, AuditEvent, Chain, InitArgs, Member, Policy, Role,
+};
+use candid::{CandidType, Nat, Principal, decode_one, encode_one};
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager, VirtualMemory};
 use ic_stable_structures::storable::Bound;
 use ic_stable_structures::{DefaultMemoryImpl, StableBTreeMap, StableCell, StableLog, Storable};
@@ -25,7 +28,9 @@ type Memory = VirtualMemory<DefaultMemoryImpl>;
 const CONFIG_MEMORY: MemoryId = MemoryId::new(0);
 const POLICY_MEMORY: MemoryId = MemoryId::new(1);
 const MEMBERS_MEMORY: MemoryId = MemoryId::new(2);
+const ACCOUNTS_MEMORY: MemoryId = MemoryId::new(3);
 const PENDING_MEMORY: MemoryId = MemoryId::new(4);
+const HISTORY_MEMORY: MemoryId = MemoryId::new(6);
 const AUDIT_INDEX_MEMORY: MemoryId = MemoryId::new(7);
 const AUDIT_DATA_MEMORY: MemoryId = MemoryId::new(8);
 const OPEN_MEMORY: MemoryId = MemoryId::new(10);
@@ -63,6 +68,19 @@ pub struct StoredAuditEntry {
     pub at_ns: u64,
     pub by: Option<Principal>,
     pub event: AuditEvent,
+}
+
+/// A transfer the wallet sent, stored under its sequence number.
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct StoredTransfer {
+    pub account: AccountId,
+    pub chain: Chain,
+    pub to: String,
+    pub amount: Nat,
+    /// The ledger block that holds it.
+    pub block: Nat,
+    pub at_ns: u64,
+    pub action: ActionId,
 }
 
 impl StoredMember {
@@ -116,9 +134,11 @@ macro_rules! candid_storable {
 candid_storable!(
     Config,
     Policy,
+    StoredAccount,
     StoredAuditEntry,
     StoredMember,
-    StoredPending
+    StoredPending,
+    StoredTransfer
 );
 
 fn to_candid<T: CandidType>(value: &T) -> Vec<u8> {
@@ -143,8 +163,15 @@ thread_local! {
     static MEMBERS: RefCell<StableBTreeMap<Principal, StoredMember, Memory>> =
         RefCell::new(StableBTreeMap::init(memory(MEMBERS_MEMORY)));
 
+    static ACCOUNTS: RefCell<StableBTreeMap<AccountId, StoredAccount, Memory>> =
+        RefCell::new(StableBTreeMap::init(memory(ACCOUNTS_MEMORY)));
+
     static PENDING: RefCell<StableBTreeMap<ActionId, StoredPending, Memory>> =
         RefCell::new(StableBTreeMap::init(memory(PENDING_MEMORY)));
+
+    /// The transfers the wallet sent, oldest first.
+    static HISTORY: RefCell<StableBTreeMap<u64, StoredTransfer, Memory>> =
+        RefCell::new(StableBTreeMap::init(memory(HISTORY_MEMORY)));
 
     /// The ids of the actions not yet executed, rejected, expired or failed,
     /// so finding them never reads the whole history.
@@ -234,6 +261,46 @@ pub fn save_governance(governance: &Governance) {
     if policy() != governance.policy {
         set_policy(governance.policy.clone());
     }
+}
+
+/// Stores a new account under the next id. Ids start at 1 and only grow, and
+/// accounts are never deleted.
+pub fn add_account(account: StoredAccount) -> AccountId {
+    ACCOUNTS.with_borrow_mut(|accounts| {
+        let id = accounts.last_key_value().map_or(1, |(last, _)| last + 1);
+        accounts.insert(id, account);
+        id
+    })
+}
+
+pub fn account(id: AccountId) -> Option<StoredAccount> {
+    ACCOUNTS.with_borrow(|accounts| accounts.get(&id))
+}
+
+/// Every account, in id order. A wallet has at most `MAX_ACCOUNTS`.
+pub fn accounts() -> Vec<(AccountId, StoredAccount)> {
+    ACCOUNTS.with_borrow(|accounts| accounts.iter().map(|entry| entry.into_pair()).collect())
+}
+
+/// Records a transfer the ledger holds.
+pub fn add_transfer(transfer: StoredTransfer) {
+    HISTORY.with_borrow_mut(|history| {
+        let seq = history.last_key_value().map_or(0, |(last, _)| last + 1);
+        history.insert(seq, transfer);
+    });
+}
+
+/// What the wallet sent on `chain` at `since_ns` or later. It reads back
+/// from the newest transfer and stops at the first older one.
+pub fn sent_since(chain: &Chain, since_ns: u64) -> Nat {
+    HISTORY.with_borrow(|history| {
+        history
+            .values()
+            .rev()
+            .take_while(|transfer| transfer.at_ns >= since_ns)
+            .filter(|transfer| &transfer.chain == chain)
+            .fold(Nat::from(0u8), |sum, transfer| sum + transfer.amount)
+    })
 }
 
 /// Stores a new action under the next id. Ids start at 1 and only grow, and
@@ -343,7 +410,9 @@ pub fn check() -> Result<(), String> {
         return Err("stable memory holds no policy".to_string());
     }
     MEMBERS.with_borrow(|members| members.values().for_each(drop));
+    ACCOUNTS.with_borrow(|accounts| accounts.values().for_each(drop));
     PENDING.with_borrow(|actions| actions.values().for_each(drop));
+    HISTORY.with_borrow(|history| history.values().for_each(drop));
     AUDIT.with_borrow(|log| log.iter().for_each(drop));
     if let Some(id) = OPEN.with_borrow(|open| open.keys().find(|id| action(*id).is_none())) {
         return Err(format!("open action {id} is not stored"));
@@ -485,6 +554,7 @@ mod tests {
             Terms {
                 quorum: 1,
                 timelock_ns: 0,
+                daily_limit: false,
             },
             APPROVAL_WINDOW_NS,
             proposed_at_ns,

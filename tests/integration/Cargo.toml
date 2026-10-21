@@ -12,6 +12,7 @@ candid_parser.workspace = true
 ed25519-dalek.workspace = true
 ic-http-certification.workspace = true
 ic-response-verification.workspace = true
+icrc-ledger-types.workspace = true
 pocket-ic.workspace = true
 serde_bytes.workspace = true
 wallet = { path = "../../canisters/wallet" }

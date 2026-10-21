@@ -15,6 +15,10 @@ env:
   # first download on 2026-10-20, so a changed binary fails the job.
   POCKET_IC_VERSION: 16.1.0
   POCKET_IC_SHA256: 131219d90dcf9bf6f3ed8ee02d8f55504ea24a6db382f5680675b7bd6b7ed3bf
+  # The ICRC-1 ledger the PocketIC tests install as the ICP ledger and as a
+  # token. The checksum is the one the release lists in its SHA256SUMS.
+  ICRC1_LEDGER_RELEASE: ledger-suite-icrc-2025-09-01
+  ICRC1_LEDGER_SHA256: 24e6b0b09ba44b1123453877994bb59ce75555c2e33f19f58163a3e0c6e62bd1
 
 jobs:
   wallet:
@@ -66,6 +70,13 @@ jobs:
           gunzip pocket-ic.gz
           chmod +x pocket-ic
           echo "POCKET_IC_BIN=${PWD}/pocket-ic" >> "${GITHUB_ENV}"
+
+      - name: Download the ICRC-1 ledger Wasm
+        run: |
+          curl -sSfL -o ic-icrc1-ledger.wasm.gz \
+            "https://github.com/dfinity/ic/releases/download/${ICRC1_LEDGER_RELEASE}/ic-icrc1-ledger.wasm.gz"
+          echo "${ICRC1_LEDGER_SHA256}  ic-icrc1-ledger.wasm.gz" | sha256sum --check
+          echo "ICRC1_LEDGER_WASM=${PWD}/ic-icrc1-ledger.wasm.gz" >> "${GITHUB_ENV}"
 
       - name: PocketIC tests, with the upgrade from the previous release
         run: cargo test -p integration --locked -- --include-ignored
