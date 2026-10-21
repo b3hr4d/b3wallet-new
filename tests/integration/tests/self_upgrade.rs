@@ -8,15 +8,16 @@
 
 use candid::{CandidType, Deserialize, Principal, decode_one, encode_one};
 use ed25519_dalek::{Signer, SigningKey};
-use pocket_ic::PocketIc;
+use pocket_ic::{CreateCanisterParams, PocketIc};
 use release::channel::{ChannelArg, ChannelConfig, ChannelError};
 use release::{ReleaseManifest, sha256};
 use release_tool::chunk_args;
 use serde_bytes::ByteBuf;
 use std::time::Duration;
 use wallet::{
-    Action, ActionId, ActionState, AuditEntry, AuditEvent, AuditRequest, ClaimArgs, InitArgs,
-    Outcome, Pending, Role, Status, UpgradeState, WalletArg, WalletError,
+    Action, ActionId, ActionState, AuditEntry, AuditEvent, AuditRequest, ClaimArgs,
+    FIRST_RESEND_NS, InitArgs, MAX_INSTALL_SENDS, Outcome, Pending, Role, Status, UpgradeState,
+    WalletArg, WalletError, cycles_to_upgrade,
 };
 
 const HOUR_NS: u64 = 60 * 60 * 1_000_000_000;
@@ -114,6 +115,11 @@ struct Net {
 /// claimed wallet that pins the keys 1, 2 and 3, two of which must sign.
 /// The wallet is its own only controller unless `self_owned` is false.
 fn net(channel_signers: [u8; 3], self_owned: bool) -> Net {
+    net_with_cycles(channel_signers, self_owned, 200_000_000_000_000)
+}
+
+/// `net`, with a wallet given `cycles`.
+fn net_with_cycles(channel_signers: [u8; 3], self_owned: bool, cycles: u128) -> Net {
     let pic = PocketIc::new();
     let channel = pic.create_canister();
     pic.add_cycles(channel, 10_000_000_000_000);
@@ -132,8 +138,15 @@ fn net(channel_signers: [u8; 3], self_owned: bool) -> Net {
         None,
     );
 
-    let wallet = pic.create_canister();
-    pic.add_cycles(wallet, 100_000_000_000_000);
+    let wallet = pic
+        .create_canister_with_params(
+            None,
+            CreateCanisterParams {
+                cycles: Some(cycles),
+                ..CreateCanisterParams::default()
+            },
+        )
+        .unwrap();
     let args = InitArgs {
         claim_public_key: ByteBuf::from(claim_key().verifying_key().to_bytes()),
         claim_expires_at_ns: pic.get_time().as_nanos_since_unix_epoch() + DAY_NS,
@@ -316,6 +329,17 @@ impl Net {
         ));
         self.pic.advance_time(Duration::from_nanos(7 * DAY_NS + 1));
         proposed.id
+    }
+
+    /// The traps the wallet's log holds, one for each install of a release
+    /// whose `post_upgrade` traps.
+    fn traps(&self) -> usize {
+        self.pic
+            .fetch_canister_logs(self.wallet, self.wallet)
+            .unwrap()
+            .iter()
+            .filter(|record| record.content.starts_with(b"[TRAP]"))
+            .count()
     }
 
     /// The rounds in which the IC runs the install and the timer after it.
@@ -684,4 +708,83 @@ fn the_wallet_installs_only_once_its_calls_have_returned() {
             (None, AuditEvent::UpgradeInstalled("0.2.0".to_string())),
         ]
     );
+}
+
+#[test]
+fn an_install_the_old_version_outlives_is_sent_again_until_its_deadline() {
+    let net = net([1, 2, 3], true);
+    let first = wallet_wasm();
+    let broken = net.publish("0.9.0", &trapping_module(), vec![sha256(&first)], &[1, 2]);
+    let id = net.ready_upgrade(&broken);
+    net.act("execute", id).unwrap();
+    net.rounds();
+    assert_eq!(net.traps(), 1);
+    let UpgradeState::Installing { started_at_ns, .. } = net.upgrade_status() else {
+        panic!("the install is on its way");
+    };
+
+    // Each time the IC refuses it, the old version sends it again: 1, 3, 7,
+    // 15 and 31 minutes after the first send.
+    let advance_to = |at: u64| {
+        let now = net.pic.get_time().as_nanos_since_unix_epoch();
+        net.pic.advance_time(Duration::from_nanos(at - now));
+        net.rounds();
+    };
+    let mut sends = 1;
+    for minutes in [1, 3, 7, 15, 31] {
+        // Each round moves PocketIC's clock on a nanosecond: stop a second
+        // short.
+        advance_to(started_at_ns + minutes * FIRST_RESEND_NS - 1_000_000_000);
+        assert_eq!(net.traps(), sends, "not yet at {minutes} minutes");
+        advance_to(started_at_ns + minutes * FIRST_RESEND_NS);
+        sends += 1;
+        assert_eq!(net.traps(), sends, "sent again at {minutes} minutes");
+        assert!(matches!(
+            net.upgrade_status(),
+            UpgradeState::Installing { .. }
+        ));
+    }
+    assert_eq!(sends, MAX_INSTALL_SENDS as usize);
+
+    advance_to(started_at_ns + HOUR_NS);
+    assert_eq!(net.traps(), sends, "no send after the last");
+    assert!(matches!(net.upgrade_status(), UpgradeState::Failed { .. }));
+    assert_eq!(ended(&net, id), format!("action {id} is already failed"));
+    assert_eq!(net.module_hash(), sha256(&first));
+}
+
+#[test]
+fn an_upgrade_the_wallet_cannot_pay_for_stops_until_it_has_the_cycles() {
+    // Enough to install the wallet, which an empty canister keeps nothing
+    // back for, and not enough to stage and install a release with what the
+    // wallet then keeps to stay running.
+    let net = net_with_cycles([1, 2, 3], true, 360_000_000_000);
+    let first = wallet_wasm();
+    let wasm = release_of(&first, "0.2.0");
+    let release = net.publish("0.2.0", &wasm, vec![sha256(&first)], &[1, 2]);
+    let id = net.ready_upgrade(&release);
+
+    let chunks = release.chunk_hashes.len() as u32;
+    let refused = net.act("execute", id);
+    let Err(WalletError::InsufficientCycles { available, needed }) = refused else {
+        panic!("{refused:?}");
+    };
+    let available = u128::try_from(&available.0).unwrap();
+    let needed = u128::try_from(&needed.0).unwrap();
+    assert_eq!(needed, cycles_to_upgrade(chunks));
+    assert!(available < needed);
+    // Nothing staged, and the action still ready.
+    assert_eq!(net.upgrade_status(), UpgradeState::Idle);
+    assert_eq!(net.stored_chunks(), 0);
+
+    // Topped up by what it said it lacks, and a little for the calls before
+    // the check, the wallet stages the release, still has what the install
+    // needs, and the IC installs it: the needs the wallet checks are enough.
+    net.pic
+        .add_cycles(net.wallet, needed - available + 1_000_000_000);
+    let sent = net.act("execute", id).unwrap();
+    assert_eq!(sent.state, ActionState::Ready);
+    net.rounds();
+    assert_eq!(net.module_hash(), sha256(&wasm));
+    assert_eq!(net.upgrade_status(), UpgradeState::Idle);
 }

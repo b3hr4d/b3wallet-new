@@ -288,7 +288,7 @@ pub enum WalletError {
     UpgradeInProgress,
     ReleaseRejected(String),
     ChainError(String),
-    InsufficientCycles,
+    InsufficientCycles { available: Nat, needed: Nat },
 }
 
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]

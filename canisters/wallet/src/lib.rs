@@ -30,6 +30,7 @@ mod upgrade;
 pub use access::{NOT_A_MEMBER, NOT_AN_APPROVER, NOT_AN_OWNER, NOT_CLAIMED};
 pub use claim::message as claim_message;
 pub use types::*;
+pub use upgrade::{FIRST_RESEND_NS, MAX_INSTALL_SENDS, cycles_to_upgrade};
 
 use accounts::StoredAccount;
 use actions::{
@@ -993,6 +994,9 @@ async fn upgrade_steps(
     let total = u32::try_from(manifest.chunk_hashes.len()).expect("at most 100 chunks");
     let mut upgrade = storage::upgrade();
     let first = upgrade.stage(id, manifest.clone());
+    // The IC refuses an install the wallet cannot pay for, and only the
+    // one-way install's lost reply would hear it: stop before staging.
+    enough_cycles(upgrade::cycles_to_upgrade(total - first))?;
     let clear = upgrade.clear_store;
     storage::set_upgrade(upgrade);
     if clear {
@@ -1047,6 +1051,7 @@ async fn upgrade_steps(
              {waiting} of its calls; execute the upgrade again once they return"
         ))));
     }
+    enough_cycles(upgrade::INSTALL_CYCLES)?;
     let (chunk_hashes, module_hash) = match upgrade.install_hashes() {
         Some(hashes) if upgrade.is_staged() => hashes,
         _ => return Err(chain_error(format!("release {version} is not staged"))),
@@ -1058,6 +1063,19 @@ async fn upgrade_steps(
     pending.install_sent();
     storage::set_action(id, pending);
     schedule_timer(now);
+    Ok(())
+}
+
+/// Stops an upgrade unless the wallet can spend `needed` cycles above what it
+/// keeps to stay running.
+fn enough_cycles(needed: u128) -> Result<(), Step> {
+    let available = ic_cdk::api::canister_liquid_cycle_balance();
+    if available < needed {
+        return Err(Step::Stops(WalletError::InsufficientCycles {
+            available: Nat::from(available),
+            needed: Nat::from(needed),
+        }));
+    }
     Ok(())
 }
 
@@ -1092,10 +1110,11 @@ fn schedule_timer(now: u64) {
 /// How often the timer tries again to clear the chunk store.
 const CLEAR_RETRY_NS: u64 = 60 * 1_000_000_000;
 
-/// Ends an install past its deadline, and clears the chunk store once no
-/// release needs it.
+/// Ends an install past its deadline, sends one again when its turn comes,
+/// and clears the chunk store once no release needs it.
 fn on_timer(now: u64) {
     settle_upgrade(now);
+    resend_install(now);
     let mut upgrade = storage::upgrade();
     if upgrade.may_clear_store() {
         if management::clear_chunk_store_oneway().is_err() {
@@ -1106,6 +1125,27 @@ fn on_timer(now: u64) {
         storage::set_upgrade(upgrade);
     }
     schedule_timer(now);
+}
+
+/// Sends the install on its way again when its turn comes. This version
+/// still runs, so the IC refused the last send, as it does for a while after
+/// another install, or has not run it yet; then the new version installs
+/// again and its `post_upgrade` finds the upgrade done. A turn passes unused
+/// while a call waits for its answer or the wallet cannot pay for the
+/// install.
+fn resend_install(now: u64) {
+    let mut upgrade = storage::upgrade();
+    if !upgrade.resend(now) {
+        return;
+    }
+    if calls::in_flight() == 0
+        && ic_cdk::api::canister_liquid_cycle_balance() >= upgrade::INSTALL_CYCLES
+        && let Some((chunk_hashes, module_hash)) = upgrade.install_hashes()
+    {
+        // A send that cannot go out passes like an unused turn.
+        let _ = management::install(chunk_hashes, module_hash);
+    }
+    storage::set_upgrade(upgrade);
 }
 
 #[cfg_attr(target_family = "wasm", unsafe(export_name = "canister_global_timer"))]

@@ -69,6 +69,19 @@ export function chainAmountText(amount: bigint, chain: Chain): string {
   }
 }
 
+/** A hundredth of a trillion cycles, the step `cyclesText` rounds to. */
+const CENTI_TRILLION = 10_000_000_000n
+
+/**
+ * Cycles in trillions to two decimals, rounded `down` or `up`: "0.29T
+ * cycles".
+ */
+export function cyclesText(cycles: bigint, round: "down" | "up"): string {
+  const rest = cycles % CENTI_TRILLION
+  const up = round === "up" && rest > 0n ? CENTI_TRILLION : 0n
+  return `${formatUnits(cycles - rest + up, 12)}T cycles`
+}
+
 /** An amount in a token's base units, as text: `1.5 ICP`. */
 export function amountText(amount: bigint, token: Token): string {
   return `${formatUnits(amount, token.decimals)} ${token.symbol}`

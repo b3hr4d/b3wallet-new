@@ -31,9 +31,11 @@ keys signed its manifest and its chunks match the manifest
 ([decision 0004](docs/decisions/0004-release-signers.md)); `release-tool`
 makes and signs the manifests. A wallet installs a release on itself by an
 `Upgrade` action, once two of the three signer keys it pins signed the release
-and it was tested to upgrade from the version the wallet runs. A release
-whose upgrade traps leaves the version before it running and the upgrade
-marked `Failed`; nothing rescues a wallet from a release that breaks upgrades
+and it was tested to upgrade from the version the wallet runs. It checks
+first that it can pay for the install, and sends again an install the IC
+refused. A release whose upgrade traps leaves the version before it running
+and the upgrade marked `Failed`; nothing rescues a wallet from a release that
+breaks upgrades
 ([decision 0005](docs/decisions/0005-rescue-path.md)). A factory canister
 creates wallets: the cycles ledger takes a new wallet's cycles from its
 creator's account, the factory installs the channel's release once two of
@@ -267,6 +269,15 @@ one that stops keeps the chunks staged so far, and one made while the wallet
 waits for another call's answer stages everything but does not install.
 `upgrade_status` (and `status`) shows `Staging`, `Installing`, `Idle` once
 the new version runs, or `Failed` an hour after an install that did not run.
+
+The IC holds back about 0.3T cycles for an install, so the wallet must be able
+to spend 0.32T, plus 4B a chunk to stage, above what it keeps to stay running.
+Short of that, `execute` stops with `InsufficientCycles`, which says what it
+can spend and needs, and the action stays ready; anyone can top it up with
+`icp canister top-up --amount 0.2t <wallet id>`. The IC also refuses an
+install for a few seconds after another one, which the wallet's one-way call
+never hears, so the wallet sends the install again 1, 3, 7, 15 and 31 minutes
+later while it still runs the old version.
 
 ## Checking the schema
 

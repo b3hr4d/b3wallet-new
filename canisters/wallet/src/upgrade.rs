@@ -6,7 +6,9 @@
 //! The wallet has one chunk store, so one execution stages at a time. While
 //! the install is on its way the wallet starts no call: a reply that reached
 //! the new version would run a callback whose state went with the old heap.
-//! The new version's `post_upgrade` ends the upgrade `Idle`. An old version
+//! The new version's `post_upgrade` ends the upgrade `Idle`. The old version
+//! still running a while after the install was sent means the IC refused it
+//! or has not run it yet, and the old version sends it again a few times. One
 //! still running at the deadline means the install failed, and the upgrade
 //! ends `Failed`.
 
@@ -24,6 +26,34 @@ use serde_bytes::ByteBuf;
 /// deadline pass.
 pub const INSTALL_DEADLINE_NS: u64 = HOUR_NS;
 
+/// The cycles the wallet must be able to spend, above what it keeps to stay
+/// running, when it sends an install. The IC holds back what the install's
+/// instruction limit would cost and refuses the install when the canister
+/// cannot pay it. On icp-cli's local network, which charges as a 13-node
+/// subnet does, an install of a 4.4 MB release was refused at 290.9B and
+/// 12.9B short, so the IC wanted 303.7B; this leaves a margin of about 5%.
+pub const INSTALL_CYCLES: u128 = 320_000_000_000;
+
+/// What staging a chunk takes from the cycles the wallet can spend: fetching
+/// it from the channel, uploading it, and the larger reserve the bigger
+/// canister keeps. Five chunks took 18.7B on icp-cli's local network.
+pub const STAGE_CYCLES_PER_CHUNK: u128 = 4_000_000_000;
+
+/// When the old version first sends the install again. The IC refuses an
+/// install for a while after another one on the same canister: a few
+/// seconds on icp-cli's local network.
+pub const FIRST_RESEND_NS: u64 = 60 * 1_000_000_000;
+
+/// How many times the old version sends an install, the first included.
+/// Each send of a release whose `post_upgrade` traps costs a failed install.
+pub const MAX_INSTALL_SENDS: u32 = 6;
+
+/// The cycles the wallet needs before it stages `chunks` chunks and installs
+/// them.
+pub fn cycles_to_upgrade(chunks: u32) -> u128 {
+    INSTALL_CYCLES + STAGE_CYCLES_PER_CHUNK * u128::from(chunks)
+}
+
 /// The upgrade as stored: what the interface shows, and what staging and
 /// installing need.
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -40,6 +70,8 @@ pub struct StoredUpgrade {
     pub in_flight_since_ns: Option<u64>,
     /// Whether the chunk store holds chunks that no staging needs any more.
     pub clear_store: bool,
+    /// How many times the install on its way was sent; `None` while none is.
+    pub install_sends: Option<u32>,
 }
 
 impl Default for StoredUpgrade {
@@ -51,6 +83,7 @@ impl Default for StoredUpgrade {
             executions: 0,
             in_flight_since_ns: None,
             clear_store: false,
+            install_sends: None,
         }
     }
 }
@@ -210,6 +243,38 @@ impl StoredUpgrade {
             deadline_ns: now.saturating_add(INSTALL_DEADLINE_NS),
         };
         self.in_flight_since_ns = None;
+        self.install_sends = Some(1);
+    }
+
+    /// When the install on its way is due to be sent again: 1, 3, 7, 15 and
+    /// 31 minutes after the first send, before the deadline.
+    pub fn resend_at(&self) -> Option<u64> {
+        let UpgradeState::Installing {
+            started_at_ns,
+            deadline_ns,
+            ..
+        } = self.state
+        else {
+            return None;
+        };
+        let sends = self.install_sends.unwrap_or(1);
+        if sends >= MAX_INSTALL_SENDS {
+            return None;
+        }
+        let wait = FIRST_RESEND_NS.saturating_mul((1 << sends) - 1);
+        Some(started_at_ns.saturating_add(wait)).filter(|&at| at < deadline_ns)
+    }
+
+    /// Records that the install's turn to be sent again came at `now`,
+    /// whether or not it goes out, and passes any turn missed before it.
+    /// Returns whether a turn came.
+    pub fn resend(&mut self, now: u64) -> bool {
+        let mut due = false;
+        while self.resend_at().is_some_and(|at| at <= now) {
+            self.install_sends = Some(self.install_sends.unwrap_or(1) + 1);
+            due = true;
+        }
+        due
     }
 
     /// Ends an install that ran: the new version calls it from
@@ -222,6 +287,7 @@ impl StoredUpgrade {
         self.state = UpgradeState::Idle;
         self.manifest = None;
         self.clear_store = true;
+        self.install_sends = None;
         Some((self.action.take(), version))
     }
 
@@ -248,6 +314,7 @@ impl StoredUpgrade {
         };
         self.manifest = None;
         self.clear_store = true;
+        self.install_sends = None;
         Some((self.action.take(), version))
     }
 
@@ -270,11 +337,15 @@ impl StoredUpgrade {
         self.clear_store && matches!(self.state, UpgradeState::Idle | UpgradeState::Failed { .. })
     }
 
-    /// When the timer must run next: at the install's deadline, or at `now`
-    /// while the chunk store may be cleared.
+    /// When the timer must run next: when the install is due to be sent
+    /// again, at its deadline, or at `now` while the chunk store may be
+    /// cleared.
     pub fn wake_at(&self, now: u64) -> Option<u64> {
         match self.state {
-            UpgradeState::Installing { deadline_ns, .. } => Some(deadline_ns),
+            UpgradeState::Installing { deadline_ns, .. } => Some(
+                self.resend_at()
+                    .map_or(deadline_ns, |at| at.min(deadline_ns)),
+            ),
             _ => self.may_clear_store().then_some(now),
         }
     }
@@ -290,7 +361,8 @@ impl StoredUpgrade {
 pub fn failure(version: &str) -> String {
     format!(
         "release {version} did not finish installing: the version before it still runs, so \
-         the new version's post_upgrade trapped or the install was refused"
+         the new version's post_upgrade trapped or the IC refused each send of the install, \
+         as it does while the wallet cannot spend enough cycles"
     )
 }
 
@@ -424,7 +496,6 @@ mod tests {
         let mut upgrade = installing();
         assert!(upgrade.is_installing());
         assert_eq!(upgrade.begin(T0), Err(WalletError::UpgradeInProgress));
-        assert_eq!(upgrade.wake_at(T0), Some(T0 + INSTALL_DEADLINE_NS));
         assert_eq!(
             upgrade.clone().check_deadline(T0 + INSTALL_DEADLINE_NS - 1),
             None
@@ -434,6 +505,7 @@ mod tests {
         assert_eq!(done.installed(), Some((Some(7), "1.0.0".to_string())));
         assert_eq!(done.state, UpgradeState::Idle);
         assert!(done.clear_store);
+        assert_eq!(done.install_sends, None);
         assert_eq!(done.wake_at(T0 + 5), Some(T0 + 5));
         assert_eq!(done.installed(), None);
 
@@ -456,9 +528,76 @@ mod tests {
             }
         );
         assert!(upgrade.clear_store);
+        assert_eq!(upgrade.install_sends, None);
         assert_eq!(upgrade.check_deadline(deadline + 1), None);
         assert_eq!(upgrade.installed(), None);
         assert!(upgrade.begin(deadline).is_ok());
+    }
+
+    #[test]
+    fn an_install_is_sent_again_at_widening_intervals_until_its_deadline() {
+        let minute = FIRST_RESEND_NS;
+        let mut upgrade = installing();
+        assert_eq!(upgrade.install_sends, Some(1));
+        assert_eq!(upgrade.resend_at(), Some(T0 + minute));
+        assert_eq!(upgrade.wake_at(T0), Some(T0 + minute));
+        assert!(!upgrade.resend(T0 + minute - 1));
+        assert_eq!(upgrade.install_sends, Some(1));
+
+        let mut turns = Vec::new();
+        while let Some(at) = upgrade.resend_at() {
+            assert_eq!(upgrade.wake_at(at), Some(at));
+            assert!(upgrade.resend(at));
+            assert!(!upgrade.resend(at), "one send a turn");
+            turns.push((at - T0) / minute);
+        }
+        assert_eq!(turns, [1, 3, 7, 15, 31]);
+        assert_eq!(upgrade.install_sends, Some(MAX_INSTALL_SENDS));
+        assert_eq!(upgrade.wake_at(T0), Some(T0 + INSTALL_DEADLINE_NS));
+        assert!(!upgrade.resend(T0 + INSTALL_DEADLINE_NS));
+
+        // A late turn passes the turns it missed, so it sends once.
+        let mut late = installing();
+        assert!(late.resend(T0 + 5 * minute));
+        assert_eq!(late.install_sends, Some(3));
+        assert_eq!(late.resend_at(), Some(T0 + 7 * minute));
+        assert!(!late.resend(T0 + 5 * minute));
+
+        // Nothing is sent again outside an install.
+        let mut idle = StoredUpgrade::default();
+        assert_eq!(idle.resend_at(), None);
+        assert!(!idle.resend(T0 + HOUR_NS));
+    }
+
+    #[test]
+    fn an_upgrade_needs_the_install_and_the_staging_paid_for() {
+        assert_eq!(cycles_to_upgrade(0), INSTALL_CYCLES);
+        assert_eq!(cycles_to_upgrade(5), 340_000_000_000);
+    }
+
+    #[test]
+    fn an_upgrade_stored_before_install_sends_reads_with_none_sent() {
+        #[derive(CandidType)]
+        struct Before {
+            state: UpgradeState,
+            action: Option<ActionId>,
+            manifest: Option<ReleaseManifest>,
+            executions: u64,
+            in_flight_since_ns: Option<u64>,
+            clear_store: bool,
+        }
+        let before = Before {
+            state: UpgradeState::Idle,
+            action: None,
+            manifest: None,
+            executions: 3,
+            in_flight_since_ns: None,
+            clear_store: true,
+        };
+        let bytes = candid::encode_one(before).unwrap();
+        let read: StoredUpgrade = candid::decode_one(&bytes).unwrap();
+        assert_eq!(read.executions, 3);
+        assert_eq!(read.install_sends, None);
     }
 
     #[test]
