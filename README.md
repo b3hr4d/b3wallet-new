@@ -211,7 +211,7 @@ icp deploy factory --args '(variant { Init = record {
 ```
 
 A creator pays with cycles from their account on the cycles ledger. They let
-the factory take the wallet's cycles, at least 1T, and the ledger's fee of
+the factory take the wallet's cycles, at least 1.5T, and the ledger's fee of
 100M, then call `create_wallet` with the public half of a fresh Ed25519 claim
 key and when the claim expires, at least an hour away:
 
