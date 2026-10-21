@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query"
 import { useState } from "react"
 import { useWallet } from "./canister.ts"
 import {
+  actionDetails,
   actionText,
   canRun,
   failureText,
@@ -117,6 +118,7 @@ function OpenAction({
   const from = sourceOf(action, accounts)
   const { token } = useToken(from?.chain)
   const join = isJoinRequest(pending)
+  const details = actionDetails(action)
   const owner = me.role.tag === "Owner"
   const approves = owner || me.role.tag === "Approver"
   const approved = pending.approvals.includes(me.id)
@@ -126,6 +128,13 @@ function OpenAction({
         <strong>Action {String(pending.id)}</strong>
       </p>
       <p>{join ? joinRequestText(pending) : actionText(action, from, token)}.</p>
+      {details.length > 0 && (
+        <ul className="details">
+          {details.map((line, index) => (
+            <li key={index}>{line}</li>
+          ))}
+        </ul>
+      )}
       {join && (
         <>
           <p className="quiet">Approve it only if the device that asks shows this code:</p>

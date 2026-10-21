@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import {
+  actionDetails,
   actionText,
   canRun,
   isJoinRequest,
@@ -9,7 +10,7 @@ import {
   stateText,
 } from "../src/describe.ts"
 import type { Account, Action, Pending } from "../src/generated/wallet.ts"
-import { dateOf } from "../src/time.ts"
+import { dateOf, durationText } from "../src/time.ts"
 
 const owner = "fvski-cdv2h-g6ldz-eacds-4wfcf-px5sn-yfwv7-bwtxb-wvytu-cm3qa-sae" as never
 const device = "gxhcg-wz6ja-zbwh7-s6ha4-nnlhc-ya5hh-2dv23-dwksw-ujozj-ymkcv-tae" as never
@@ -130,4 +131,77 @@ test("an action that ended says how", () => {
     stateText({ ...transfer, state: { tag: "Failed", value: "no funds" } }, NOW),
     "Failed: no funds",
   )
+})
+
+test("a long wait reads in days down to seconds", () => {
+  assert.equal(durationText(0n), "no time")
+  assert.equal(durationText(1n), "under a second")
+  assert.equal(durationText(7n * 86_400n * SECOND), "7 days")
+  assert.equal(durationText(86_400n * SECOND + 3_600n * SECOND), "1 day and 1 hour")
+  assert.equal(
+    durationText(2n * 3_600n * SECOND + 90n * SECOND),
+    "2 hours, 1 minute and 30 seconds",
+  )
+})
+
+test("an action shows what it sets beyond its sentence", () => {
+  const day = 86_400n * SECOND
+  const policy: Action = {
+    tag: "SetPolicy",
+    value: {
+      rules: [
+        {
+          kind: { tag: "Transfer" },
+          quorum: 2,
+          timelock_ns: 0n,
+          daily_limits: [{ chain: { tag: "Icp" }, amount: 100_000_000n }],
+        },
+        { kind: { tag: "SetPolicy" }, quorum: 2, timelock_ns: 7n * day, daily_limits: [] },
+      ],
+    },
+  }
+  assert.deepEqual(actionDetails(policy), [
+    "A transfer: 2 approvals and no wait.",
+    "A transfer that keeps the last 24 hours' spending on ICP within 1 ICP needs only its proposer and no wait.",
+    "Changing the policy: 2 approvals and a wait of 7 days.",
+  ])
+  const ledger = "mxzaz-hqaaa-aaaar-qaada-cai" as never
+  const extension: Action = {
+    tag: "InstallExtension",
+    value: {
+      canister: ledger,
+      granted: [{ tag: "ReadAccounts" }, { tag: "SpendSubWallet", value: { tag: "Icp" } }],
+      budgets: [
+        { chain: { tag: "Bitcoin", value: { tag: "Mainnet" } }, per_day: 50_000n, total: null },
+        { chain: { tag: "Icrc", value: ledger }, per_day: 7n, total: 70n },
+      ],
+    },
+  }
+  assert.deepEqual(actionDetails(extension), [
+    "It may read the accounts and their balances.",
+    "It may spend from its own sub-wallet on ICP.",
+    "On Bitcoin, it may spend 0.0005 BTC a day.",
+    `On ICRC-1 token of ledger ${ledger}, it may spend 7 base units a day and 70 base units in all.`,
+  ])
+  assert.deepEqual(
+    actionDetails({
+      tag: "InstallExtension",
+      value: { canister: ledger, granted: [], budgets: [] },
+    }),
+    ["It is granted nothing."],
+  )
+  assert.deepEqual(
+    actionDetails({
+      tag: "Upgrade",
+      value: { version: "0.2.0", wasm_sha256: new Uint8Array([0, 1, 0xab, 0xff]) },
+    }),
+    ["The new version's Wasm has the SHA-256 0001abff."],
+  )
+  const memo: Action = {
+    tag: "Transfer",
+    value: { from: 1, to: owner, amount: 1n, fee: null, memo: new Uint8Array([0x0a, 0x0b]) },
+  }
+  assert.deepEqual(actionDetails(memo), ["Memo: 0a0b."])
+  assert.deepEqual(actionDetails(transfer.action), [])
+  assert.deepEqual(actionDetails({ tag: "RemoveMember", value: owner }), [])
 })

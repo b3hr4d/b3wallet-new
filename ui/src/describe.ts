@@ -1,8 +1,19 @@
 import { isReactorError, type ReactorError } from "@ic-reactor/core"
 import { AgentError, CertifiedRejectErrorCode } from "@icp-sdk/core/agent"
-import type { Account, Action, Pending, Role, TxReceipt, WalletError } from "./generated/wallet.ts"
-import { dateOf } from "./time.ts"
-import { amountText, type Token } from "./tokens.ts"
+import type {
+  Account,
+  Action,
+  ActionKind,
+  Budget,
+  Pending,
+  Permission,
+  PolicyRule,
+  Role,
+  TxReceipt,
+  WalletError,
+} from "./generated/wallet.ts"
+import { dateOf, durationText } from "./time.ts"
+import { amountText, chainAmountText, chainText, type Token } from "./tokens.ts"
 
 /** What a refusal of the wallet means, in a sentence. */
 export function walletErrorText(error: WalletError): string {
@@ -126,6 +137,77 @@ export function actionText(
     case "Upgrade":
       return `Upgrade the wallet to version ${action.value.version}`
   }
+}
+
+/**
+ * What an action sets beyond what `actionText` says, a sentence a line, so a
+ * member sees all of it before approving: a transfer's memo, an extension's
+ * permissions and budgets, a policy's rules and an upgrade's Wasm hash.
+ */
+export function actionDetails(action: Action): string[] {
+  switch (action.tag) {
+    case "Transfer":
+      return action.value.memo === null ? [] : [`Memo: ${hexOf(action.value.memo)}.`]
+    case "InstallExtension": {
+      const { granted, budgets } = action.value
+      if (granted.length === 0 && budgets.length === 0) return ["It is granted nothing."]
+      return [...granted.map(permissionText), ...budgets.map(budgetText)]
+    }
+    case "SetPolicy":
+      return action.value.rules.flatMap(ruleText)
+    case "Upgrade":
+      return [`The new version's Wasm has the SHA-256 ${hexOf(action.value.wasm_sha256)}.`]
+    case "AddMember":
+    case "RemoveMember":
+    case "ChangeRole":
+    case "UninstallExtension":
+      return []
+  }
+}
+
+function permissionText(permission: Permission): string {
+  switch (permission.tag) {
+    case "ReadAccounts":
+      return "It may read the accounts and their balances."
+    case "ProposeTransfer":
+      return "It may propose transfers."
+    case "SpendSubWallet":
+      return `It may spend from its own sub-wallet on ${chainText(permission.value)}.`
+  }
+}
+
+function budgetText(budget: Budget): string {
+  const perDay = `${chainAmountText(budget.per_day, budget.chain)} a day`
+  const total =
+    budget.total === null ? "" : ` and ${chainAmountText(budget.total, budget.chain)} in all`
+  return `On ${chainText(budget.chain)}, it may spend ${perDay}${total}.`
+}
+
+function ruleText(rule: PolicyRule): string[] {
+  const approvals = `${rule.quorum} approval${rule.quorum === 1 ? "" : "s"}`
+  const wait = rule.timelock_ns === 0n ? "no wait" : `a wait of ${durationText(rule.timelock_ns)}`
+  return [
+    `${KIND_TEXT[rule.kind.tag]}: ${approvals} and ${wait}.`,
+    ...rule.daily_limits.map(
+      (limit) =>
+        `A transfer that keeps the last 24 hours' spending on ${chainText(limit.chain)} within ${chainAmountText(limit.amount, limit.chain)} needs only its proposer and no wait.`,
+    ),
+  ]
+}
+
+const KIND_TEXT: Record<ActionKind["tag"], string> = {
+  Transfer: "A transfer",
+  AddMember: "Adding a member",
+  RemoveMember: "Removing a member",
+  ChangeRole: "Changing a role",
+  InstallExtension: "Installing an extension",
+  UninstallExtension: "Uninstalling an extension",
+  SetPolicy: "Changing the policy",
+  Upgrade: "An upgrade",
+}
+
+function hexOf(bytes: Uint8Array): string {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
 }
 
 /** The account a transfer sends from, once `accounts` are read. */

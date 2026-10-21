@@ -53,6 +53,22 @@ export function tokenOf(
   }
 }
 
+/**
+ * An amount on a chain, as text, where no account names the token: ICP and
+ * Bitcoin in their symbols, another ledger's token in its base units.
+ */
+export function chainAmountText(amount: bigint, chain: Chain): string {
+  switch (chain.tag) {
+    case "Icp":
+      return amountText(amount, { symbol: "ICP", decimals: 8, fee: null })
+    case "Bitcoin":
+      return amountText(amount, bitcoinToken(chain.value))
+    case "Icrc":
+    case "Evm":
+      return `${amount} base units`
+  }
+}
+
 /** An amount in a token's base units, as text: `1.5 ICP`. */
 export function amountText(amount: bigint, token: Token): string {
   return `${formatUnits(amount, token.decimals)} ${token.symbol}`
