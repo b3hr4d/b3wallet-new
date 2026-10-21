@@ -5,7 +5,8 @@ its own certified UI, keeps its accounts and approval policy, signs with
 threshold keys, is its own only controller, and upgrades itself only to a
 release its owners approved.
 
-**Status: step 13 of [the v0 plan](docs/plan-v0.md).** The wallet canister
+**Status: step 14 of [the v0 plan](docs/plan-v0.md), the
+[mainnet gate](docs/mainnet-gate.md).** The wallet canister
 installs, keeps its state in stable memory across upgrades, answers `status`,
 can be claimed once by its first owner, and shows its member list only to its
 members. Members change members and the policy through actions that wait for
@@ -74,6 +75,7 @@ design, in [docs/design.md](docs/design.md).
 | `tests/integration/` | PocketIC tests of the real wallet, release channel and factory Wasm |
 | `tests/caller/` | A canister the PocketIC tests call through, to call as a canister |
 | `scripts/try-local.sh`, `icp.yaml` | A local wallet to try, with icp-cli and a regtest Bitcoin node |
+| `scripts/mainnet-gate.sh`, `docs/mainnet-gate.md` | The mainnet gate: deploy, upgrade a wallet two releases up, record the cycle costs |
 
 ## Development
 
