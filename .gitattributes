@@ -1,0 +1,2 @@
+# The UI build the wallet embeds: minified, and checked against ui/ by CI.
+canisters/wallet/pages/app.js linguist-generated=true -diff

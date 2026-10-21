@@ -26,9 +26,16 @@ pub const CONTENT_SECURITY_POLICY: &str = "default-src 'none'; \
     form-action 'none'; \
     upgrade-insecure-requests";
 
+// Built by `ui/` (`npm run build`), which prerenders the pages and bundles
+// the app they load; CI checks the files are that build's output.
 const INDEX_HTML: &[u8] = include_bytes!("../pages/index.html");
+const CLAIM_HTML: &[u8] = include_bytes!("../pages/claim.html");
 const NOT_FOUND_HTML: &[u8] = include_bytes!("../pages/404.html");
+const APP_JS: &[u8] = include_bytes!("../pages/app.js");
+const APP_CSS: &[u8] = include_bytes!("../pages/app.css");
 const HTML: &str = "text/html; charset=utf-8";
+const JAVASCRIPT: &str = "text/javascript; charset=utf-8";
+const CSS: &str = "text/css; charset=utf-8";
 
 /// Served and certified with every page, so a replica can neither drop nor
 /// change them.
@@ -54,34 +61,32 @@ thread_local! {
     static ROUTER: RefCell<AssetRouter<'static>> = RefCell::new(AssetRouter::default());
 }
 
-/// The embedded pages, certified: `/` and `/index.html` are the start page,
-/// and any other path is the 404 page with status 404.
+/// The embedded files, certified: `/` and `/index.html` are the start page,
+/// `/claim` and `/claim.html` the claim page, `/app.js` and `/app.css` the
+/// app they load, and any other path is the 404 page with status 404.
 fn router() -> AssetRouter<'static> {
-    let assets = [
-        Asset::new("index.html", INDEX_HTML),
-        Asset::new("404.html", NOT_FOUND_HTML),
+    let files: [(&str, &[u8], &str, &[&str]); 5] = [
+        ("index.html", INDEX_HTML, HTML, &["/"]),
+        ("claim.html", CLAIM_HTML, HTML, &["/claim"]),
+        ("404.html", NOT_FOUND_HTML, HTML, &[]),
+        ("app.js", APP_JS, JAVASCRIPT, &[]),
+        ("app.css", APP_CSS, CSS, &[]),
     ];
-    let configs = [
-        AssetConfig::File {
-            path: "index.html".to_string(),
-            content_type: Some(HTML.to_string()),
-            headers: security_headers(),
-            fallback_for: vec![],
-            aliased_by: vec!["/".to_string()],
-            encodings: vec![],
-        },
-        AssetConfig::File {
-            path: "404.html".to_string(),
-            content_type: Some(HTML.to_string()),
-            headers: security_headers(),
-            fallback_for: vec![AssetFallbackConfig {
+    let assets = files.map(|(path, body, _, _)| Asset::new(path, body));
+    let configs = files.map(|(path, _, content_type, aliases)| AssetConfig::File {
+        path: path.to_string(),
+        content_type: Some(content_type.to_string()),
+        headers: security_headers(),
+        fallback_for: match path {
+            "404.html" => vec![AssetFallbackConfig {
                 scope: "/".to_string(),
                 status_code: Some(StatusCode::NOT_FOUND),
             }],
-            aliased_by: vec![],
-            encodings: vec![],
+            _ => vec![],
         },
-    ];
+        aliased_by: aliases.iter().map(|alias| alias.to_string()).collect(),
+        encodings: vec![],
+    });
     let mut router = AssetRouter::default();
     router
         .certify_assets(assets, configs)
@@ -146,8 +151,35 @@ mod tests {
     }
 
     #[test]
+    fn the_claim_page_and_the_app_answer_at_their_paths() {
+        for (url, body, content_type) in [
+            ("/claim", CLAIM_HTML, HTML),
+            ("/claim.html", CLAIM_HTML, HTML),
+            ("/claim?x=1", CLAIM_HTML, HTML),
+            ("/app.js", APP_JS, JAVASCRIPT),
+            ("/app.css", APP_CSS, CSS),
+        ] {
+            let response = get(url);
+            assert_eq!(response.status_code, 200, "{url}");
+            assert_eq!(response.body.as_slice(), body, "{url}");
+            assert_eq!(
+                header(&response, "content-type"),
+                Some(content_type),
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
     fn any_other_path_is_the_404_page() {
-        for url in ["/claim", "/index.htm", "/a/b/c.js", "/404"] {
+        for url in [
+            "/claims",
+            "/claim/",
+            "/index.htm",
+            "/a/b/c.js",
+            "/404",
+            "/assets/app.js",
+        ] {
             let response = get(url);
             assert_eq!(response.status_code, 404, "{url}");
             assert_eq!(response.body.as_slice(), NOT_FOUND_HTML, "{url}");
@@ -156,7 +188,7 @@ mod tests {
 
     #[test]
     fn every_response_carries_a_certificate_and_the_security_headers() {
-        for url in ["/", "/nothing-here"] {
+        for url in ["/", "/claim", "/app.js", "/app.css", "/nothing-here"] {
             let response = get(url);
             assert!(header(&response, "ic-certificate").is_some(), "{url}");
             for (name, value) in security_headers() {
@@ -180,11 +212,22 @@ mod tests {
         );
     }
 
-    /// The CSP would block them, so a page that has them is broken.
+    /// The CSP would block them, so a page that has them is broken. Each page
+    /// loads the app's script and styles from the wallet's own origin, and
+    /// nothing else.
     #[test]
     fn the_pages_hold_no_inline_script_or_style() {
-        for page in [INDEX_HTML, NOT_FOUND_HTML] {
+        const SCRIPT: &str = r#"<script type="module" src="/app.js"></script>"#;
+        const STYLES: &str = r#"<link rel="stylesheet" href="/app.css">"#;
+        for page in [INDEX_HTML, CLAIM_HTML, NOT_FOUND_HTML] {
             let page = std::str::from_utf8(page).unwrap().to_ascii_lowercase();
+            assert_eq!(page.matches(SCRIPT).count(), 1, "a page loads the app once");
+            assert_eq!(
+                page.matches(STYLES).count(),
+                1,
+                "a page loads its styles once"
+            );
+            let page = page.replace(SCRIPT, "");
             for banned in ["<script", "<style", " style=", "javascript:"] {
                 assert!(!page.contains(banned), "a page contains {banned:?}");
             }

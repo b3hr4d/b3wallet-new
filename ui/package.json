@@ -1,0 +1,42 @@
+{
+  "name": "b3wallet-ui",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "22.22.0"
+  },
+  "scripts": {
+    "gen": "candid-core-cli gen ../candid/wallet.did -o src/generated",
+    "build": "node build.mjs",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.ts",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "@candid-core/schema": "0.4.0",
+    "@ic-reactor/core": "4.0.0-beta.6",
+    "@ic-reactor/react": "4.0.0-beta.6",
+    "@icp-sdk/auth": "11.0.0",
+    "@icp-sdk/core": "6.1.1",
+    "@noble/curves": "2.4.0",
+    "@tanstack/query-core": "5.104.5",
+    "@tanstack/react-query": "5.104.5",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@candid-core/cli": "0.3.0",
+    "@eslint/js": "10.0.1",
+    "@types/node": "22.20.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "esbuild": "0.28.2",
+    "eslint": "10.13.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "prettier": "3.9.10",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.0"
+  }
+}

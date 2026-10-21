@@ -23,8 +23,67 @@ env:
   # all 16 builders of the release signed in bitcoin-core/guix.sigs.
   BITCOIN_CORE_VERSION: "31.1"
   BITCOIN_CORE_SHA256: b80d9c3e04da78fb6f0569685673418cf686fadba9042d926d13fb87ff503f9e
+  # The Node release the UI build is pinned to (ui/package.json's engines).
+  # The checksum is the one nodejs.org lists in the release's SHASUMS256.txt.
+  NODE_VERSION: 22.22.0
+  NODE_SHA256: 9aa8e9d2298ab68c600bd6fb86a6c13bce11a4eca1ba9b39d79fa021755d7c37
 
 jobs:
+  # The wallet embeds the pages in canisters/wallet/pages, so its build needs
+  # no Node. This job checks that they are exactly what ui/ builds, and that
+  # a second build from a clean copy elsewhere gives the same bytes.
+  ui:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned Node
+        run: |
+          curl -sSfL -o "${RUNNER_TEMP}/node.tar.xz" \
+            "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz"
+          echo "${NODE_SHA256}  ${RUNNER_TEMP}/node.tar.xz" | sha256sum --check
+          mkdir "${RUNNER_TEMP}/node"
+          tar -xJf "${RUNNER_TEMP}/node.tar.xz" -C "${RUNNER_TEMP}/node" --strip-components=1
+          echo "${RUNNER_TEMP}/node/bin" >> "${GITHUB_PATH}"
+
+      - name: Install the locked dependencies
+        run: npm ci
+
+      - name: Build the pages
+        run: npm run build
+
+      - name: The committed pages are the build's
+        working-directory: .
+        run: |
+          git diff --exit-code -- canisters/wallet/pages
+          untracked=$(git status --porcelain --untracked-files=all -- canisters/wallet/pages)
+          if [ -n "${untracked}" ]; then echo "${untracked}"; exit 1; fi
+
+      - name: Format
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Unit and lint rule tests
+        run: npm test
+
+      - name: A clean build in another directory gives the same bytes
+        working-directory: .
+        run: |
+          git worktree add --detach "${RUNNER_TEMP}/again" HEAD
+          (cd "${RUNNER_TEMP}/again/ui" && npm ci && node build.mjs --out "${RUNNER_TEMP}/again-pages")
+          diff -r canisters/wallet/pages "${RUNNER_TEMP}/again-pages"
+          sha256sum canisters/wallet/pages/*
+
   wallet:
     runs-on: ubuntu-24.04
     steps:
