@@ -536,6 +536,14 @@ fn strangers_cannot_publish() {
                 ErrorCode::CanisterRejectedMessage,
                 "{method}"
             );
+            // A refusal by the guard would carry its own message.
+            assert!(
+                reject
+                    .reject_message
+                    .ends_with("Canister rejected the message"),
+                "{method}: {}",
+                reject.reject_message
+            );
         }
         // A call from a canister skips that check and meets the guard.
         let (code, message) = forward(&pic, caller, id, method, arg).expect_err(method);

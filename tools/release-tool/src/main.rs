@@ -111,7 +111,14 @@ fn sign(mut options: Options) -> Result<(), Failure> {
     }
     eprintln!("{}", describe(&manifest));
     manifest.sign(&key);
-    std::fs::write(&path, to_text(&manifest)).map_err(|e| format!("{path}: {e}"))?;
+    manifest
+        .check_form()
+        .map_err(|e| format!("{path} cannot take this signature: {e}"))?;
+    // A new file renamed over the old one, so a failed write leaves the
+    // manifest as it was.
+    let new = format!("{path}.new");
+    std::fs::write(&new, to_text(&manifest)).map_err(|e| format!("{new}: {e}"))?;
+    std::fs::rename(&new, &path).map_err(|e| format!("{path}: {e}"))?;
     eprintln!(
         "Signed by {}. Signatures on the manifest: {}.",
         hex(key.verifying_key().as_bytes()),

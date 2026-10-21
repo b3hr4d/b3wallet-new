@@ -190,6 +190,10 @@ pub fn check() -> Result<(), String> {
     if CONFIG.with_borrow(|cell| cell.get().is_none()) {
         return Err("stable memory holds no configuration".to_string());
     }
+    // A release with tighter limits would otherwise trap on every publish.
+    config()
+        .validate()
+        .map_err(|e| format!("the stored configuration is not valid: {e}"))?;
     RELEASES.with_borrow(|releases| releases.values().for_each(drop));
     let ordered = ORDER.with_borrow(|order| order.len());
     let stored = RELEASES.with_borrow(|releases| releases.len());

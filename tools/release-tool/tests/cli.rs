@@ -314,3 +314,29 @@ fn bad_input_is_refused() {
         assert!(!stderr(&output).contains("Usage:"));
     }
 }
+
+#[test]
+fn a_seventeenth_signature_is_refused() {
+    let dir = Dir::new("seventeen");
+    dir.keys(17);
+    new_manifest(&dir);
+    let manifest_path = dir.path("manifest.did");
+    for seed in 1..=16 {
+        let key = dir.path(&format!("key-{seed}.pem"));
+        assert!(
+            tool(&["sign", "--key", &key, &manifest_path])
+                .status
+                .success()
+        );
+    }
+    let before = std::fs::read(&manifest_path).unwrap();
+    let refused = tool(&["sign", "--key", &dir.path("key-17.pem"), &manifest_path]);
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(
+        stderr(&refused).contains("cannot take this signature"),
+        "{}",
+        stderr(&refused)
+    );
+    assert_eq!(std::fs::read(&manifest_path).unwrap(), before);
+    assert_eq!(dir.manifest().signatures.len(), 16);
+}
