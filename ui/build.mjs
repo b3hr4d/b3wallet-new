@@ -95,6 +95,7 @@ const expected = [
   "claim.html",
   "index.html",
   "members.html",
+  "notifications.html",
   "receive.html",
   "send.html",
   "settings.html",

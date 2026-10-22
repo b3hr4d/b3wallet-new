@@ -10,6 +10,7 @@ import { Home } from "./home.tsx"
 import { where } from "./host.ts"
 import type { Page } from "./page.ts"
 import { MembersPage } from "./members.tsx"
+import { NotificationsPage } from "./notifications-page.tsx"
 import { Receive } from "./receive.tsx"
 import { Send } from "./send.tsx"
 import { Settings } from "./settings.tsx"
@@ -81,6 +82,8 @@ function Wallet({
       return <AccountPage wallet={wallet} />
     case "members":
       return <MembersPage wallet={wallet} />
+    case "notifications":
+      return <NotificationsPage wallet={wallet} />
     case "settings":
       return <Settings wallet={wallet} local={local} />
     case "approvals":

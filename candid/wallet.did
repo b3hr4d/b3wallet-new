@@ -452,10 +452,10 @@ service : (WalletArg) -> {
   // Newest first, at most 100 entries.
   audit_log : (AuditRequest) -> (AuditResult) query;
   // Query only: the start page at / and /index.html, the send, receive,
-  // account, approvals, settings, members and claim pages at /send, /receive,
-  // /account, /approvals, /settings, /members and /claim, the app at /app.js
-  // and /app.css, and a certified 404 for any other path. See "Serve a page"
-  // in docs/design.md.
+  // account, approvals, notifications, settings, members and claim pages at
+  // /send, /receive, /account, /approvals, /notifications, /settings,
+  // /members and /claim, the app at /app.js and /app.css, and a certified 404
+  // for any other path. See "Serve a page" in docs/design.md.
   http_request : (HttpRequest) -> (HttpResponse) query;
 
   // Standards for the signer window (ICRC-25, ICRC-29) and consent (ICRC-21).

@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query"
 import type { ReactNode } from "react"
 import { useWallet } from "./canister.ts"
 import { auditText, failureText, whoText } from "./describe.ts"
-import type { Account, AuditEvent, Member } from "./generated/wallet.ts"
+import type { Account, AuditEntry, AuditEvent, Member } from "./generated/wallet.ts"
 import {
   AlertIcon,
   CheckIcon,
@@ -18,6 +18,12 @@ import { agoText, dateOf } from "./time.ts"
 
 /** How many of the newest audit entries the start page shows. */
 const SHOWN = 8
+
+/**
+ * The read of the newest entries: the start page's card and the dot in the
+ * bar make the same one, so on the start page they share it.
+ */
+export const NEWEST = { before_seq: null, limit: SHOWN }
 
 /** The newest entries of the wallet's audit log, newest first. */
 export function Activity({
@@ -34,7 +40,7 @@ export function Activity({
   now: bigint
 }) {
   const { client, wallet } = useWallet(id)
-  const log = useQuery(client.queryOptions(wallet, "audit_log", { before_seq: null, limit: SHOWN }))
+  const log = useQuery(client.queryOptions(wallet, "audit_log", NEWEST))
   return (
     <section className="card">
       <div className="card-head">
@@ -56,28 +62,54 @@ export function Activity({
         <p className="quiet">Nothing has happened yet.</p>
       ) : (
         <ol className="timeline">
-          {log.data.map((entry) => {
-            const [tone, icon] = look(entry.event)
-            return (
-              <li key={String(entry.seq)} className="event">
-                <span className={`event-dot ${tone}`}>{icon}</span>
-                <p className="event-text">
-                  <strong>{whoText(entry.by, me, members)}</strong>{" "}
-                  {auditText(entry.event, accounts)}
-                </p>
-                <time
-                  className="event-time"
-                  dateTime={new Date(Number(entry.at_ns / 1_000_000n)).toISOString()}
-                  title={dateOf(entry.at_ns)}
-                >
-                  {agoText(entry.at_ns, now)}
-                </time>
-              </li>
-            )
-          })}
+          {log.data.map((entry) => (
+            <EventItem
+              key={String(entry.seq)}
+              entry={entry}
+              me={me}
+              members={members}
+              accounts={accounts}
+              now={now}
+            />
+          ))}
         </ol>
       )}
     </section>
+  )
+}
+
+/** One audit entry: who did what, and when; marked when it is new to you. */
+export function EventItem({
+  entry,
+  me,
+  members,
+  accounts,
+  now,
+  fresh = false,
+}: {
+  entry: AuditEntry
+  me: Member
+  members: Member[] | undefined
+  accounts: Account[] | undefined
+  now: bigint
+  fresh?: boolean
+}) {
+  const [tone, icon] = look(entry.event)
+  return (
+    <li className={fresh ? "event fresh" : "event"}>
+      <span className={`event-dot ${tone}`}>{icon}</span>
+      <p className="event-text">
+        <strong>{whoText(entry.by, me, members)}</strong> {auditText(entry.event, accounts)}
+        {fresh && <span className="new-mark">New</span>}
+      </p>
+      <time
+        className="event-time"
+        dateTime={new Date(Number(entry.at_ns / 1_000_000n)).toISOString()}
+        title={dateOf(entry.at_ns)}
+      >
+        {agoText(entry.at_ns, now)}
+      </time>
+    </li>
   )
 }
 

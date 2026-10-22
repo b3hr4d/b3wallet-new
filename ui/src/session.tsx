@@ -5,16 +5,19 @@ import { useEffect, useRef, useState } from "react"
 import { useWallet } from "./canister.ts"
 import { CopyButton } from "./copy.tsx"
 import { failureText, shortText } from "./describe.ts"
+import { CheckList } from "./checks.tsx"
 import { healthOf } from "./health.ts"
 import { useMe } from "./member.tsx"
+import { useUnread } from "./notifications-page.tsx"
 import { useNowNs } from "./now.ts"
 import { useRun } from "./sign-in.tsx"
 
 /**
  * Who is signed in, at the end of the bar on every page. Signed in, it is the
  * wallet's health: a dot that is the logo's node while all is well, sends out
- * a ring when something needs you and turns red when something is wrong, and
- * opens to say why, with the sign-out. Internet Identity gives each site its
+ * a ring when something needs you and turns red when something is wrong,
+ * with a count of the notifications you have not seen, and opens to say why,
+ * with the notifications and the sign-out. Internet Identity gives each site its
  * own principal, so the identity this page signs in with belongs to this
  * wallet's address only.
  */
@@ -41,9 +44,9 @@ export function Account({ wallet }: { wallet: Principal }) {
 }
 
 /**
- * The health chip and its panel. It reads what the page reads (the status and
- * who you are, and for a member the open actions), so the dot costs no call
- * the page does not already make, but on the send page.
+ * The health chip and its panel. It reads the status and who you are, which
+ * every page reads, and for a member the open actions and the newest audit
+ * entries, which the start page reads too: elsewhere they cost a read each.
  */
 function Health({
   wallet: id,
@@ -70,6 +73,11 @@ function Health({
     nowNs,
   })
 
+  const unread = useUnread(id, member ?? undefined)
+  const news =
+    unread.count === 0
+      ? ""
+      : `${unread.count}${unread.more ? "+" : ""} new notification${unread.count === 1 && !unread.more ? "" : "s"}`
   const [open, setOpen] = useState(false)
   const box = useRef<HTMLDivElement>(null)
   // Closes on a press outside the chip and its panel, and on Escape.
@@ -96,12 +104,18 @@ function Health({
         className={`who ${health.level}`}
         aria-expanded={open}
         aria-controls="health"
-        aria-label={`Signed in as ${shortText(principal)}. Wallet health: ${health.summary}.`}
-        title={health.summary}
+        aria-label={`Signed in as ${shortText(principal)}. Wallet health: ${health.summary}.${news ? ` ${news}.` : ""}`}
+        title={news ? `${health.summary} · ${news}` : health.summary}
         onClick={() => setOpen(!open)}
       >
         <span className="health-dot" aria-hidden="true" />
         <code>{shortText(principal)}</code>
+        {unread.count > 0 && (
+          <span className="badge" aria-hidden="true">
+            {unread.count}
+            {unread.more ? "+" : ""}
+          </span>
+        )}
       </button>
       {open && (
         <div id="health" className="health-panel" role="dialog" aria-label="Wallet health">
@@ -109,24 +123,13 @@ function Health({
             <span className={`health-mark ${health.level}`} aria-hidden="true" />
             {health.summary}
           </p>
-          <ul className="health-list">
-            {health.checks.map((check) => (
-              <li key={check.title} className="health-item">
-                <span className={`health-mark ${check.level}`} aria-hidden="true" />
-                <div>
-                  <p className="health-title">
-                    {check.href ? <a href={check.href}>{check.title}</a> : check.title}
-                    {check.level !== "ok" && (
-                      <span className="visually-hidden">
-                        {check.level === "problem" ? " (a problem)" : " (needs attention)"}
-                      </span>
-                    )}
-                  </p>
-                  <p className="health-text">{check.text}</p>
-                </div>
-              </li>
-            ))}
-          </ul>
+          <a className="health-news" href="/notifications">
+            <span>Notifications</span>
+            <span className={unread.count > 0 ? "badge" : "count"}>
+              {unread.count > 0 ? `${unread.count}${unread.more ? "+" : ""} new` : "None new"}
+            </span>
+          </a>
+          <CheckList checks={health.checks} />
           <div className="health-foot">
             <p className="field-label">Signed in as</p>
             <p className="address-box">

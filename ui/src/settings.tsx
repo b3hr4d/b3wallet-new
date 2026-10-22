@@ -4,11 +4,11 @@ import { useAuth } from "@ic-reactor/react"
 import { useQuery } from "@tanstack/react-query"
 import { useWallet } from "./canister.ts"
 import { checkupOf } from "./checkup.ts"
+import { CheckList } from "./checks.tsx"
 import { CopyButton } from "./copy.tsx"
 import { failureText, shortText } from "./describe.ts"
 import { readFacts } from "./facts.ts"
 import type { Member } from "./generated/wallet.ts"
-import type { Check } from "./health.ts"
 import { KeyIcon, LayersIcon, PeopleIcon, ShieldIcon } from "./icons.tsx"
 import { initialOf } from "./mark.ts"
 import { AsMember } from "./member.tsx"
@@ -116,15 +116,7 @@ function Sections({ wallet: id, me, local }: { wallet: Principal; me: Member; lo
           <ShieldIcon />
           <h2>Security checkup</h2>
         </div>
-        {checks.length === 0 ? (
-          <span className="skeleton wide" />
-        ) : (
-          <ul className="health-list">
-            {checks.map((check) => (
-              <CheckItem key={check.title} check={check} />
-            ))}
-          </ul>
-        )}
+        {checks.length === 0 ? <span className="skeleton wide" /> : <CheckList checks={checks} />}
         {facts.isError && (
           <p className="quiet small">
             The IC&apos;s record of who controls the wallet could not be read:{" "}
@@ -237,25 +229,6 @@ function Sections({ wallet: id, me, local }: { wallet: Principal; me: Member; lo
 
       <Session />
     </div>
-  )
-}
-
-function CheckItem({ check }: { check: Check }) {
-  return (
-    <li className="health-item">
-      <span className={`health-mark ${check.level}`} aria-hidden="true" />
-      <div>
-        <p className="health-title">
-          {check.href ? <a href={check.href}>{check.title}</a> : check.title}
-          {check.level !== "ok" && (
-            <span className="visually-hidden">
-              {check.level === "problem" ? " (a problem)" : " (needs attention)"}
-            </span>
-          )}
-        </p>
-        <p className="health-text">{check.text}</p>
-      </div>
-    </li>
   )
 }
 
