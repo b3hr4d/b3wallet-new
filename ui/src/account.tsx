@@ -95,11 +95,18 @@ function AccountView({ wallet: id, me }: { wallet: Principal; me: Member }) {
             </p>
           </div>
         </div>
-        <div className="holdings">
-          {held.map((asset, index) => (
-            <AssetBalance key={chainKey(asset)} asset={asset} read={reads[index]} now={now} />
-          ))}
-        </div>
+        {held.length === 0 ? (
+          <p className="quiet">
+            It shows no chain yet. An owner tracks one under <a href="/#accounts">Accounts</a> on
+            the start page.
+          </p>
+        ) : (
+          <div className="holdings">
+            {held.map((asset, index) => (
+              <AssetBalance key={chainKey(asset)} asset={asset} read={reads[index]} now={now} />
+            ))}
+          </div>
+        )}
         <div className="hero-actions">
           {sends && (
             <a className="button primary" href={`/send?from=${account.id}`}>

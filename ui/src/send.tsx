@@ -71,7 +71,7 @@ function SendForm({ wallet: id }: { wallet: Principal }) {
   const [assetKey, setAssetKey] = useState<string>()
   const [to, setTo] = useState("")
   const [typed, setTyped] = useState("")
-  const usable = (accounts.data ?? []).filter((account) => account.kind.tag !== "Evm")
+  const usable = accounts.data ?? []
   const from = usable.find((account) => account.id === fromId) ?? usable[0]
   const choices = from ? assetsOf(from, assets.data ?? ICP_ONLY) : []
   const asset = choices.find((choice) => chainKey(choice) === assetKey) ?? choices[0]
@@ -109,6 +109,7 @@ function SendForm({ wallet: id }: { wallet: Principal }) {
     )
   }
   const bitcoin = from.kind.tag === "Bitcoin"
+  const evm = from.kind.tag === "Evm"
   return (
     <form
       className="card form"
@@ -145,9 +146,15 @@ function SendForm({ wallet: id }: { wallet: Principal }) {
           ))}
         </select>
       </label>
-      {choices.length > 1 && asset !== undefined && (
+      {evm && asset === undefined && (
+        <p className="notice">
+          The wallet tracks no EVM chain, so this account sends on none.{" "}
+          <a href="/">Track one on the start page.</a>
+        </p>
+      )}
+      {(choices.length > 1 || evm) && asset !== undefined && (
         <label>
-          Token
+          {evm ? "Chain" : "Token"}
           <select
             value={chainKey(asset)}
             onChange={(event) => {
@@ -166,7 +173,13 @@ function SendForm({ wallet: id }: { wallet: Principal }) {
         <input
           value={to}
           onChange={(event) => setTo(event.target.value)}
-          placeholder={bitcoin ? "A Bitcoin address" : "A principal or an ICRC-1 account"}
+          placeholder={
+            bitcoin
+              ? "A Bitcoin address"
+              : evm
+                ? "An address: 0x and 40 hex digits"
+                : "A principal or an ICRC-1 account"
+          }
           autoComplete="off"
           spellCheck={false}
         />
@@ -186,9 +199,11 @@ function SendForm({ wallet: id }: { wallet: Principal }) {
       <p className="quiet small">
         {bitcoin
           ? "The fee is the median rate of recent transactions, and counts toward the daily limit."
-          : token?.fee != null
-            ? `The ledger takes its fee of ${amountText(token.fee, token)} on top.`
-            : "The ledger takes its fee on top."}
+          : evm
+            ? "The fee is what the chain charges when the transfer runs, at most twice its recent base fee and a tip for each unit of gas. That most counts toward the daily limit."
+            : token?.fee != null
+              ? `The ledger takes its fee of ${amountText(token.fee, token)} on top.`
+              : "The ledger takes its fee on top."}
       </p>
       <div className="buttons">
         <button
@@ -204,10 +219,14 @@ function SendForm({ wallet: id }: { wallet: Principal }) {
   )
 }
 
-/** An asset to send, named by its token's symbol once its ledger says it. */
+/**
+ * An asset to send, named by its token's symbol once its ledger says it, or
+ * by its EVM chain.
+ */
 function AssetOption({ asset }: { asset: Chain }) {
   const { token } = useToken(asset)
-  return <option value={chainKey(asset)}>{token?.symbol ?? chainText(asset)}</option>
+  const name = asset.tag === "Evm" ? chainText(asset) : (token?.symbol ?? chainText(asset))
+  return <option value={chainKey(asset)}>{name}</option>
 }
 
 /**

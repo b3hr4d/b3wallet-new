@@ -106,9 +106,9 @@ CI runs the same commands:
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo clippy -p wallet -p release_channel -p factory -p caller --target wasm32-unknown-unknown --locked -- -D warnings
+cargo clippy -p wallet -p release_channel -p factory -p caller -p evm_rpc_mock --target wasm32-unknown-unknown --locked -- -D warnings
 cargo test --workspace --exclude integration --locked -- --nocapture   # unit, interface and tool tests
-cargo build -p wallet -p release_channel -p factory -p caller --target wasm32-unknown-unknown --release --locked
+cargo build -p wallet -p release_channel -p factory -p caller -p evm_rpc_mock --target wasm32-unknown-unknown --release --locked
 POCKET_IC_BIN=/path/to/pocket-ic ICRC1_LEDGER_WASM=/path/to/ic-icrc1-ledger.wasm.gz \
   BITCOIND=/path/to/bitcoind BITCOIN_CLI=/path/to/bitcoin-cli \
   cargo test -p integration --locked -- --include-ignored
@@ -293,7 +293,7 @@ waits for another call's answer stages everything but does not install.
 the new version runs, or `Failed` an hour after an install that did not run.
 
 The IC holds back about 0.3T cycles for an install, so the wallet must be able
-to spend 0.32T, plus 4B a chunk to stage, above what it keeps to stay running.
+to spend 0.35T, plus 4B a chunk to stage, above what it keeps to stay running.
 Short of that, `execute` stops with `InsufficientCycles`, which says what it
 can spend and needs, and the action stays ready; anyone can top it up with
 `icp canister top-up --amount 0.2t <wallet id>`. The IC also refuses an

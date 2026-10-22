@@ -104,7 +104,7 @@ The IC holds back what an install's instruction limit would cost, about 0.3T
 cycles on a 13-node subnet, and refuses an install the canister cannot pay for
 above what it keeps to stay running (its freezing threshold: 30 days of
 holding its memory). The upgrade, staging included, then costs the wallet
-about 20B, and the rest comes back. A wallet that cannot spend 0.32T, plus 4B
+about 20B, and the rest comes back. A wallet that cannot spend 0.35T, plus 4B
 a chunk to stage the release, refuses to execute the upgrade with
 `InsufficientCycles`, which says what it can spend and what it needs; the
 action stays ready for after a top-up:

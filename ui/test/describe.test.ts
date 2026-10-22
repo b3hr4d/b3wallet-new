@@ -82,6 +82,43 @@ test("a transfer names a fee set in its proposal", () => {
   )
 })
 
+test("an EVM transfer names the most it pays in fees, and its transaction once sent", () => {
+  const eth = { symbol: "ETH on Base", decimals: 18, fee: null }
+  const evm: Account = { ...main, kind: { tag: "Evm" } }
+  const action: Action = {
+    tag: "Transfer",
+    value: {
+      from: 1,
+      asset: { tag: "Evm", value: 8_453n },
+      to: "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+      amount: 10n ** 17n,
+      fee: 21_000n * 10n ** 9n,
+      memo: null,
+    },
+  }
+  assert.equal(
+    actionText(action, evm, eth),
+    "Send 0.1 ETH on Base from “Main” to 0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed, paying at most 0.000021 ETH on Base in fees",
+  )
+  const hash = `0x${"ab".repeat(32)}`
+  const sent: Pending = {
+    ...transfer,
+    action,
+    state: {
+      tag: "Executed",
+      value: {
+        tag: "Sent",
+        value: { tx_id: hash, at_ns: 0n, chain: { tag: "Evm", value: 8_453n }, account: 1 },
+      },
+    },
+  }
+  assert.equal(stateText(sent, NOW), `Sent: transaction ${hash} on Base.`)
+  assert.equal(
+    auditText({ tag: "AssetTracked", value: { tag: "Evm", value: 8_453n } }, []),
+    "tracked Base",
+  )
+})
+
 test("a transfer's source is the account it names", () => {
   const cycles: Account = { ...main, id: 2, label: "Cycles" }
   assert.equal(sourceOf(transfer.action, [cycles, main]), main)
@@ -339,4 +376,9 @@ test("a sender learns what an address counts, and in which form", () => {
     receiveNote({ tag: "Bitcoin", value: { tag: "Regtest" } }),
     /regtest bitcoin here, never mainnet/,
   )
+  assert.match(
+    receiveNote({ tag: "Evm" }),
+    /^Send only ETH here, on an EVM chain the wallet tracks/,
+  )
+  assert.match(receiveNote({ tag: "Evm" }), /no ERC-20 token/)
 })

@@ -16,6 +16,7 @@ import {
   amountParts,
   chainKey,
   chainText,
+  evmChainsOf,
   ICP_ONLY,
   kindText,
   useToken,
@@ -131,7 +132,7 @@ export function Accounts({
   const [adding, setAdding] = useState(false)
   const reading = balances.some(({ read }) => read.isFetching)
   return (
-    <section className="card">
+    <section className="card" id="accounts">
       <div className="card-head">
         <h2>Accounts</h2>
         {accounts.data !== undefined && <span className="count">{accounts.data.length}</span>}
@@ -169,7 +170,7 @@ export function Accounts({
           ))}
         </ul>
       )}
-      <Tokens wallet={id} assets={assets} owner={owner} />
+      <Tokens wallet={id} network={network} assets={assets} owner={owner} />
       {owner &&
         (adding ? (
           <AddAccount wallet={id} network={network} onDone={() => setAdding(false)} />
@@ -187,17 +188,20 @@ export function Accounts({
 
 /**
  * One account in the list: its first asset's balance, which the wallet asks
- * a ledger or the Bitcoin canister for, and how many tokens it shows. It opens
- * the account's own page, which holds the rest.
+ * a ledger, the Bitcoin canister or an EVM chain's providers for, and how
+ * many tokens it shows. It opens the account's own page, which holds the rest.
  */
 function AccountItem({ account, reads }: { account: Account; reads: BalanceRead[] }) {
   const [first] = reads
   const token = useToken(first?.asset)
   const failure = first?.read.isError ? first.read.error : token.error
   let shown: ReactNode
-  if (failure !== undefined && failure !== null) {
+  if (first === undefined) {
+    // An EVM account while the wallet tracks no EVM chain: nothing to read.
+    shown = <span className="quiet">No chain tracked</span>
+  } else if (failure !== undefined && failure !== null) {
     shown = <span className="error">Not read</span>
-  } else if (first?.read.data === undefined || token.token === undefined) {
+  } else if (first.read.data === undefined || token.token === undefined) {
     shown = <span className="skeleton" />
   } else {
     shown = <Amount amount={first.read.data.amount} token={token.token} />
@@ -243,7 +247,7 @@ export function receivesText(kind: AccountKind): string {
     case "Bitcoin":
       return "Receives bitcoin at"
     case "Evm":
-      return "Receives at"
+      return "Receives on each tracked EVM chain at"
   }
 }
 
@@ -258,21 +262,32 @@ export function KindAvatar({ kind }: { kind: AccountKind }) {
 }
 
 /**
- * The tokens the Internet Computer accounts show: ICP, and the ICRC-1
- * ledgers owners track. Tracking moves nothing, so an owner changes it at
- * once; the wallet asks a ledger whether it is one before tracking it.
+ * The tokens the Internet Computer accounts show, ICP and the ICRC-1 ledgers
+ * owners track, and the chains the EVM accounts show. Tracking moves
+ * nothing, so an owner changes it at once; the wallet asks a ledger whether
+ * it is one before tracking it.
  */
 function Tokens({
   wallet: id,
+  network,
   assets,
   owner,
 }: {
   wallet: Principal
+  network: BitcoinNetwork
   assets: UseQueryResult<Chain[]>
   owner: boolean
 }) {
   const { client, wallet } = useWallet(id)
   const track = useMutation(
+    client.mutationOptions(wallet, "track_asset", {
+      invalidates: [
+        [wallet, "assets"],
+        [wallet, "audit_log"],
+      ],
+    }),
+  )
+  const trackChain = useMutation(
     client.mutationOptions(wallet, "track_asset", {
       invalidates: [
         [wallet, "assets"],
@@ -290,21 +305,33 @@ function Tokens({
   )
   const [adding, setAdding] = useState(false)
   const [ledger, setLedger] = useState("")
+  const [addingChain, setAddingChain] = useState(false)
+  const [pickedChain, setChainId] = useState("")
   const typed = ledger.trim()
   const valid = isPrincipal(typed)
   if (assets.isError) return <p className="error">{failureText(assets.error)}</p>
+  const tracked = assets.data ?? ICP_ONLY
+  const chains = tracked.filter((asset) => asset.tag === "Evm")
+  const untracked = evmChainsOf(network).filter(
+    (chain) => !chains.some((asset) => asset.value === chain.id),
+  )
+  const chainId = untracked.some((chain) => String(chain.id) === pickedChain)
+    ? pickedChain
+    : String(untracked[0]?.id ?? "")
   return (
     <div className="tokens">
       <p className="field-label">Tokens the Internet Computer accounts show</p>
       <div className="chips">
-        {(assets.data ?? ICP_ONLY).map((asset) => (
-          <TokenChip
-            key={chainKey(asset)}
-            asset={asset}
-            busy={untrack.isPending}
-            onUntrack={owner && asset.tag === "Icrc" ? () => untrack.mutate(asset) : undefined}
-          />
-        ))}
+        {tracked
+          .filter((asset) => asset.tag !== "Evm")
+          .map((asset) => (
+            <TokenChip
+              key={chainKey(asset)}
+              asset={asset}
+              busy={untrack.isPending}
+              onUntrack={owner && asset.tag === "Icrc" ? () => untrack.mutate(asset) : undefined}
+            />
+          ))}
         {owner && !adding && (
           <button type="button" className="ghost small" onClick={() => setAdding(true)}>
             <PlusIcon />
@@ -356,6 +383,67 @@ function Tokens({
           {track.isError && <p className="error">{failureText(track.error)}</p>}
         </form>
       )}
+      <p className="field-label">Chains the EVM accounts show</p>
+      <div className="chips">
+        {chains.map((asset) => (
+          <TokenChip
+            key={chainKey(asset)}
+            asset={asset}
+            busy={untrack.isPending}
+            onUntrack={owner ? () => untrack.mutate(asset) : undefined}
+          />
+        ))}
+        {chains.length === 0 && <span className="quiet small">None</span>}
+        {owner && untracked.length > 0 && !addingChain && (
+          <button type="button" className="ghost small" onClick={() => setAddingChain(true)}>
+            <PlusIcon />
+            Track a chain
+          </button>
+        )}
+      </div>
+      {addingChain && (
+        <form
+          className="form panel"
+          onSubmit={(event) => {
+            event.preventDefault()
+            const chain = untracked.find((candidate) => String(candidate.id) === chainId)
+            if (chain === undefined) return
+            trackChain.mutate(
+              { tag: "Evm", value: chain.id },
+              { onSuccess: () => setAddingChain(false) },
+            )
+          }}
+        >
+          <label>
+            EVM chain
+            <select
+              value={chainId}
+              onChange={(event) => setChainId(event.target.value)}
+              disabled={trackChain.isPending}
+            >
+              {untracked.map((chain) => (
+                <option key={String(chain.id)} value={String(chain.id)}>
+                  {chain.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="buttons">
+            <button type="submit" className="primary" disabled={trackChain.isPending}>
+              {trackChain.isPending ? "Tracking…" : "Track the chain"}
+            </button>
+            <button
+              type="button"
+              className="ghost"
+              disabled={trackChain.isPending}
+              onClick={() => setAddingChain(false)}
+            >
+              Cancel
+            </button>
+          </div>
+          {trackChain.isError && <p className="error">{failureText(trackChain.error)}</p>}
+        </form>
+      )}
     </div>
   )
 }
@@ -370,7 +458,10 @@ function TokenChip({
   onUntrack: (() => void) | undefined
 }) {
   const { token } = useToken(asset)
-  const name = token?.symbol ?? (asset.tag === "Icrc" ? shortText(asset.value) : chainText(asset))
+  const name =
+    asset.tag === "Evm"
+      ? chainText(asset)
+      : (token?.symbol ?? (asset.tag === "Icrc" ? shortText(asset.value) : chainText(asset)))
   return (
     <span className="chip">
       {name}
@@ -395,7 +486,7 @@ type Kind = AccountKind["tag"]
 /**
  * Adds another account of a kind, with an address of its own; it moves
  * nothing, so it needs no approval. Bitcoin accounts are of the wallet's
- * network.
+ * network; an EVM account has one address on every EVM chain.
  */
 function AddAccount({
   wallet: id,
@@ -415,7 +506,11 @@ function AddAccount({
       ],
     }),
   )
-  const kinds: AccountKind[] = [{ tag: "InternetComputer" }, { tag: "Bitcoin", value: network }]
+  const kinds: AccountKind[] = [
+    { tag: "InternetComputer" },
+    { tag: "Bitcoin", value: network },
+    { tag: "Evm" },
+  ]
   const [kind, setKind] = useState<Kind>("InternetComputer")
   const [label, setLabel] = useState("")
   const chosen = kinds.find((candidate) => candidate.tag === kind) ?? kinds[0]

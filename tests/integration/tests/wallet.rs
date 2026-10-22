@@ -1103,7 +1103,11 @@ fn a_wallet_from_the_previous_release_upgrades_to_this_one() {
     match legacy {
         Some(transfer) => {
             assert_eq!(listed(), [ic(1, "main", 0), ic(3, "savings", 1)]);
-            assert_eq!(assets(&pic, id, owner), [Chain::Icp, Chain::Icrc(token)]);
+            // It tracks Ethereum, as a new wallet does.
+            assert_eq!(
+                assets(&pic, id, owner),
+                [Chain::Icp, Chain::Evm(ETHEREUM), Chain::Icrc(token)]
+            );
             assert_eq!(status(&pic, id).bitcoin_network, BitcoinNetwork::Mainnet);
             let Action::Transfer(mut request) = transfer.action.clone() else {
                 unreachable!()
@@ -1120,6 +1124,7 @@ fn a_wallet_from_the_previous_release_upgrades_to_this_one() {
         }
         None => {
             assert_eq!(listed()[0], ic(1, "Main", 0));
+            assert_eq!(assets(&pic, id, owner), [Chain::Icp, Chain::Evm(ETHEREUM)]);
             assert_eq!(pending(&pic, id, owner), std::slice::from_ref(&open));
         }
     }
@@ -1877,7 +1882,7 @@ fn a_wallet_starts_with_an_internet_computer_account_and_counts_indices_per_kind
     run_at_once(&pic, id, owner, add_member_action(viewer, Role::Viewer));
 
     // The wallet made its Internet Computer account at install. Its Bitcoin
-    // account waits for a threshold key, which this IC has none of.
+    // and EVM accounts wait for a threshold key, which this IC has none of.
     let listed = accounts(&pic, id, viewer);
     assert!(is_account_id(&listed[0].icp_account_id), "{listed:?}");
     let main = Account {
@@ -1896,30 +1901,23 @@ fn a_wallet_starts_with_an_internet_computer_account_and_counts_indices_per_kind
     assert!(is_account_id(&savings.icp_account_id));
     assert_ne!(savings.icp_account_id, main.icp_account_id);
 
-    let refused = [
-        (AccountKind::Evm, "eth"),
-        (AccountKind::InternetComputer, ""),
-    ];
-    for (kind, label) in refused {
+    assert!(matches!(
+        add_account(&pic, id, owner, AccountKind::InternetComputer, ""),
+        Err(WalletError::InvalidArgument(_))
+    ));
+    // A Bitcoin or EVM account asks for a key this IC does not have.
+    for kind in [
+        AccountKind::Bitcoin(BitcoinNetwork::Regtest),
+        AccountKind::Evm,
+    ] {
         assert!(
             matches!(
-                add_account(&pic, id, owner, kind, label),
-                Err(WalletError::InvalidArgument(_))
+                add_account(&pic, id, owner, kind, "keyed"),
+                Err(WalletError::ChainError(_))
             ),
             "{kind:?}"
         );
     }
-    // A Bitcoin account asks for a key this IC does not have.
-    assert!(matches!(
-        add_account(
-            &pic,
-            id,
-            owner,
-            AccountKind::Bitcoin(BitcoinNetwork::Regtest),
-            "btc"
-        ),
-        Err(WalletError::ChainError(_))
-    ));
     let reject = pic
         .update_call(
             id,
@@ -1951,6 +1949,12 @@ fn a_wallet_starts_with_an_internet_computer_account_and_counts_indices_per_kind
     }));
     upgrade(&pic, id, &testnet).unwrap();
     assert_eq!(status(&pic, id).bitcoin_network, BitcoinNetwork::Testnet);
+    // Its keys are then the test key's, which holds Sepolia alone.
+    assert_eq!(assets(&pic, id, owner), [Chain::Icp, Chain::Evm(SEPOLIA)]);
+    assert!(matches!(
+        track(&pic, id, owner, "track_asset", Chain::Evm(BASE)),
+        Err(WalletError::InvalidArgument(reason)) if reason.contains("does not hold")
+    ));
 }
 
 #[test]
@@ -1984,7 +1988,7 @@ fn balance_asks_the_ledger_for_the_accounts_subaccount() {
     ));
     assert_eq!(
         track(&pic, wallet, owner, "track_asset", tkn.clone()),
-        Ok(vec![Chain::Icp, tkn.clone()])
+        Ok(vec![Chain::Icp, Chain::Evm(ETHEREUM), tkn.clone()])
     );
     let held = balance_of(&pic, wallet, viewer, 1, Some(tkn.clone())).unwrap();
     assert_eq!(
@@ -2023,9 +2027,13 @@ fn owners_track_icrc_ledgers_that_answer_as_one() {
     let viewer = user(9);
     run_at_once(&pic, wallet, owner, add_member_action(viewer, Role::Viewer));
     let tkn = Chain::Icrc(token);
-    assert_eq!(assets(&pic, wallet, viewer), [Chain::Icp]);
+    assert_eq!(
+        assets(&pic, wallet, viewer),
+        [Chain::Icp, Chain::Evm(ETHEREUM)]
+    );
 
-    // A canister that is no ledger, and the assets that are not tracked.
+    // A canister that is no ledger, and the assets that are not tracked:
+    // ICP and Ethereum are already, and no provider serves chain 56.
     let not_a_ledger = empty_canister(&pic);
     assert!(matches!(
         track(
@@ -2041,7 +2049,8 @@ fn owners_track_icrc_ledgers_that_answer_as_one() {
         Chain::Icp,
         Chain::Icrc(icp_ledger()),
         REGTEST,
-        Chain::Evm(1),
+        Chain::Evm(ETHEREUM),
+        Chain::Evm(56),
     ] {
         assert!(
             matches!(
@@ -2064,14 +2073,17 @@ fn owners_track_icrc_ledgers_that_answer_as_one() {
     track(&pic, wallet, owner, "track_asset", tkn.clone()).unwrap();
     assert!(track(&pic, wallet, owner, "track_asset", tkn.clone()).is_err());
     upgrade(&pic, wallet, &WalletArg::Upgrade(None)).unwrap();
-    assert_eq!(assets(&pic, wallet, viewer), [Chain::Icp, tkn.clone()]);
+    assert_eq!(
+        assets(&pic, wallet, viewer),
+        [Chain::Icp, Chain::Evm(ETHEREUM), tkn.clone()]
+    );
 
     // An open transfer of a token no longer tracked still runs.
     let friend = LedgerAccount::from(user(20));
     let open = propose(&pic, wallet, owner, token_transfer(1, token, friend, 10)).unwrap();
     assert_eq!(
         track(&pic, wallet, owner, "untrack_asset", tkn.clone()),
-        Ok(vec![Chain::Icp])
+        Ok(vec![Chain::Icp, Chain::Evm(ETHEREUM)])
     );
     assert!(matches!(
         track(&pic, wallet, owner, "untrack_asset", Chain::Icp),
@@ -2915,11 +2927,12 @@ fn a_bitcoin_account_receives_at_its_keys_address_and_sends_once() {
     let net = wallet_on_regtest();
     let main = net.main_account();
     let savings = net.add_bitcoin_account("savings");
-    // Account 1 is the Internet Computer account the wallet starts with.
+    // Account 1 is the Internet Computer account the wallet starts with, and
+    // account 3 its EVM account, made after the Bitcoin one.
     let ic = accounts(&net.pic, net.wallet, net.owner).remove(0);
     assert_eq!((ic.id, ic.kind), (1, AccountKind::InternetComputer));
     assert_eq!((main.id, main.index, main.label.as_str()), (2, 0, "Main"));
-    assert_eq!((savings.id, savings.index), (3, 1));
+    assert_eq!((savings.id, savings.index), (4, 1));
     assert_ne!(main.address, savings.address);
     for account in [&main, &savings] {
         // A P2WPKH address: a version 0 program of 20 bytes.
@@ -2976,14 +2989,16 @@ fn a_bitcoin_account_receives_at_its_keys_address_and_sends_once() {
     }));
     let refused = upgrade(&net.pic, net.wallet, &mainnet).unwrap_err();
     assert!(
-        refused.contains("its Bitcoin accounts keep it"),
+        refused.contains("its Bitcoin and EVM accounts keep it"),
         "{refused}"
     );
     // The keys are the same after an upgrade: the savings account spends.
+    let evm = accounts(&net.pic, net.wallet, net.owner).remove(2);
+    assert_eq!((evm.id, evm.kind), (3, AccountKind::Evm));
     upgrade(&net.pic, net.wallet, &WalletArg::Upgrade(None)).unwrap();
     assert_eq!(
         accounts(&net.pic, net.wallet, net.owner),
-        [ic, main.clone(), savings.clone()]
+        [ic, main.clone(), evm, savings.clone()]
     );
     let back = net
         .propose(bitcoin_transfer(savings.id, &main.address, BTC / 2, None))
@@ -3435,4 +3450,697 @@ fn a_policy_that_changes_while_a_transfer_signs_applies_before_it_sends() {
         .unwrap();
     net.pic.advance_time(Duration::from_secs(2));
     net.send(small.id);
+}
+
+// ---- EVM accounts, against a stand-in for the EVM RPC canister ---------------
+
+const ETHEREUM: u64 = 1;
+const SEPOLIA: u64 = 11_155_111;
+const BASE: u64 = 8_453;
+const GWEI: u128 = 1_000_000_000;
+const ETH: u128 = 1_000_000_000_000_000_000;
+/// An address that is none of the wallet's.
+const RECIPIENT: &str = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed";
+
+fn evm_rpc() -> Principal {
+    Principal::from_text("7hfb6-caaaa-aaaar-qadga-cai").unwrap()
+}
+
+/// The stand-in for the EVM RPC canister. Build it first:
+/// `cargo build -p evm_rpc_mock --target wasm32-unknown-unknown --release`.
+fn evm_rpc_mock_wasm() -> Vec<u8> {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../target/wasm32-unknown-unknown/release/evm_rpc_mock.wasm"
+    );
+    std::fs::read(path).unwrap_or_else(|e| {
+        panic!("cannot read {path} ({e}); build it with `cargo build -p evm_rpc_mock --target wasm32-unknown-unknown --release`")
+    })
+}
+
+/// A transaction in the stand-in's pool.
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+struct PooledTx {
+    hash: String,
+    from: String,
+    chain_id: u64,
+    nonce: u64,
+    to: String,
+    value: candid::Nat,
+    gas_limit: u64,
+    max_fee_per_gas: candid::Nat,
+    max_priority_fee_per_gas: candid::Nat,
+}
+
+/// How the stand-in fails a method.
+#[derive(CandidType, Clone, Copy)]
+#[allow(dead_code, reason = "each is sent by some test")]
+enum Failure {
+    /// The call traps before it does anything.
+    Trap,
+    /// Every provider's outcall fails, and nothing happens.
+    Error,
+    /// The call does what it asks, and every provider's answer is lost.
+    DoneThenError,
+}
+
+/// A claimed wallet on an application subnet with the default EVM account
+/// it made with a key of the fiduciary subnet, and the stand-in for the EVM
+/// RPC canister at that canister's id, on that subnet.
+struct Evm {
+    pic: PocketIc,
+    wallet: Principal,
+    owner: Principal,
+    account: Account,
+}
+
+fn wallet_with_evm() -> Evm {
+    let pic = PocketIcBuilder::new()
+        .with_fiduciary_subnet()
+        .with_application_subnet()
+        .build();
+    let rpc = pic.create_canister_with_id(None, None, evm_rpc()).unwrap();
+    pic.add_cycles(rpc, 100_000_000_000_000);
+    pic.install_canister(rpc, evm_rpc_mock_wasm(), encode_args(()).unwrap(), None);
+    let subnet = pic.topology().get_app_subnets()[0];
+    let wallet = pic.create_canister_on_subnet(None, None, subnet);
+    pic.add_cycles(wallet, 100_000_000_000_000);
+    try_install(&pic, wallet, &WalletArg::Init(init_args(&pic))).unwrap();
+    let owner = user(7);
+    claim(&pic, wallet, owner, claim_signature(wallet, owner)).unwrap();
+    let start = Instant::now();
+    let account = loop {
+        let found = accounts(&pic, wallet, owner)
+            .into_iter()
+            .find(|account| account.kind == AccountKind::Evm);
+        if let Some(account) = found {
+            break account;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(60),
+            "the wallet made no EVM account"
+        );
+        pic.tick();
+    };
+    Evm {
+        pic,
+        wallet,
+        owner,
+        account,
+    }
+}
+
+fn evm_transfer(from: u32, chain: u64, to: &str, amount: u128, fee: Option<u128>) -> Action {
+    Action::Transfer(TransferRequest {
+        from,
+        asset: Some(Chain::Evm(chain)),
+        to: to.to_string(),
+        amount: amount.into(),
+        fee: fee.map(Into::into),
+        memo: None,
+    })
+}
+
+fn wei(amount: candid::Nat) -> u128 {
+    u128::try_from(amount.0).unwrap()
+}
+
+impl Evm {
+    fn mock<R: CandidType + for<'de> Deserialize<'de>>(&self, method: &str, args: Vec<u8>) -> R {
+        let reply = self
+            .pic
+            .update_call(evm_rpc(), Principal::anonymous(), method, args)
+            .unwrap_or_else(|reject| panic!("{method} answers: {reject}"));
+        decode_one(&reply).unwrap()
+    }
+
+    fn fund(&self, chain: u64, amount: u128) {
+        let args = (chain, &self.account.address, candid::Nat::from(amount));
+        self.mock::<()>("mock_set_balance", encode_args(args).unwrap());
+    }
+
+    /// What `address` holds on `chain`, as the chain has it.
+    fn held(&self, chain: u64, address: &str) -> u128 {
+        wei(self.mock("mock_balance", encode_args((chain, address)).unwrap()))
+    }
+
+    fn mine(&self, chain: u64) -> Vec<String> {
+        self.mock("mock_mine", encode_one(chain).unwrap())
+    }
+
+    fn finalize(&self, chain: u64) {
+        self.mock::<()>("mock_finalize", encode_one(chain).unwrap());
+    }
+
+    fn pool(&self, chain: u64) -> Vec<PooledTx> {
+        self.mock("mock_pool", encode_one(chain).unwrap())
+    }
+
+    /// Each signed transaction a send carried to `chain`.
+    fn sends(&self, chain: u64) -> Vec<String> {
+        self.mock("mock_sends", encode_one(chain).unwrap())
+    }
+
+    fn calls(&self, method: &str) -> u64 {
+        self.mock("mock_calls", encode_one(method).unwrap())
+    }
+
+    fn fail(&self, method: &str, failure: Option<Failure>) {
+        self.mock::<()>("mock_fail", encode_args((method, failure)).unwrap());
+    }
+
+    fn propose(&self, action: Action) -> Pending {
+        propose(&self.pic, self.wallet, self.owner, action).unwrap()
+    }
+
+    fn execute(&self, action: ActionId) -> PendingResult {
+        act(&self.pic, self.wallet, self.owner, "execute", action)
+    }
+
+    /// Executes a ready transfer and returns its transaction's hash.
+    fn send(&self, action: ActionId, chain: u64) -> String {
+        let executed = self.execute(action).unwrap();
+        let ActionState::Executed(Outcome::Sent(receipt)) = executed.state else {
+            panic!("not sent: {executed:?}");
+        };
+        assert_eq!(
+            (receipt.account, receipt.chain),
+            (self.account.id, Chain::Evm(chain))
+        );
+        receipt.tx_id
+    }
+
+    fn balance(&self, chain: u64) -> u128 {
+        let balance = balance_of(
+            &self.pic,
+            self.wallet,
+            self.owner,
+            self.account.id,
+            Some(Chain::Evm(chain)),
+        )
+        .unwrap();
+        wei(balance.amount)
+    }
+
+    fn state(&self, action: ActionId) -> Option<ActionState> {
+        pending(&self.pic, self.wallet, self.owner)
+            .into_iter()
+            .find(|pending| pending.id == action)
+            .map(|pending| pending.state)
+    }
+
+    /// Lets ten minutes pass, so the wallet's timer settles, and its calls
+    /// end.
+    fn settle(&self) {
+        self.pic.advance_time(Duration::from_secs(10 * 60));
+        for _ in 0..60 {
+            self.pic.tick();
+        }
+    }
+
+    fn audit(&self) -> Vec<(Option<Principal>, AuditEvent)> {
+        audit(&self.pic, self.wallet, self.owner)
+    }
+}
+
+#[test]
+fn a_wallet_makes_an_evm_account_and_reads_its_balance_on_each_tracked_chain() {
+    let evm = wallet_with_evm();
+    let (pic, wallet, owner) = (&evm.pic, evm.wallet, evm.owner);
+    let listed = accounts(pic, wallet, owner);
+    let kinds: Vec<_> = listed
+        .iter()
+        .map(|account| (account.kind, account.index))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            (AccountKind::InternetComputer, 0),
+            (AccountKind::Bitcoin(BitcoinNetwork::Mainnet), 0),
+            (AccountKind::Evm, 0),
+        ]
+    );
+    // A checksummed address, which the stand-in checks as a node does.
+    let address = &evm.account.address;
+    assert_eq!((address.len(), &address[..2]), (42, "0x"));
+    assert_ne!(address.to_lowercase(), *address);
+    assert_eq!(evm.account.label, "Main");
+    assert_eq!(
+        assets(pic, wallet, owner),
+        [Chain::Icp, Chain::Evm(ETHEREUM)]
+    );
+
+    evm.fund(ETHEREUM, 3 * ETH);
+    assert_eq!(evm.balance(ETHEREUM), 3 * ETH);
+    // An EVM account names its chain, which must be tracked.
+    assert!(matches!(
+        balance_of(pic, wallet, owner, evm.account.id, None),
+        Err(WalletError::InvalidArgument(_))
+    ));
+    assert!(matches!(
+        balance_of(pic, wallet, owner, evm.account.id, Some(Chain::Evm(BASE))),
+        Err(WalletError::InvalidArgument(reason)) if reason.contains("does not track")
+    ));
+    assert_eq!(
+        track(pic, wallet, owner, "track_asset", Chain::Evm(BASE)),
+        Ok(vec![Chain::Icp, Chain::Evm(ETHEREUM), Chain::Evm(BASE)])
+    );
+    // The same address on every chain, with what it holds there.
+    assert_eq!(evm.balance(BASE), 0);
+    evm.mock::<()>(
+        "mock_set_balance",
+        encode_args((BASE, address.to_lowercase(), candid::Nat::from(ETH))).unwrap(),
+    );
+    assert_eq!(evm.balance(BASE), ETH);
+    // A chain the EVM RPC canister has no providers of, and one tracked.
+    for chain in [56, BASE] {
+        assert!(
+            matches!(
+                track(pic, wallet, owner, "track_asset", Chain::Evm(chain)),
+                Err(WalletError::InvalidArgument(_))
+            ),
+            "{chain}"
+        );
+    }
+    // Providers that do not answer.
+    evm.fail("multi_request", Some(Failure::Error));
+    assert!(matches!(
+        balance_of(
+            pic,
+            wallet,
+            owner,
+            evm.account.id,
+            Some(Chain::Evm(ETHEREUM))
+        ),
+        Err(WalletError::ChainError(_))
+    ));
+    evm.fail("multi_request", None);
+
+    // A second EVM account has an address of its own; the keys stay the
+    // same after an upgrade.
+    let second = add_account(pic, wallet, owner, AccountKind::Evm, "second").unwrap();
+    assert_eq!(second.index, 1);
+    assert_ne!(second.address, *address);
+    let before = accounts(pic, wallet, owner);
+    upgrade(pic, wallet, &WalletArg::Upgrade(None)).unwrap();
+    assert_eq!(accounts(pic, wallet, owner), before);
+    let testnet = WalletArg::Upgrade(Some(UpgradeArgs {
+        bitcoin_network: Some(BitcoinNetwork::Testnet),
+    }));
+    let refused = upgrade(pic, wallet, &testnet).unwrap_err();
+    assert!(
+        refused.contains("its Bitcoin and EVM accounts keep it"),
+        "{refused}"
+    );
+    assert_eq!(evm.balance(ETHEREUM), 3 * ETH);
+}
+
+#[test]
+fn an_evm_transfer_is_sent_once_from_its_account_and_settles_once_finalized() {
+    let evm = wallet_with_evm();
+    evm.fund(ETHEREUM, ETH);
+    let transfer = evm.propose(evm_transfer(
+        evm.account.id,
+        ETHEREUM,
+        RECIPIENT,
+        ETH / 10,
+        None,
+    ));
+    assert_eq!(transfer.state, ActionState::Ready);
+    let hash = evm.send(transfer.id, ETHEREUM);
+
+    // The chain recovered the account's address from the signature; the
+    // fees are twice the base fee of 10 gwei and the tip of 2 gwei.
+    let pool = evm.pool(ETHEREUM);
+    assert_eq!(
+        pool,
+        [PooledTx {
+            hash: hash.clone(),
+            from: evm.account.address.clone(),
+            chain_id: ETHEREUM,
+            nonce: 0,
+            to: RECIPIENT.to_string(),
+            value: (ETH / 10).into(),
+            gas_limit: 21_000,
+            max_fee_per_gas: (22 * GWEI).into(),
+            max_priority_fee_per_gas: (2 * GWEI).into(),
+        }]
+    );
+    assert!(matches!(
+        evm.execute(transfer.id),
+        Err(WalletError::InvalidArgument(reason)) if reason.contains("already executed")
+    ));
+    assert_eq!(evm.sends(ETHEREUM).len(), 1);
+
+    // Mined at 12 gwei a gas.
+    assert_eq!(evm.mine(ETHEREUM), std::slice::from_ref(&hash));
+    let paid = 21_000 * 12 * GWEI;
+    assert_eq!(evm.balance(ETHEREUM), ETH - ETH / 10 - paid);
+    assert_eq!(evm.held(ETHEREUM, RECIPIENT), ETH / 10);
+
+    // Until a finalized block used its nonce, the wallet sends it again now
+    // and then, which changes nothing once it is in a block.
+    evm.settle();
+    assert_eq!(evm.sends(ETHEREUM).len(), 2);
+    assert_eq!(evm.calls("eth_getTransactionReceipt"), 0);
+    evm.finalize(ETHEREUM);
+    evm.settle();
+    assert_eq!(evm.calls("eth_getTransactionReceipt"), 1);
+    // Settled: nothing more is read or sent.
+    for _ in 0..3 {
+        evm.settle();
+    }
+    assert_eq!(evm.calls("eth_getTransactionReceipt"), 1);
+    assert_eq!(evm.sends(ETHEREUM).len(), 2);
+    assert_eq!(
+        evm.audit()
+            .into_iter()
+            .filter(|(_, event)| *event == AuditEvent::Executed(transfer.id))
+            .count(),
+        1
+    );
+
+    // The next transfer takes the next nonce.
+    let next = evm.propose(evm_transfer(evm.account.id, ETHEREUM, RECIPIENT, 1, None));
+    evm.send(next.id, ETHEREUM);
+    assert_eq!(evm.pool(ETHEREUM)[0].nonce, 1);
+}
+
+#[test]
+fn a_transfer_waits_for_the_one_before_it_from_its_account_and_chain() {
+    let evm = wallet_with_evm();
+    evm.fund(ETHEREUM, ETH);
+    let first = evm.propose(evm_transfer(
+        evm.account.id,
+        ETHEREUM,
+        RECIPIENT,
+        1_000,
+        None,
+    ));
+    let second = evm.propose(evm_transfer(
+        evm.account.id,
+        ETHEREUM,
+        RECIPIENT,
+        2_000,
+        None,
+    ));
+    evm.send(first.id, ETHEREUM);
+    // The first is not in a block yet: the second waits, and stays ready.
+    assert!(matches!(
+        evm.execute(second.id),
+        Err(WalletError::ChainError(reason)) if reason.contains("has not run yet")
+    ));
+    assert_eq!(evm.state(second.id), Some(ActionState::Ready));
+    evm.mine(ETHEREUM);
+    evm.send(second.id, ETHEREUM);
+    assert_eq!(evm.pool(ETHEREUM)[0].nonce, 1);
+    evm.mine(ETHEREUM);
+    assert_eq!(evm.held(ETHEREUM, RECIPIENT), 3_000);
+}
+
+#[test]
+fn a_finalized_transfer_settles_once_the_providers_have_its_receipt() {
+    let evm = wallet_with_evm();
+    evm.fund(ETHEREUM, ETH);
+    let transfer = evm.propose(evm_transfer(
+        evm.account.id,
+        ETHEREUM,
+        RECIPIENT,
+        1_000,
+        None,
+    ));
+    evm.send(transfer.id, ETHEREUM);
+    evm.mine(ETHEREUM);
+    evm.finalize(ETHEREUM);
+
+    // Providers that have not caught up answer no receipt. Only this
+    // transaction has its nonce, so it stays sent, and the wallet looks
+    // again, less often each time: after 10, then 20 minutes.
+    evm.mock::<()>("mock_hide_receipts", encode_args((ETHEREUM, true)).unwrap());
+    let mut receipts = Vec::new();
+    for _ in 0..4 {
+        evm.settle();
+        receipts.push(evm.calls("eth_getTransactionReceipt"));
+    }
+    assert_eq!(receipts, [1, 2, 2, 3]);
+    assert!(matches!(
+        evm.execute(transfer.id),
+        Err(WalletError::InvalidArgument(reason)) if reason.contains("already executed")
+    ));
+
+    // Once they have it, the transfer settles, and nothing more is read.
+    evm.mock::<()>(
+        "mock_hide_receipts",
+        encode_args((ETHEREUM, false)).unwrap(),
+    );
+    let mut receipts = Vec::new();
+    for _ in 0..8 {
+        evm.settle();
+        receipts.push(evm.calls("eth_getTransactionReceipt"));
+    }
+    assert_eq!(receipts, [3, 3, 3, 4, 4, 4, 4, 4]);
+    assert_eq!(
+        evm.audit()
+            .into_iter()
+            .filter(|(_, event)| *event == AuditEvent::Executed(transfer.id))
+            .count(),
+        1
+    );
+    assert_eq!(evm.held(ETHEREUM, RECIPIENT), 1_000);
+}
+
+#[test]
+fn a_fee_cap_below_what_the_chain_charges_now_signs_nothing_until_its_fees_fall() {
+    let evm = wallet_with_evm();
+    evm.fund(ETHEREUM, ETH);
+    // The base fee is 10 gwei and Ethereum's least tip 1 gwei, so a cap of
+    // 10 gwei a gas would wait in the pools, holding its nonce.
+    let capped = evm.propose(evm_transfer(
+        evm.account.id,
+        ETHEREUM,
+        RECIPIENT,
+        1_000,
+        Some(21_000 * 10 * GWEI),
+    ));
+    assert!(matches!(
+        evm.execute(capped.id),
+        Err(WalletError::ChainError(reason)) if reason.contains("once its fees are lower")
+    ));
+    assert_eq!(evm.state(capped.id), Some(ActionState::Ready));
+    assert!(evm.sends(ETHEREUM).is_empty());
+
+    // It holds no nonce: a later transfer takes the first.
+    let other = evm.propose(evm_transfer(
+        evm.account.id,
+        ETHEREUM,
+        RECIPIENT,
+        2_000,
+        None,
+    ));
+    evm.send(other.id, ETHEREUM);
+    assert_eq!(evm.pool(ETHEREUM)[0].nonce, 0);
+    evm.mine(ETHEREUM);
+
+    // Once the base fee falls to 5 gwei, it runs within its cap.
+    evm.mock::<()>(
+        "mock_set_fees",
+        encode_args((
+            ETHEREUM,
+            candid::Nat::from(5 * GWEI),
+            candid::Nat::from(2 * GWEI),
+        ))
+        .unwrap(),
+    );
+    let hash = evm.send(capped.id, ETHEREUM);
+    let pool = evm.pool(ETHEREUM);
+    assert_eq!(
+        (
+            pool[0].hash.clone(),
+            pool[0].nonce,
+            wei(pool[0].max_fee_per_gas.clone()),
+            wei(pool[0].max_priority_fee_per_gas.clone())
+        ),
+        (hash, 1, 10 * GWEI, 2 * GWEI)
+    );
+    evm.mine(ETHEREUM);
+    assert_eq!(evm.held(ETHEREUM, RECIPIENT), 3_000);
+}
+
+#[test]
+fn a_transfer_that_reverts_fails_once_finalized_and_pays_its_fee() {
+    let evm = wallet_with_evm();
+    evm.fund(ETHEREUM, ETH);
+    evm.mock::<()>("mock_revert", encode_args((ETHEREUM, RECIPIENT)).unwrap());
+    let transfer = evm.propose(evm_transfer(
+        evm.account.id,
+        ETHEREUM,
+        RECIPIENT,
+        ETH / 2,
+        None,
+    ));
+    evm.send(transfer.id, ETHEREUM);
+    evm.mine(ETHEREUM);
+    evm.finalize(ETHEREUM);
+    evm.settle();
+    assert!(matches!(
+        evm.execute(transfer.id),
+        Err(WalletError::InvalidArgument(reason)) if reason.contains("already failed")
+    ));
+    let executed: Vec<_> = evm
+        .audit()
+        .into_iter()
+        .filter(|(_, event)| *event == AuditEvent::Executed(transfer.id))
+        .collect();
+    assert_eq!(
+        executed,
+        [
+            (Some(evm.owner), AuditEvent::Executed(transfer.id)),
+            (None, AuditEvent::Executed(transfer.id))
+        ]
+    );
+    assert_eq!(evm.balance(ETHEREUM), ETH - 21_000 * 12 * GWEI);
+    assert_eq!(evm.held(ETHEREUM, RECIPIENT), 0);
+}
+
+#[test]
+fn a_send_the_wallet_could_not_tell_was_taken_is_sent_again_the_same() {
+    let evm = wallet_with_evm();
+    evm.fund(ETHEREUM, ETH);
+    let transfer = evm.propose(evm_transfer(
+        evm.account.id,
+        ETHEREUM,
+        RECIPIENT,
+        1_000,
+        None,
+    ));
+
+    // The providers took it, and their answers were lost.
+    evm.fail("eth_sendRawTransaction", Some(Failure::DoneThenError));
+    assert!(matches!(
+        evm.execute(transfer.id),
+        Err(WalletError::ChainError(reason)) if reason.contains("send the same one")
+    ));
+    assert_eq!(evm.state(transfer.id), Some(ActionState::Ready));
+    assert!(matches!(
+        act(&evm.pic, evm.wallet, evm.owner, "reject", transfer.id),
+        Err(WalletError::InvalidArgument(reason)) if reason.contains("may have reached")
+    ));
+    let pool = evm.pool(ETHEREUM);
+    assert_eq!(pool.len(), 1);
+    evm.fail("eth_sendRawTransaction", None);
+
+    // The wallet's timer executes it again: the same transaction, which a
+    // node already knows.
+    evm.settle();
+    let sends = evm.sends(ETHEREUM);
+    assert_eq!(sends.len(), 2);
+    assert_eq!(sends[0], sends[1]);
+    assert_eq!(evm.state(transfer.id), None);
+    assert_eq!(
+        evm.audit().last(),
+        Some(&(None, AuditEvent::Executed(transfer.id)))
+    );
+    assert_eq!(evm.pool(ETHEREUM), pool);
+    evm.mine(ETHEREUM);
+
+    // A send that trapped before any provider saw it: the owner executes
+    // it again.
+    let next = evm.propose(evm_transfer(
+        evm.account.id,
+        ETHEREUM,
+        RECIPIENT,
+        2_000,
+        None,
+    ));
+    evm.fail("eth_sendRawTransaction", Some(Failure::Trap));
+    assert!(matches!(
+        evm.execute(next.id),
+        Err(WalletError::ChainError(reason)) if reason.contains("send the same one")
+    ));
+    assert_eq!(evm.sends(ETHEREUM).len(), 2);
+    evm.fail("eth_sendRawTransaction", None);
+    let hash = evm.send(next.id, ETHEREUM);
+    assert_eq!(evm.pool(ETHEREUM)[0].hash, hash);
+    assert_eq!(evm.pool(ETHEREUM)[0].nonce, 1);
+    evm.mine(ETHEREUM);
+    assert_eq!(evm.held(ETHEREUM, RECIPIENT), 3_000);
+}
+
+#[test]
+fn a_transfer_on_an_op_stack_chain_budgets_what_it_pays_beyond_gas() {
+    let evm = wallet_with_evm();
+    let (pic, wallet, owner) = (&evm.pic, evm.wallet, evm.owner);
+    track(pic, wallet, owner, "track_asset", Chain::Evm(BASE)).unwrap();
+    let (base_fee, tip) = (10_000_000, 1_000_000);
+    evm.mock::<()>(
+        "mock_set_fees",
+        encode_args((BASE, candid::Nat::from(base_fee), candid::Nat::from(tip))).unwrap(),
+    );
+    let (l1_fee, operator_fee) = (30_000 * GWEI, 1_000 * GWEI);
+    evm.mock::<()>(
+        "mock_set_beyond_gas",
+        encode_args((
+            BASE,
+            candid::Nat::from(l1_fee),
+            candid::Nat::from(operator_fee),
+        ))
+        .unwrap(),
+    );
+    let amount = ETH / 100;
+    // The gas at twice the base fee and the tip, and twice what the fee
+    // oracle names beyond gas.
+    let beyond = 2 * (l1_fee + operator_fee);
+    let most = amount + 21_000 * (2 * base_fee + tip) + beyond;
+
+    evm.fund(BASE, most - 1);
+    let short = evm.propose(evm_transfer(evm.account.id, BASE, RECIPIENT, amount, None));
+    let failed = evm.execute(short.id).unwrap();
+    assert!(
+        matches!(&failed.state, ActionState::Failed(reason) if reason.contains(&format!("needs {most}"))),
+        "{failed:?}"
+    );
+    // A proposer's fee cap must cover what the chain may charge beyond gas.
+    evm.fund(BASE, most);
+    let capped = evm.propose(evm_transfer(
+        evm.account.id,
+        BASE,
+        RECIPIENT,
+        amount,
+        Some(beyond),
+    ));
+    let failed = evm.execute(capped.id).unwrap();
+    assert!(
+        matches!(&failed.state, ActionState::Failed(reason) if reason.contains("does not cover")),
+        "{failed:?}"
+    );
+
+    let transfer = evm.propose(evm_transfer(evm.account.id, BASE, RECIPIENT, amount, None));
+    evm.send(transfer.id, BASE);
+    let oracle: Vec<(String, candid::Nat)> =
+        evm.mock("mock_oracle_calls", encode_args(()).unwrap());
+    let oracle: Vec<(String, u128)> = oracle
+        .into_iter()
+        .map(|(selector, argument)| (selector, wei(argument)))
+        .collect();
+    // The L1 fee of the unsigned transaction's size, and the operator's fee
+    // of its gas.
+    assert_eq!(oracle.len(), 6, "{oracle:?}");
+    for (selector, argument) in oracle.chunks(2).map(|pair| (&pair[0], &pair[1])) {
+        assert_eq!(selector.0, "f1c7a58b");
+        assert!((40..100).contains(&selector.1), "{selector:?}");
+        assert_eq!(*argument, ("275aedd2".to_string(), 21_000));
+    }
+    let pool = evm.pool(BASE);
+    assert_eq!(
+        (
+            wei(pool[0].max_fee_per_gas.clone()),
+            wei(pool[0].max_priority_fee_per_gas.clone())
+        ),
+        (2 * base_fee + tip, tip)
+    );
+    evm.mine(BASE);
+    assert_eq!(
+        evm.balance(BASE),
+        most - amount - 21_000 * (base_fee + tip) - l1_fee - operator_fee
+    );
 }
