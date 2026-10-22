@@ -1073,7 +1073,8 @@ async fn settle_evm(id: ActionId, from: AccountId, chain: u64, tx: &EvmTx) {
 /// The balance of Bitcoin account `from` once the network confirms the
 /// wallet's transactions from it (see `btc::available`). With none to
 /// watch, the Bitcoin canister's balance; otherwise its outputs, read once,
-/// which also tell how those transactions stand.
+/// which also tell how those transactions stand, and its balance as well
+/// when they are too many to read.
 pub async fn bitcoin_balance(
     from: AccountId,
     account: &StoredAccount,
@@ -1085,7 +1086,7 @@ pub async fn bitcoin_balance(
             .await
             .map_err(WalletError::ChainError);
     }
-    let utxos = bitcoin_canister::coins(network, address)
+    let utxos = bitcoin_canister::coins(network, address.clone())
         .await
         .map_err(WalletError::ChainError)?;
     let now = ic_cdk::api::time();
@@ -1099,5 +1100,11 @@ pub async fn bitcoin_balance(
             watching.push(watch);
         }
     }
-    Ok(btc::available(&utxos.coins, &watching))
+    if utxos.complete {
+        return Ok(btc::available(&utxos.coins, &watching));
+    }
+    let total = bitcoin_canister::balance(network, address)
+        .await
+        .map_err(WalletError::ChainError)?;
+    Ok(btc::available_of_total(total, &watching))
 }

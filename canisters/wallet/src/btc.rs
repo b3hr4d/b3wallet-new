@@ -435,6 +435,8 @@ pub struct Watched {
     pub txid: [u8; 32],
     /// The outpoints it spends, as `outpoint_key` writes them.
     pub inputs: Vec<[u8; 36]>,
+    /// What those outputs hold.
+    pub spends: u64,
     /// What it pays back to the account.
     pub change: u64,
     /// How many times it was handed to the Bitcoin canister.
@@ -525,6 +527,23 @@ pub fn available(coins: &[Coin], watched: &[Watched]) -> u64 {
         .iter()
         .filter(|coin| !leaving.contains(&coin.key()))
         .fold(change, |sum, coin| sum.saturating_add(coin.value))
+}
+
+/// The same from `total`, what all the account's outputs hold, when there
+/// were too many of them to read: less what each watched transaction spends,
+/// plus its change, unless it is known to be confirmed. One the wallet has
+/// not seen confirmed counts as unconfirmed, so the amount errs low.
+pub fn available_of_total(total: u64, watched: &[Watched]) -> u64 {
+    let (spends, change) = watched
+        .iter()
+        .filter(|tx| tx.spent_at_height.is_none())
+        .fold((0u64, 0u64), |(spends, change), tx| {
+            (
+                spends.saturating_add(tx.spends),
+                change.saturating_add(tx.change),
+            )
+        });
+    total.saturating_add(change).saturating_sub(spends)
 }
 
 #[cfg(test)]
@@ -870,6 +889,7 @@ pub(crate) mod tests {
         Watched {
             txid: [9; 32],
             inputs: inputs.iter().map(|seed| coin(*seed, 1_000).key()).collect(),
+            spends: 1_000 * inputs.len() as u64,
             change,
             sends: 1,
             last_sent_ns: 0,
@@ -958,5 +978,32 @@ pub(crate) mod tests {
         // Confirmed: its inputs are gone, and its change is an output.
         let after = vec![coin(3, 40_000), coin(9, 4_000)];
         assert_eq!(available(&after, &[watched(&[1, 2], 4_000)]), 44_000);
+    }
+
+    #[test]
+    fn past_a_long_output_list_the_available_amount_comes_from_the_balance() {
+        // Outputs 1 and 2 hold 1,000 each; the transaction pays back 400.
+        let mut tx = watched(&[1, 2], 400);
+        // The balance counts every output, those not read included.
+        assert_eq!(available_of_total(70_000, &[]), 70_000);
+        // Its inputs are on a page read: not confirmed.
+        tx.observe(&utxos(&[1, 3], 200, false), 0);
+        assert_eq!(available_of_total(70_000, &[tx.clone()]), 68_400);
+        // Neither its inputs nor its change on the pages read: not known to
+        // be confirmed, so still counted out.
+        tx.observe(&utxos(&[3, 4], 201, false), 0);
+        assert_eq!(available_of_total(70_000, &[tx.clone()]), 68_400);
+        // Its change on a page read: confirmed, and the balance has it all.
+        let mut confirmed = utxos(&[3], 202, false);
+        confirmed.coins.push(Coin {
+            txid: tx.txid,
+            vout: 1,
+            value: 400,
+            height: 202,
+            mature: true,
+        });
+        tx.observe(&confirmed, 0);
+        assert_eq!(tx.spent_at_height, Some(202));
+        assert_eq!(available_of_total(68_400, &[tx]), 68_400);
     }
 }

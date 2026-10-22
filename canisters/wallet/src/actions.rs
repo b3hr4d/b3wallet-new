@@ -181,6 +181,7 @@ impl BitcoinTx {
         btc::Watched {
             txid,
             inputs,
+            spends: self.values.iter().sum(),
             change,
             sends: self.sends.unwrap_or(1),
             last_sent_ns: self.last_sent_ns.unwrap_or(0),
