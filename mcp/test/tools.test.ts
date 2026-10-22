@@ -295,7 +295,12 @@ test("reads come back in the token's units", async () => {
   assert.equal(balance.amount, "10.5 ICP")
   assert.equal(balance.base_units, "1050000000")
   assert.deepEqual(JSON.parse(await run("wallet_activity", { limit: 3 })), [
-    { seq: "4", at: "2027-01-15T08:01:00.000Z", by: OWNER, event: "executed action 2" },
+    {
+      seq: "4",
+      at: "2027-01-15T08:01:00.000Z",
+      by: OWNER,
+      event: "ran action 2, which may have failed: the log does not say",
+    },
     { seq: "3", at: "2027-01-15T08:00:00.000Z", by: "you", event: "proposed action 2" },
     { seq: "2", at: "1970-01-01T00:00:00.000Z", by: "the wallet", event: "cycles ran low: 3" },
   ])

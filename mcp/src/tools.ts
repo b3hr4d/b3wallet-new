@@ -76,8 +76,11 @@ export function eventText(event: AuditEvent): string {
     case "Proposed":
     case "Approved":
     case "Rejected":
-    case "Executed":
       return `${event.tag.toLowerCase()} action ${event.value}`
+    // The wallet logs a run that failed, such as a transfer the ledger
+    // refused, the same as one that succeeded.
+    case "Executed":
+      return `ran action ${event.value}, which may have failed: the log does not say`
     case "ExtensionCall":
       return `extension ${event.value.extension} asked: ${event.value.request}`
     case "UpgradeStaged":
@@ -323,7 +326,7 @@ function tools(client: Client, config: Config): Tool[] {
       name: "wallet_activity",
       title: "What happened in the wallet",
       description:
-        "The wallet's audit log, newest first: who proposed, approved, ran or rejected each action, who asked to join, and accounts added. A transfer that ran is no longer open: its action shows here as executed.",
+        "The wallet's audit log, newest first: who proposed, approved, ran or rejected each action, who asked to join, and accounts added. A transfer that ran is no longer open, and shows here as run, but the log does not say whether it succeeded: a ledger may have refused it. Check the account's balance before saying a transfer went through.",
       inputSchema: {
         type: "object",
         properties: {
