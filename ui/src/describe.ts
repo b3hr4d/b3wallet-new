@@ -1,5 +1,19 @@
-import { isReactorError } from "@ic-reactor/core"
-import type { WalletError } from "./generated/wallet.ts"
+import { isReactorError, type ReactorError } from "@ic-reactor/core"
+import { AgentError, CertifiedRejectErrorCode } from "@icp-sdk/core/agent"
+import type {
+  Account,
+  Action,
+  ActionKind,
+  Budget,
+  Pending,
+  Permission,
+  PolicyRule,
+  Role,
+  TxReceipt,
+  WalletError,
+} from "./generated/wallet.ts"
+import { dateOf, durationText } from "./time.ts"
+import { amountText, chainAmountText, chainText, type Token } from "./tokens.ts"
 
 /** What a refusal of the wallet means, in a sentence. */
 export function walletErrorText(error: WalletError): string {
@@ -21,7 +35,7 @@ export function walletErrorText(error: WalletError): string {
     case "QuorumNotMet":
       return `This needs ${error.value.quorum} approvals and has ${error.value.approvals}.`
     case "TimelockActive":
-      return "This waits for its timelock."
+      return `This can run after ${dateOf(error.value.executable_after_ns)}.`
     case "BudgetExceeded":
       return "This exceeds the remaining budget."
     case "NotFound":
@@ -41,8 +55,210 @@ export function walletErrorText(error: WalletError): string {
 export function failureText(error: unknown): string {
   if (!isReactorError(error)) return error instanceof Error ? error.message : String(error)
   if (error.kind === "canister_err") return walletErrorText(error.err as WalletError)
+  const refusal = refusalOf(error)
+  if (refusal !== undefined) return `Refused: ${refusal}.`
   if (error.mayHaveExecuted) {
     return "The wallet did not answer, and the call may have gone through. The page shows what the wallet says now."
   }
   return error.message
+}
+
+/**
+ * Why a canister refused a call, when it did. The app writes only to the
+ * wallet, which rejects a call only in a guard, before the method runs (see
+ * `canisters/wallet/src/access.rs`): a write it rejected did nothing, whatever
+ * an update's reject leaves open in general. Only a certified reject counts;
+ * every call the app makes is replicated, so no single replica speaks here.
+ */
+function refusalOf(error: ReactorError): string | undefined {
+  const cause = error.cause
+  if (
+    error.kind === "rejected" &&
+    error.rejectCode === 4 &&
+    cause instanceof AgentError &&
+    cause.code instanceof CertifiedRejectErrorCode
+  ) {
+    return cause.code.rejectMessage
+  }
+  return undefined
+}
+
+/** A role, after "is" or "as". */
+export function roleText(role: Role): string {
+  switch (role.tag) {
+    case "Owner":
+      return "an owner"
+    case "Approver":
+      return "an approver"
+    case "Viewer":
+      return "a viewer"
+  }
+}
+
+/**
+ * Whether an action is a join request: an `AddMember` of its own proposer,
+ * which only someone who is not a member yet sends.
+ */
+export function isJoinRequest(pending: Pending): boolean {
+  return pending.action.tag === "AddMember" && pending.action.value.id === pending.proposed_by
+}
+
+/**
+ * What an action does, in a sentence without its full stop. A transfer names
+ * the account it sends from, `from`, and its amounts in `token` once they are
+ * known, and in base units until then. It names a fee set in the proposal: a
+ * Bitcoin transfer spends it on top of the amount.
+ */
+export function actionText(
+  action: Action,
+  from: Account | undefined,
+  token: Token | undefined,
+): string {
+  switch (action.tag) {
+    case "Transfer": {
+      const { amount, to, fee } = action.value
+      const units = (value: bigint) => (token ? amountText(value, token) : `${value} base units`)
+      const source = from ? `“${from.label}”` : `account ${action.value.from}`
+      const paying = fee === null ? "" : `, paying a fee of ${units(fee)}`
+      return `Send ${units(amount)} from ${source} to ${to}${paying}`
+    }
+    case "AddMember":
+      return `Add ${action.value.id} as ${roleText(action.value.role)}, “${action.value.label}”`
+    case "RemoveMember":
+      return `Remove the member ${action.value}`
+    case "ChangeRole":
+      return `Make ${action.value.id} ${roleText(action.value.role)}`
+    case "InstallExtension":
+      return `Install the extension ${action.value.canister}`
+    case "UninstallExtension":
+      return `Uninstall the extension ${action.value}`
+    case "SetPolicy":
+      return "Change the approval policy"
+    case "Upgrade":
+      return `Upgrade the wallet to version ${action.value.version}`
+  }
+}
+
+/**
+ * What an action sets beyond what `actionText` says, a sentence a line, so a
+ * member sees all of it before approving: a transfer's memo, an extension's
+ * permissions and budgets, a policy's rules and an upgrade's Wasm hash.
+ */
+export function actionDetails(action: Action): string[] {
+  switch (action.tag) {
+    case "Transfer":
+      return action.value.memo === null ? [] : [`Memo: ${hexOf(action.value.memo)}.`]
+    case "InstallExtension": {
+      const { granted, budgets } = action.value
+      if (granted.length === 0 && budgets.length === 0) return ["It is granted nothing."]
+      return [...granted.map(permissionText), ...budgets.map(budgetText)]
+    }
+    case "SetPolicy":
+      return action.value.rules.flatMap(ruleText)
+    case "Upgrade":
+      return [`The new version's Wasm has the SHA-256 ${hexOf(action.value.wasm_sha256)}.`]
+    case "AddMember":
+    case "RemoveMember":
+    case "ChangeRole":
+    case "UninstallExtension":
+      return []
+  }
+}
+
+function permissionText(permission: Permission): string {
+  switch (permission.tag) {
+    case "ReadAccounts":
+      return "It may read the accounts and their balances."
+    case "ProposeTransfer":
+      return "It may propose transfers."
+    case "SpendSubWallet":
+      return `It may spend from its own sub-wallet on ${chainText(permission.value)}.`
+  }
+}
+
+function budgetText(budget: Budget): string {
+  const perDay = `${chainAmountText(budget.per_day, budget.chain)} a day`
+  const total =
+    budget.total === null ? "" : ` and ${chainAmountText(budget.total, budget.chain)} in all`
+  return `On ${chainText(budget.chain)}, it may spend ${perDay}${total}.`
+}
+
+function ruleText(rule: PolicyRule): string[] {
+  const approvals = `${rule.quorum} approval${rule.quorum === 1 ? "" : "s"}`
+  const wait = rule.timelock_ns === 0n ? "no wait" : `a wait of ${durationText(rule.timelock_ns)}`
+  return [
+    `${KIND_TEXT[rule.kind.tag]}: ${approvals} and ${wait}.`,
+    ...rule.daily_limits.map(
+      (limit) =>
+        `A transfer that keeps the last 24 hours' spending on ${chainText(limit.chain)} within ${chainAmountText(limit.amount, limit.chain)} needs only its proposer and no wait.`,
+    ),
+  ]
+}
+
+const KIND_TEXT: Record<ActionKind["tag"], string> = {
+  Transfer: "A transfer",
+  AddMember: "Adding a member",
+  RemoveMember: "Removing a member",
+  ChangeRole: "Changing a role",
+  InstallExtension: "Installing an extension",
+  UninstallExtension: "Uninstalling an extension",
+  SetPolicy: "Changing the policy",
+  Upgrade: "An upgrade",
+}
+
+function hexOf(bytes: Uint8Array): string {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
+}
+
+/** The account a transfer sends from, once `accounts` are read. */
+export function sourceOf(action: Action, accounts: Account[] | undefined): Account | undefined {
+  return action.tag === "Transfer"
+    ? accounts?.find((account) => account.id === action.value.from)
+    : undefined
+}
+
+/** What a join request asks, in a sentence without its full stop. */
+export function joinRequestText(pending: Pending): string {
+  const label = pending.action.tag === "AddMember" ? pending.action.value.label : ""
+  return `${pending.proposed_by} asks to join as a viewer, “${label}”`
+}
+
+/**
+ * The browser's clock may run a little behind the wallet's. An action whose
+ * timelock ends within this margin counts as ready to run; if it is still
+ * early, the wallet refuses and says until when.
+ */
+const CLOCK_MARGIN_NS = 60_000_000_000n
+
+/** Whether an action can run at `nowNs`, within the clocks' margin. */
+export function canRun(pending: Pending, nowNs: bigint): boolean {
+  return pending.state.tag === "Ready" && pending.executable_after_ns <= nowNs + CLOCK_MARGIN_NS
+}
+
+/** Where an action stands at `nowNs`, in a sentence. */
+export function stateText(pending: Pending, nowNs: bigint): string {
+  const { state } = pending
+  switch (state.tag) {
+    case "Waiting":
+      return `Waiting for approvals: ${pending.approvals.length} of ${pending.quorum}.`
+    case "Ready":
+      return canRun(pending, nowNs)
+        ? "Approved and ready to run."
+        : `Approved. It can run after ${dateOf(pending.executable_after_ns)}.`
+    case "Executed":
+      return state.value.tag === "Done" ? "Done." : `Sent: ${receiptText(state.value.value)}.`
+    case "Rejected":
+      return `Rejected by ${state.value}.`
+    case "Expired":
+      return "Expired."
+    case "Failed":
+      return `Failed: ${state.value}`
+  }
+}
+
+/** Where a transfer that was sent can be found. */
+export function receiptText(receipt: TxReceipt): string {
+  return receipt.chain.tag === "Bitcoin"
+    ? `Bitcoin transaction ${receipt.tx_id}`
+    : `block ${receipt.tx_id} of the ledger`
 }

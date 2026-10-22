@@ -1179,6 +1179,8 @@ fn an_audit_page_holds_at_most_a_hundred_entries() {
 // ---- Step 7: certified pages -------------------------------------------------
 
 const INDEX_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/index.html");
+const SEND_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/send.html");
+const APPROVALS_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/approvals.html");
 const CLAIM_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/claim.html");
 const NOT_FOUND_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/404.html");
 const APP_JS: &[u8] = include_bytes!("../../../canisters/wallet/pages/app.js");
@@ -1297,6 +1299,10 @@ fn check_every_page(pic: &PocketIc, id: Principal) {
         ("/", 200, INDEX_HTML, HTML),
         ("/index.html", 200, INDEX_HTML, HTML),
         ("/?from=link", 200, INDEX_HTML, HTML),
+        ("/send", 200, SEND_HTML, HTML),
+        ("/send.html", 200, SEND_HTML, HTML),
+        ("/approvals", 200, APPROVALS_HTML, HTML),
+        ("/approvals.html", 200, APPROVALS_HTML, HTML),
         ("/claim", 200, CLAIM_HTML, HTML),
         ("/claim.html", 200, CLAIM_HTML, HTML),
         ("/app.js", 200, APP_JS, "text/javascript; charset=utf-8"),

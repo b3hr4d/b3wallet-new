@@ -1,0 +1,11 @@
+// The part of an ICRC-1 ledger's interface the wallet's pages read.
+
+// A value of the ledger's metadata.
+type MetadataValue = variant { Nat : nat; Int : int; Text : text; Blob : blob };
+
+// The ICP ledger answers it too.
+service : {
+  // The token's decimals, symbol and fee, among others, as
+  // "icrc1:decimals", "icrc1:symbol" and "icrc1:fee".
+  icrc1_metadata : () -> (vec record { text; MetadataValue }) query;
+}

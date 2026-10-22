@@ -15,6 +15,10 @@ export function App({ page }: { page: Page }) {
         <a className="brand" href="/">
           Wallet
         </a>
+        <nav className="nav">
+          <a href="/send">Send</a>
+          <a href="/approvals">Approvals</a>
+        </nav>
       </header>
       <main className="page">
         {page === "missing" ? (

@@ -23,13 +23,15 @@ if (process.version !== `v${engines.node}`) {
 }
 
 // The bindings come from the wallet's interface on every build, so the app
-// cannot call the wallet with an interface it no longer has.
+// cannot call the wallet with an interface it no longer has; the ledger's
+// are of the part of ICRC-1 the app reads.
 execFileSync(
   process.execPath,
   [
     join(ui, "node_modules/@candid-core/cli/bin/cli.js"),
     "gen",
     join(ui, "../candid/wallet.did"),
+    join(ui, "candid/icrc1.did"),
     "-o",
     join(ui, "src/generated"),
   ],
@@ -84,7 +86,15 @@ const files = [
   })),
   ...pages.map(({ file, html }) => ({ file, bytes: Buffer.from(html, "utf8") })),
 ]
-const expected = ["404.html", "app.css", "app.js", "claim.html", "index.html"]
+const expected = [
+  "404.html",
+  "app.css",
+  "app.js",
+  "approvals.html",
+  "claim.html",
+  "index.html",
+  "send.html",
+]
 const names = files.map(({ file }) => file).sort()
 if (names.join() !== expected.join()) {
   throw new Error(`the build made ${names.join(", ")}, not ${expected.join(", ")}`)

@@ -6,7 +6,7 @@
     "node": "22.22.0"
   },
   "scripts": {
-    "gen": "candid-core-cli gen ../candid/wallet.did -o src/generated",
+    "gen": "candid-core-cli gen ../candid/wallet.did candid/icrc1.did -o src/generated",
     "build": "node build.mjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
@@ -21,6 +21,7 @@
     "@icp-sdk/auth": "11.0.0",
     "@icp-sdk/core": "6.1.1",
     "@noble/curves": "2.4.0",
+    "@noble/hashes": "2.4.0",
     "@tanstack/query-core": "5.104.5",
     "@tanstack/react-query": "5.104.5",
     "react": "19.3.1",

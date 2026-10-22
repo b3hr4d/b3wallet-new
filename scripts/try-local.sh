@@ -134,8 +134,26 @@ the local Internet Identity, and claim it:
   $page/claim#$(ed25519 seed "$state/claim.pem")
 
 The link holds the claim key, so whoever opens it first owns the wallet.
-Stop the network with: icp network stop
+Once it is yours, add an ICP account on its start page; the first one is the
+wallet's own principal, and this sends it 10 local ICP:
+
+  icp token transfer 10 $wallet
 DONE
+  if $bitcoin; then
+    cat <<DONE
+
+Add a Bitcoin regtest account too, and this mines 50 regtest BTC to the
+address its page shows, spendable 100 blocks later:
+
+  $bitcoin_cli -regtest -rpcport=18443 -rpcuser=local -rpcpassword=local generatetoaddress 1 <address>
+  $bitcoin_cli -regtest -rpcport=18443 -rpcuser=local -rpcpassword=local generatetoaddress 100 $burn
+
+Stop everything with: icp network stop; $bitcoin_cli -regtest -rpcport=18443 -rpcuser=local -rpcpassword=local stop
+DONE
+  else
+    echo
+    echo "Stop the network with: icp network stop"
+  fi
   exit 0
 fi
 
