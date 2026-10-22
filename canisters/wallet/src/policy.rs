@@ -1,7 +1,7 @@
 //! The approval policy: for each kind of action, how many approvals it needs
 //! and how long it waits once it has them. Pure: no storage and no clock.
 
-use crate::accounts::check_chain;
+use crate::assets;
 use crate::{ActionKind, Chain, Policy, PolicyRule, Role};
 use candid::Nat;
 
@@ -60,7 +60,7 @@ pub fn validate(policy: &Policy) -> Result<(), String> {
             ));
         }
         for (index, limit) in rule.daily_limits.iter().enumerate() {
-            check_chain(&limit.chain).map_err(|reason| format!("a daily limit: {reason}"))?;
+            assets::check(&limit.chain).map_err(|reason| format!("a daily limit: {reason}"))?;
             if rule.daily_limits[..index]
                 .iter()
                 .any(|earlier| earlier.chain == limit.chain)
@@ -387,7 +387,7 @@ pub(crate) mod tests {
     #[test]
     fn a_daily_limit_names_the_icp_ledger_as_icp_and_a_canister_as_icrc() {
         for chain in [
-            Chain::Icrc(crate::accounts::ICP_LEDGER),
+            Chain::Icrc(crate::assets::ICP_LEDGER),
             Chain::Icrc(candid::Principal::self_authenticating([1; 32])),
         ] {
             let policy = with_rule(default_policy(), ActionKind::Transfer, |rule| {

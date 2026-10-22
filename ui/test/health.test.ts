@@ -17,6 +17,7 @@ const status: Status = {
   cycles: 4_210_000_000_000n,
   upgrade: { tag: "Idle" },
   release_channel: "aovwi-4maaa-aaaaa-qaagq-cai" as never,
+  bitcoin_network: { tag: "Mainnet" },
 }
 const me: Member = {
   id: owner,
@@ -27,7 +28,10 @@ const me: Member = {
 }
 const transfer: Pending = {
   id: 3n,
-  action: { tag: "Transfer", value: { from: 1, to: phone, amount: 1n, fee: null, memo: null } },
+  action: {
+    tag: "Transfer",
+    value: { from: 1, asset: null, to: phone, amount: 1n, fee: null, memo: null },
+  },
   proposed_by: phone,
   proposed_at_ns: NOW,
   approvals: [],

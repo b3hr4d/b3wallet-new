@@ -56,6 +56,10 @@ export function Live({
   )
 }
 
+/**
+ * The page's own part. `local` is for the settings page only, whose read of
+ * the IC's certified state needs the local network's root key.
+ */
 function Wallet({
   page,
   wallet,
@@ -67,7 +71,7 @@ function Wallet({
 }) {
   switch (page) {
     case "home":
-      return <Home wallet={wallet} local={local} />
+      return <Home wallet={wallet} />
     case "send":
       return <Send wallet={wallet} />
     case "receive":

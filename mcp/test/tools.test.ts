@@ -9,6 +9,7 @@ import {
   type Account,
   type Action,
   type Actor as Wallet,
+  type Chain,
   type Pending,
 } from "../src/generated/wallet.ts"
 import { readConfig } from "../src/config.ts"
@@ -18,18 +19,32 @@ import { walletTools } from "../src/tools.ts"
 
 const WALLET = "uxrrr-q7777-77774-qaaaq-cai"
 const ICP_LEDGER = "ryjl3-tyaaa-aaaaa-aaaba-cai"
+const TOKEN_LEDGER = "mxzaz-hqaaa-aaaar-qaada-cai"
 const FRIEND = "2vxsx-fae"
 const OWNER = "aaaaa-aa"
 const SECOND = 1_000_000_000n
 
 const icp: Account = {
   id: 1,
-  chain: { tag: "Icp" },
+  kind: { tag: "InternetComputer" },
   label: "main",
   address: WALLET,
+  icp_account_id: "1c7a48ba6a562aa9eaa2481a9049cdf0433b9738c992d698c31d8abf89cadc79",
   index: 0,
   holder: { tag: "Wallet" },
 }
+
+const btc: Account = {
+  id: 2,
+  kind: { tag: "Bitcoin", value: { tag: "Regtest" } },
+  label: "Main",
+  address: "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080",
+  icp_account_id: null,
+  index: 0,
+  holder: { tag: "Wallet" },
+}
+
+const token: Chain = { tag: "Icrc", value: TOKEN_LEDGER as Pending["proposed_by"] }
 
 /**
  * A wallet that keeps what is proposed and refuses what the real one refuses
@@ -70,6 +85,7 @@ function setUp(options: { member?: boolean } = {}) {
       claim_expires_at_ns: null,
       cycles: 5_000_000_000_000n,
       upgrade: { tag: "Idle" },
+      bitcoin_network: { tag: "Regtest" },
       release_channel: ICP_LEDGER as Pending["proposed_by"],
     })),
     whoami: record("whoami", (ctx) =>
@@ -94,10 +110,16 @@ function setUp(options: { member?: boolean } = {}) {
         ),
       }
     }),
-    accounts: record("accounts", () => ({ tag: "Ok", value: [icp] })),
-    balance: record("balance", (id) => ({
+    accounts: record("accounts", () => ({ tag: "Ok", value: [icp, btc] })),
+    assets: record("assets", () => ({ tag: "Ok", value: [{ tag: "Icp" }, token] })),
+    balance: record("balance", (id, asset) => ({
       tag: "Ok",
-      value: { account: id, amount: 1_050_000_000n, as_of_ns: 1_800_000_000n * SECOND },
+      value: {
+        account: id,
+        asset: asset ?? { tag: "Icp" },
+        amount: 1_050_000_000n,
+        as_of_ns: 1_800_000_000n * SECOND,
+      },
     })),
     audit_log: record("audit_log", (request, ctx) => ({
       tag: "Ok",
@@ -138,6 +160,12 @@ function setUp(options: { member?: boolean } = {}) {
       ["icrc1:symbol", { tag: "Text", value: "ICP" }],
       ["icrc1:decimals", { tag: "Nat", value: 8n }],
       ["icrc1:fee", { tag: "Nat", value: 10_000n }],
+    ],
+  })
+  mock<Ledger>(ledgerActor, TOKEN_LEDGER, {
+    icrc1_metadata: () => [
+      ["icrc1:symbol", { tag: "Text", value: "ckBTC" }],
+      ["icrc1:decimals", { tag: "Nat", value: 8n }],
     ],
   })
   const config = readConfig({ B3WALLET_ID: WALLET, B3WALLET_NETWORK: "local" })
@@ -216,6 +244,7 @@ test("a transfer is proposed in base units of the account's token, and waits", a
       tag: "Transfer",
       value: {
         from: 1,
+        asset: { tag: "Icp" },
         to: FRIEND,
         amount: 150_000_000n,
         fee: null,
@@ -230,6 +259,21 @@ test("a transfer is proposed in base units of the account's token, and waits", a
   assert.equal(result.base_units, "150000000")
   assert.match(result.next, /Nothing is sent yet/)
   assert.match(result.next, new RegExp(`http://${WALLET}.localhost:8000/approvals`))
+
+  // A tracked token, named by its ledger, goes in its own units.
+  const sent = JSON.parse(
+    await run("wallet_propose_transfer", {
+      from: 1,
+      asset: TOKEN_LEDGER,
+      to: FRIEND,
+      amount: "0.5",
+    }),
+  )
+  assert.deepEqual(proposals[1], {
+    tag: "Transfer",
+    value: { from: 1, asset: token, to: FRIEND, amount: 50_000_000n, fee: null, memo: null },
+  })
+  assert.equal(sent.what, `Send 0.5 ckBTC from account 1 (“main”) to ${FRIEND}`)
   client.dispose()
 })
 
@@ -247,8 +291,8 @@ test("an amount the token cannot hold is refused before anything is proposed", a
     )
   }
   await assert.rejects(
-    run("wallet_propose_transfer", { from: 2, to: FRIEND, amount: "1" }),
-    /the wallet has no account 2/,
+    run("wallet_propose_transfer", { from: 3, to: FRIEND, amount: "1" }),
+    /the wallet has no account 3/,
   )
   await assert.rejects(
     run("wallet_propose_transfer", { from: 1, to: FRIEND, amount: "1", memo: "x".repeat(33) }),
@@ -257,6 +301,10 @@ test("an amount the token cannot hold is refused before anything is proposed", a
   await assert.rejects(
     run("wallet_propose_transfer", { from: 1, to: " ", amount: "1" }),
     /to is empty/,
+  )
+  await assert.rejects(
+    run("wallet_propose_transfer", { from: 1, asset: "BTC", to: FRIEND, amount: "1" }),
+    /asset: “BTC” is neither ICP nor a ledger's canister id/,
   )
   assert.deepEqual(proposals, [])
   client.dispose()
@@ -286,14 +334,41 @@ test("reads come back in the token's units", async () => {
     {
       id: 1,
       label: "main",
-      chain: "ICP",
+      kind: "Internet Computer: ICP and the tracked ICRC-1 tokens",
       address: WALLET,
-      token: { symbol: "ICP", decimals: 8 },
+      icp_account_id: icp.icp_account_id,
+      assets: [
+        { asset: "ICP", name: "ICP", token: { symbol: "ICP", decimals: 8 } },
+        {
+          asset: TOKEN_LEDGER,
+          name: `ICRC-1 token of ledger ${TOKEN_LEDGER}`,
+          token: { symbol: "ckBTC", decimals: 8 },
+        },
+      ],
+    },
+    {
+      id: 2,
+      label: "Main",
+      kind: "Bitcoin regtest",
+      address: btc.address,
+      icp_account_id: null,
+      assets: [
+        {
+          asset: null,
+          name: "Bitcoin regtest",
+          token: { symbol: "regtest BTC", decimals: 8 },
+        },
+      ],
     },
   ])
   const balance = JSON.parse(await run("wallet_balance", { account: 1 }))
   assert.equal(balance.amount, "10.5 ICP")
   assert.equal(balance.base_units, "1050000000")
+  const tokens = JSON.parse(await run("wallet_balance", { account: 1, asset: TOKEN_LEDGER }))
+  assert.equal(tokens.amount, "10.5 ckBTC")
+  assert.equal(tokens.asset, `ICRC-1 token of ledger ${TOKEN_LEDGER}`)
+  const bitcoin = JSON.parse(await run("wallet_balance", { account: 2 }))
+  assert.equal(bitcoin.amount, "10.5 regtest BTC")
   assert.deepEqual(JSON.parse(await run("wallet_activity", { limit: 3 })), [
     {
       seq: "4",

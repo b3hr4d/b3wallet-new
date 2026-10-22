@@ -26,9 +26,10 @@ const NOW = 1_800_000_000n * SECOND
 
 const main: Account = {
   id: 1,
-  chain: { tag: "Icp" },
+  kind: { tag: "InternetComputer" },
   label: "Main",
   address: "efadq-gl777-77774-aaaba-cai",
+  icp_account_id: null,
   index: 0,
   holder: { tag: "Wallet" },
 }
@@ -37,7 +38,7 @@ const transfer: Pending = {
   id: 3n,
   action: {
     tag: "Transfer",
-    value: { from: 1, to: owner, amount: 150_000_000n, fee: null, memo: null },
+    value: { from: 1, asset: null, to: owner, amount: 150_000_000n, fee: null, memo: null },
   },
   proposed_by: owner,
   proposed_at_ns: NOW,
@@ -59,10 +60,17 @@ test("a transfer names its amount and account once they are known", () => {
 
 test("a transfer names a fee set in its proposal", () => {
   const btc = { symbol: "BTC", decimals: 8, fee: null }
-  const coins: Account = { ...main, chain: { tag: "Bitcoin", value: { tag: "Mainnet" } } }
+  const coins: Account = { ...main, kind: { tag: "Bitcoin", value: { tag: "Mainnet" } } }
   const action: Action = {
     tag: "Transfer",
-    value: { from: 1, to: "bc1qexample", amount: 10_000n, fee: 500_000n, memo: null },
+    value: {
+      from: 1,
+      asset: null,
+      to: "bc1qexample",
+      amount: 10_000n,
+      fee: 500_000n,
+      memo: null,
+    },
   }
   assert.equal(
     actionText(action, coins, btc),
@@ -213,7 +221,14 @@ test("an action shows what it sets beyond its sentence", () => {
   )
   const memo: Action = {
     tag: "Transfer",
-    value: { from: 1, to: owner, amount: 1n, fee: null, memo: new Uint8Array([0x0a, 0x0b]) },
+    value: {
+      from: 1,
+      asset: null,
+      to: owner,
+      amount: 1n,
+      fee: null,
+      memo: new Uint8Array([0x0a, 0x0b]),
+    },
   }
   assert.deepEqual(actionDetails(memo), ["Memo: 0a0b."])
   assert.deepEqual(actionDetails(transfer.action), [])
@@ -287,6 +302,15 @@ test("the audit log names who did what", () => {
   assert.equal(auditText({ tag: "Proposed", value: 4n }, undefined), "proposed action 4")
   assert.equal(auditText({ tag: "AccountAdded", value: 1 }, [main]), "added the account “Main”")
   assert.equal(auditText({ tag: "AccountAdded", value: 2 }, [main]), "added account 2")
+  const ledger = "mxzaz-hqaaa-aaaar-qaada-cai" as never
+  assert.equal(
+    auditText({ tag: "AssetTracked", value: { tag: "Icrc", value: ledger } }, []),
+    `tracked the ICRC-1 token of ledger ${ledger}`,
+  )
+  assert.equal(
+    auditText({ tag: "AssetUntracked", value: { tag: "Icrc", value: ledger } }, []),
+    `stopped tracking the ICRC-1 token of ledger ${ledger}`,
+  )
   assert.equal(
     auditText({ tag: "UpgradeInstalled", value: "0.2.0" }, []),
     "installed version 0.2.0",
@@ -305,21 +329,14 @@ test("an address reads in groups that join back into it", () => {
   assert.deepEqual(addressGroups(""), [])
 })
 
-test("a sender learns the one token an address counts", () => {
-  assert.match(receiveNote({ tag: "Icp" }, undefined), /^Send only ICP here/)
-  assert.match(receiveNote({ tag: "Icp" }, undefined), /account identifier/)
-  const ckbtc = { symbol: "ckBTC", decimals: 8, fee: 10n }
-  const ledger = "mxzaz-hqaaa-aaaar-qaada-cai" as never
+test("a sender learns what an address counts, and in which form", () => {
+  const ic = { tag: "InternetComputer" } as const
+  assert.match(receiveNote(ic), /^Send ICP or an ICRC-1 token the wallet tracks here/)
+  assert.match(receiveNote(ic), /once an owner tracks its ledger/)
+  assert.match(receiveNote(ic, "identifier"), /^For ICP only, from an exchange/)
+  assert.match(receiveNote({ tag: "Bitcoin", value: { tag: "Mainnet" } }), /Bitcoin network/)
   assert.match(
-    receiveNote({ tag: "Icrc", value: ledger }, ckbtc),
-    /^Send only ckBTC here, through its ledger mxzaz-hqaaa-aaaar-qaada-cai\./,
-  )
-  assert.match(
-    receiveNote({ tag: "Bitcoin", value: { tag: "Mainnet" } }, undefined),
-    /Bitcoin network/,
-  )
-  assert.match(
-    receiveNote({ tag: "Bitcoin", value: { tag: "Regtest" } }, undefined),
+    receiveNote({ tag: "Bitcoin", value: { tag: "Regtest" } }),
     /regtest bitcoin here, never mainnet/,
   )
 })

@@ -1,14 +1,14 @@
 import type { Principal } from "@candid-core/schema"
 import { useQuery } from "@tanstack/react-query"
 import { useMemo, useState } from "react"
-import { chainName, TokenAvatar } from "./accounts.tsx"
+import { KindAvatar } from "./accounts.tsx"
 import { useWallet } from "./canister.ts"
 import { CopyButton } from "./copy.tsx"
-import { addressGroups, failureText, receiveNote } from "./describe.ts"
+import { addressGroups, failureText, receiveNote, type AddressForm } from "./describe.ts"
 import type { Account } from "./generated/wallet.ts"
 import { AsMember, Reading } from "./member.tsx"
 import { qrOf } from "./qr.ts"
-import { useToken } from "./tokens.ts"
+import { kindText } from "./tokens.ts"
 
 /**
  * The receive page: an account's whole address, to give whoever sends to it.
@@ -33,7 +33,9 @@ export function Receive({ wallet }: { wallet: Principal }) {
 /** The account the address names, as a number, if it names one. */
 function accountInAddress(): number | undefined {
   const id = Number(new URLSearchParams(window.location.search).get("account") ?? "")
-  return Number.isInteger(id) && id > 0 ? id : undefined
+  return Number.isInteger(id) && id >= 0 && window.location.search.includes("account=")
+    ? id
+    : undefined
 }
 
 function Accounts({ wallet: id }: { wallet: Principal }) {
@@ -50,11 +52,7 @@ function Accounts({ wallet: id }: { wallet: Principal }) {
   }
   const account = accounts.data.find((candidate) => candidate.id === picked) ?? accounts.data[0]
   if (account === undefined) {
-    return (
-      <p className="card">
-        This wallet has no accounts yet. An owner adds one on <a href="/">its start page</a>.
-      </p>
-    )
+    return <p className="card">This wallet has no accounts yet.</p>
   }
   return (
     <div className="receive">
@@ -63,62 +61,78 @@ function Accounts({ wallet: id }: { wallet: Principal }) {
           <legend>Account</legend>
           <div className="picks">
             {accounts.data.map((candidate) => (
-              <Pick
-                key={candidate.id}
-                account={candidate}
-                checked={candidate.id === account.id}
-                onPick={() => setPicked(candidate.id)}
-              />
+              <label key={candidate.id} className="pick">
+                <input
+                  type="radio"
+                  name="account"
+                  checked={candidate.id === account.id}
+                  onChange={() => setPicked(candidate.id)}
+                />
+                <span className="pick-body">
+                  <KindAvatar kind={candidate.kind} />
+                  <span className="pick-name">
+                    <strong>{candidate.label}</strong>
+                    <span>{kindText(candidate.kind)}</span>
+                  </span>
+                </span>
+              </label>
             ))}
           </div>
         </fieldset>
       )}
-      <Address account={account} />
+      <Address key={account.id} account={account} />
     </div>
-  )
-}
-
-function Pick({
-  account,
-  checked,
-  onPick,
-}: {
-  account: Account
-  checked: boolean
-  onPick: () => void
-}) {
-  const { token } = useToken(account.chain)
-  return (
-    <label className="pick">
-      <input type="radio" name="account" checked={checked} onChange={onPick} />
-      <span className="pick-body">
-        <TokenAvatar chain={account.chain} token={token} />
-        <span className="pick-name">
-          <strong>{account.label}</strong>
-          <span>{chainName(account.chain, token)}</span>
-        </span>
-      </span>
-    </label>
   )
 }
 
 /**
  * The address itself, large and in groups, its QR code beside it, with what
- * a sender must know. The QR code holds exactly the address the page shows
- * and copies.
+ * a sender must know. An Internet Computer account has two forms: its ICRC-1
+ * account, for ICP and every ICRC-1 token, and its ICP account identifier,
+ * for exchanges that send ICP only to that. The QR code holds exactly the
+ * form the page shows and copies.
  */
 function Address({ account }: { account: Account }) {
-  const { token } = useToken(account.chain)
-  const qr = useMemo(() => qrOf(account.address), [account.address])
+  const [form, setForm] = useState<AddressForm>("account")
+  const text =
+    form === "identifier" && account.icp_account_id !== null
+      ? account.icp_account_id
+      : account.address
+  const qr = useMemo(() => qrOf(text), [text])
   return (
     <div className="card receive-card">
       <div className="receive-head">
-        <TokenAvatar chain={account.chain} token={token} />
+        <KindAvatar kind={account.kind} />
         <div>
           <h2>{account.label}</h2>
-          <p className="quiet small">{chainName(account.chain, token)}</p>
+          <p className="quiet small">{kindText(account.kind)}</p>
         </div>
       </div>
+      {account.icp_account_id !== null && (
+        <fieldset className="choice">
+          <legend>Form</legend>
+          <div className="segmented">
+            <label>
+              <input
+                type="radio"
+                name="form"
+                checked={form === "account"}
+                onChange={() => setForm("account")}
+              />
+              <span>ICRC-1 account</span>
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="form"
+                checked={form === "identifier"}
+                onChange={() => setForm("identifier")}
+              />
+              <span>Account identifier, for exchanges</span>
+            </label>
+          </div>
+        </fieldset>
+      )}
       <div className="receive-body">
         <figure className="qr">
           <svg
@@ -136,19 +150,21 @@ function Address({ account }: { account: Account }) {
         </figure>
         <div className="receive-main">
           <div className="receive-address">
-            <p className="field-label">Address</p>
+            <p className="field-label">
+              {form === "identifier" ? "ICP account identifier" : "Address"}
+            </p>
             <p className="receive-text">
               <code>
-                {addressGroups(account.address).map((group, index) => (
+                {addressGroups(text).map((group, index) => (
                   <span key={index}>{group}</span>
                 ))}
               </code>
             </p>
           </div>
           <div className="buttons">
-            <CopyButton text={account.address} name="Copy the address" primary />
+            <CopyButton text={text} name="Copy the address" primary />
           </div>
-          <p className="receive-note">{receiveNote(account.chain, token)}</p>
+          <p className="receive-note">{receiveNote(account.kind, form)}</p>
         </div>
       </div>
     </div>

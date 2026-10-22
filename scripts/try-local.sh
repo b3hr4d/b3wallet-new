@@ -6,6 +6,9 @@
 # With --browser it prints the wallet's claim link instead, for you to claim
 # it in a browser with the local Internet Identity, and stops there.
 #
+# With --upgrade it upgrades the wallet it installed last to this checkout,
+# in place: the wallet keeps its owners, accounts, balances and history.
+#
 # Needs icp-cli and ic-wasm, Node, the Rust toolchain of rust-toolchain.toml,
 # and a clang that compiles to WebAssembly (on a Mac, Homebrew's LLVM).
 # Bitcoin Core's bitcoind and bitcoin-cli, on PATH or
@@ -15,10 +18,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 browser=false
+upgrade=false
 case "${1:-}" in
   --browser) browser=true ;;
+  --upgrade) upgrade=true ;;
   "") ;;
-  *) echo "usage: $0 [--browser]" >&2; exit 2 ;;
+  *) echo "usage: $0 [--browser | --upgrade]" >&2; exit 2 ;;
 esac
 
 state=.icp/try
@@ -112,6 +117,20 @@ if $bitcoin && ! btc getblockcount >/dev/null 2>&1; then
 fi
 icp network status >/dev/null 2>&1 || icp network start -d
 
+if $upgrade; then
+  if ! wallet=$(icp canister status wallet --id-only 2>/dev/null); then
+    echo "There is no wallet to upgrade: run $0 first." >&2
+    exit 1
+  fi
+  # A wallet's Bitcoin network is set once it has a Bitcoin account; this
+  # names it for a wallet from before the setting.
+  icp deploy wallet --mode upgrade --yes \
+    --args "(variant { Upgrade = opt record { bitcoin_network = opt variant { Regtest } } })"
+  echo
+  echo "Wallet $wallet runs this checkout now: http://$wallet.localhost:8000/"
+  exit 0
+fi
+
 # The claim key's private half would live in the claim link's fragment.
 expires=$(($(date +%s) + 24 * 60 * 60))000000000
 icp deploy wallet --mode reinstall --cycles 20t --yes --args "(variant { Init = record {
@@ -121,6 +140,7 @@ icp deploy wallet --mode reinstall --cycles 20t --yes --args "(variant { Init = 
   release_signers = vec { blob \"$(ed25519 new "$state/release.pem")\" };
   release_threshold = 1 : nat8;
   factory = null;
+  bitcoin_network = opt variant { Regtest };
 } })"
 wallet=$(icp canister status wallet --id-only)
 page=http://$wallet.localhost:8000
@@ -149,8 +169,8 @@ the local Internet Identity, and claim it:
   $page/claim#$(ed25519 seed "$state/claim.pem")
 
 The link holds the claim key, so whoever opens it first owns the wallet.
-Once it is yours, add an ICP account on its start page; the first one is the
-wallet's own principal, and this sends it 10 local ICP:
+Its Internet Computer account is the wallet's own principal, and this sends
+it 10 local ICP:
 
   icp token transfer 10 $wallet
 DONE
@@ -160,8 +180,8 @@ there too."
   if $bitcoin; then
     cat <<DONE
 
-Add a Bitcoin regtest account too, and this mines 50 regtest BTC to the
-address its page shows, spendable 100 blocks later:
+Its Bitcoin account's address is on its start page once it is yours, and
+this mines 50 regtest BTC to it, spendable 100 blocks later:
 
   $bitcoin_cli -regtest -rpcport=18443 -rpcuser=local -rpcpassword=local generatetoaddress 1 <address>
   $bitcoin_cli -regtest -rpcport=18443 -rpcuser=local -rpcpassword=local generatetoaddress 100 $burn
@@ -178,15 +198,16 @@ fi
 signature=$(ed25519 sign "$state/claim.pem" "claim:$wallet:$me")
 icp canister call wallet claim "(record { signature = blob \"$signature\" })" "${did[@]}"
 
-# Adds an account and prints its address.
-account() {
-  icp canister call wallet add_account "(record { chain = variant { $1 }; label = \"$2\" })" "${did[@]}" \
-    | sed -n 's/.*address = "\(.*\)";/\1/p'
-}
-account Icp icp >/dev/null
 icp token transfer 10 "$wallet"
 if $bitcoin; then
-  bitcoin_address=$(account "Bitcoin = variant { Regtest }" bitcoin)
+  # The wallet adds its Bitcoin account once the subnet gives it the key.
+  for _ in $(seq 60); do
+    bitcoin_address=$(icp canister call wallet accounts '()' "${did[@]}" \
+      | sed -n 's/.*address = "\(bcrt1[a-z0-9]*\)";/\1/p' | head -n 1)
+    [ -n "$bitcoin_address" ] && break
+    sleep 1
+  done
+  [ -n "$bitcoin_address" ] || { echo "The wallet has no Bitcoin account yet." >&2; exit 1; }
   # A mining reward can be spent 100 blocks later.
   btc generatetoaddress 1 "$bitcoin_address" >/dev/null
   btc generatetoaddress 100 "$burn" >/dev/null
@@ -194,7 +215,8 @@ fi
 
 cat <<DONE
 
-Wallet $wallet is yours. Its ICP account 1 received 10 local ICP.
+Wallet $wallet is yours. Its Internet Computer account 1 received 10 local
+ICP.
 DONE
 if $bitcoin; then
   cat <<DONE
@@ -209,9 +231,9 @@ where you sign in with the local Internet Identity: $page/
 Call it with the interface file, which icp-cli cannot read from the canister;
 propose returns the id to execute. Send 1 ICP back to yourself:
 
-  icp canister call wallet balance '(1 : nat32)' ${did[*]}
+  icp canister call wallet balance '(1 : nat32, null)' ${did[*]}
   icp canister call wallet propose '(variant { Transfer = record {
-    from = 1 : nat32; to = "$me";
+    from = 1 : nat32; asset = null; to = "$me";
     amount = 100_000_000 : nat; fee = null; memo = null } })' ${did[*]}
   icp canister call wallet execute '(1 : nat64)' ${did[*]}
 DONE
@@ -226,9 +248,9 @@ if $bitcoin; then
 
 Send 1 regtest BTC, then mine a block to confirm it:
 
-  icp canister call wallet balance '(2 : nat32)' ${did[*]}
+  icp canister call wallet balance '(2 : nat32, null)' ${did[*]}
   icp canister call wallet propose '(variant { Transfer = record {
-    from = 2 : nat32; to = "$burn";
+    from = 2 : nat32; asset = null; to = "$burn";
     amount = 100_000_000 : nat; fee = null; memo = null } })' ${did[*]}
   icp canister call wallet execute '(2 : nat64)' ${did[*]}
   $bitcoin_cli -regtest -rpcport=18443 -rpcuser=local -rpcpassword=local generatetoaddress 1 $burn

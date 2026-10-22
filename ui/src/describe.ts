@@ -2,11 +2,11 @@ import { isReactorError, type ReactorError } from "@ic-reactor/core"
 import { AgentError, CertifiedRejectErrorCode } from "@icp-sdk/core/agent"
 import type {
   Account,
+  AccountKind,
   Action,
   ActionKind,
   AuditEvent,
   Budget,
-  Chain,
   Member,
   Pending,
   Permission,
@@ -312,6 +312,10 @@ export function auditText(event: AuditEvent, accounts: readonly Account[] | unde
       const account = accounts?.find((candidate) => candidate.id === event.value)
       return account ? `added the account “${account.label}”` : `added account ${event.value}`
     }
+    case "AssetTracked":
+      return `tracked the ${chainText(event.value)}`
+    case "AssetUntracked":
+      return `stopped tracking the ${chainText(event.value)}`
     case "Proposed":
       return `proposed action ${event.value}`
     case "Approved":
@@ -344,20 +348,26 @@ export function addressGroups(address: string): string[] {
 }
 
 /**
- * What a sender must know about an account's chain before sending to it: the
- * one token it counts, on which network, and what happens to anything else.
+ * Which form of an Internet Computer account's address a sender gets: its
+ * ICRC-1 account, or the ICP account identifier exchanges ask for.
  */
-export function receiveNote(chain: Chain, token: Token | undefined): string {
-  switch (chain.tag) {
-    case "Icp":
-      return "Send only ICP here, on the Internet Computer. This address is an ICRC-1 account; an exchange that asks for a 64-character account identifier needs a form this page does not show yet."
-    case "Icrc":
-      return `Send only ${token?.symbol ?? "this token"} here, through its ledger ${chain.value}. Another Internet Computer token sent here is held too, and shows once an owner adds an account for its ledger.`
+export type AddressForm = "account" | "identifier"
+
+/**
+ * What a sender must know about an account before sending to it: what it
+ * counts, on which network, and what becomes of anything else.
+ */
+export function receiveNote(kind: AccountKind, form: AddressForm = "account"): string {
+  switch (kind.tag) {
+    case "InternetComputer":
+      return form === "identifier"
+        ? "For ICP only, from an exchange that asks for a 64-character account identifier. Send ICRC-1 tokens to the ICRC-1 account instead."
+        : "Send ICP or an ICRC-1 token the wallet tracks here, on the Internet Computer. Another ICRC-1 token sent here is held too, and shows once an owner tracks its ledger."
     case "Bitcoin":
-      return chain.value.tag === "Mainnet"
+      return kind.value.tag === "Mainnet"
         ? "Send only bitcoin here, on the Bitcoin network. A payment counts in the balance once it has a confirmation."
-        : `Send only ${chain.value.tag.toLowerCase()} bitcoin here, never mainnet's. A payment counts in the balance once it has a confirmation.`
+        : `Send only ${kind.value.tag.toLowerCase()} bitcoin here, never mainnet's. A payment counts in the balance once it has a confirmation.`
     case "Evm":
-      return `Send only on EVM chain ${chain.value} here.`
+      return "Send only on an EVM chain the wallet tracks."
   }
 }

@@ -2,7 +2,7 @@ import type { Principal } from "@candid-core/schema"
 import { formatUnits } from "@ic-reactor/core"
 import { useQueries, useQuery, type UseQueryResult } from "@tanstack/react-query"
 import type { ReactNode } from "react"
-import { Accounts, Holdings } from "./accounts.tsx"
+import { Accounts, Holdings, type BalanceRead } from "./accounts.tsx"
 import { Activity } from "./activity.tsx"
 import { useWallet } from "./canister.ts"
 import { CopyButton } from "./copy.tsx"
@@ -26,7 +26,7 @@ import { HomeOutline } from "./outline.tsx"
 import { Release } from "./release.tsx"
 import { SignIn } from "./sign-in.tsx"
 import { dateOf } from "./time.ts"
-import { LOW_CYCLES } from "./tokens.ts"
+import { assetsOf, ICP_ONLY, LOW_CYCLES } from "./tokens.ts"
 
 /**
  * The wallet's start page: what it runs and who you are to it, then for a
@@ -34,7 +34,7 @@ import { LOW_CYCLES } from "./tokens.ts"
  * (members, policy and the rest live on the settings page), and for anyone
  * else signed in a request to join.
  */
-export function Home({ wallet: id, local }: { wallet: Principal; local: boolean }) {
+export function Home({ wallet: id }: { wallet: Principal }) {
   const { auth, status, claimed, me } = useMe(id)
 
   if (status.isError) {
@@ -47,7 +47,7 @@ export function Home({ wallet: id, local }: { wallet: Principal; local: boolean 
   }
   if (status.data === undefined) return <HomeOutline />
   if (claimed && auth.status === "signed-in" && me.isSuccess && me.data !== null) {
-    return <Dashboard wallet={id} me={me.data} status={status.data} local={local} />
+    return <Dashboard wallet={id} me={me.data} status={status.data} />
   }
   let body: ReactNode
   if (!claimed) {
@@ -101,32 +101,30 @@ export function Home({ wallet: id, local }: { wallet: Principal; local: boolean 
   )
 }
 
-function Dashboard({
-  wallet: id,
-  me,
-  status,
-  local,
-}: {
-  wallet: Principal
-  me: Member
-  status: Status
-  local: boolean
-}) {
+function Dashboard({ wallet: id, me, status }: { wallet: Principal; me: Member; status: Status }) {
   const { client, wallet } = useWallet(id)
   const accounts = useQuery(client.queryOptions(wallet, "accounts"))
+  const assets = useQuery(client.queryOptions(wallet, "assets"))
   const pending = useQuery(client.queryOptions(wallet, "pending"))
   const members = useQuery(client.queryOptions(wallet, "members"))
-  // The same reads as each account's, so the totals and the list share them.
-  const balances = useQueries({
-    queries: (accounts.data ?? []).map((account) =>
-      client.queryOptions(wallet, "balance", account.id, { update: "idempotent" }),
+  // One read per account and asset it shows, shared by the totals and the list.
+  const holdings = (accounts.data ?? []).flatMap((account) =>
+    assetsOf(account, assets.data ?? ICP_ONLY).map((asset) => ({ account, asset })),
+  )
+  const reads = useQueries({
+    queries: holdings.map(({ account, asset }) =>
+      client.queryOptions(wallet, "balance", [account.id, asset], { update: "idempotent" }),
     ),
+  })
+  const balances: BalanceRead[] = holdings.flatMap((holding, index) => {
+    const read = reads[index]
+    return read ? [{ ...holding, read }] : []
   })
   const now = useNowNs()
   return (
     <div className="dashboard">
       <Hero id={id} status={status} me={me}>
-        <Holdings accounts={accounts} balances={balances} owner={me.role.tag === "Owner"} />
+        <Holdings accounts={accounts} balances={balances} />
         <div className="hero-actions">
           {(me.role.tag === "Owner" || me.role.tag === "Proposer") && (
             <a className="button primary" href="/send">
@@ -149,10 +147,10 @@ function Dashboard({
       <Accounts
         wallet={id}
         me={me}
-        local={local}
+        network={status.bitcoin_network}
         accounts={accounts}
+        assets={assets}
         balances={balances}
-        now={now}
       />
       <Activity wallet={id} me={me} members={members.data} accounts={accounts.data} now={now} />
     </div>

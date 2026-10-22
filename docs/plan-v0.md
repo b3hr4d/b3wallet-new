@@ -88,6 +88,18 @@ the test, so the gap is always visible.
     an owner ([decision 0007](decisions/0007-agent-proposer.md)). Done when a
     proposer's transfer under the daily limit still waits for an owner, and
     an AI client proposes one through the server on a local network.
+16. **Internet Computer accounts.** One account kind for ICP and every
+    tracked ICRC-1 ledger, default Internet Computer and Bitcoin accounts,
+    the Bitcoin network as an install setting, and the upgrade that merges a
+    wallet's ICP and ICRC accounts
+    ([decision 0008](decisions/0008-account-kinds.md)). Done when a new
+    wallet shows both accounts before anyone adds one, and PocketIC upgrades
+    a wallet with ICP and ICRC accounts at the same index into one account
+    whose audit entries and open transfers still resolve.
+17. **EVM accounts.** One EVM address on every chain the EVM RPC canister
+    has its own providers for, read with agreement between providers, and a
+    default EVM account. Done when a transfer on Sepolia is signed, sent and
+    confirmed, and the cost of each call is recorded.
 
 ## Decisions still open
 

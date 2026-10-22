@@ -3,11 +3,21 @@ import { useMutation, useQuery } from "@tanstack/react-query"
 import { useState } from "react"
 import { useWallet } from "./canister.ts"
 import { actionText, canRun, failureText, roleText, sourceOf, stateText } from "./describe.ts"
-import type { Account, Pending } from "./generated/wallet.ts"
+import type { Account, Chain, Pending } from "./generated/wallet.ts"
 import { StateChip } from "./approvals.tsx"
 import { AsMember, Reading } from "./member.tsx"
 import { useNowNs } from "./now.ts"
-import { amountText, chainText, readAmount, useToken } from "./tokens.ts"
+import {
+  amountText,
+  assetsOf,
+  chainKey,
+  chainText,
+  ICP_ONLY,
+  kindText,
+  readAmount,
+  transferAsset,
+  useToken,
+} from "./tokens.ts"
 
 /**
  * The send page: an owner proposes a transfer, and runs it once it may. A
@@ -51,15 +61,19 @@ export function Send({ wallet }: { wallet: Principal }) {
 function SendForm({ wallet: id }: { wallet: Principal }) {
   const { client, wallet } = useWallet(id)
   const accounts = useQuery(client.queryOptions(wallet, "accounts"))
+  const assets = useQuery(client.queryOptions(wallet, "assets"))
   const propose = useMutation(
     client.mutationOptions(wallet, "propose", { invalidates: [[wallet, "pending"]] }),
   )
   const [fromId, setFromId] = useState<number>()
+  const [assetKey, setAssetKey] = useState<string>()
   const [to, setTo] = useState("")
   const [typed, setTyped] = useState("")
-  const usable = (accounts.data ?? []).filter((account) => account.chain.tag !== "Evm")
+  const usable = (accounts.data ?? []).filter((account) => account.kind.tag !== "Evm")
   const from = usable.find((account) => account.id === fromId) ?? usable[0]
-  const { token, error: tokenError } = useToken(from?.chain)
+  const choices = from ? assetsOf(from, assets.data ?? ICP_ONLY) : []
+  const asset = choices.find((choice) => chainKey(choice) === assetKey) ?? choices[0]
+  const { token, error: tokenError } = useToken(asset)
   const amount = token && typed.trim() ? readAmount(typed, token.decimals) : undefined
 
   if (propose.isSuccess) {
@@ -76,6 +90,7 @@ function SendForm({ wallet: id }: { wallet: Principal }) {
       />
     )
   }
+  if (assets.isError) return <p className="card error">{failureText(assets.error)}</p>
   if (accounts.isError) return <p className="card error">{failureText(accounts.error)}</p>
   if (accounts.data === undefined) {
     return (
@@ -91,16 +106,23 @@ function SendForm({ wallet: id }: { wallet: Principal }) {
       </p>
     )
   }
-  const bitcoin = from.chain.tag === "Bitcoin"
+  const bitcoin = from.kind.tag === "Bitcoin"
   return (
     <form
       className="card form"
       onSubmit={(event) => {
         event.preventDefault()
-        if (amount?.amount === undefined || !to.trim()) return
+        if (asset === undefined || amount?.amount === undefined || !to.trim()) return
         propose.mutate({
           tag: "Transfer",
-          value: { from: from.id, to: to.trim(), amount: amount.amount, fee: null, memo: null },
+          value: {
+            from: from.id,
+            asset,
+            to: to.trim(),
+            amount: amount.amount,
+            fee: null,
+            memo: null,
+          },
         })
       }}
     >
@@ -110,16 +132,33 @@ function SendForm({ wallet: id }: { wallet: Principal }) {
           value={from.id}
           onChange={(event) => {
             setFromId(Number(event.target.value))
+            setAssetKey(undefined)
             setTyped("")
           }}
         >
           {usable.map((account) => (
             <option key={account.id} value={account.id}>
-              {account.label}, {chainText(account.chain)}
+              {account.label}, {kindText(account.kind)}
             </option>
           ))}
         </select>
       </label>
+      {choices.length > 1 && asset !== undefined && (
+        <label>
+          Token
+          <select
+            value={chainKey(asset)}
+            onChange={(event) => {
+              setAssetKey(event.target.value)
+              setTyped("")
+            }}
+          >
+            {choices.map((choice) => (
+              <AssetOption key={chainKey(choice)} asset={choice} />
+            ))}
+          </select>
+        </label>
+      )}
       <label>
         To
         <input
@@ -163,6 +202,12 @@ function SendForm({ wallet: id }: { wallet: Principal }) {
   )
 }
 
+/** An asset to send, named by its token's symbol once its ledger says it. */
+function AssetOption({ asset }: { asset: Chain }) {
+  const { token } = useToken(asset)
+  return <option value={chainKey(asset)}>{token?.symbol ?? chainText(asset)}</option>
+}
+
 /**
  * A transfer just proposed. One the policy lets through at once is ready, and
  * runs on Send now; one that needs more approvals waits on the Approvals page.
@@ -181,7 +226,7 @@ function Proposed({
   onAgain: () => void
 }) {
   const from = sourceOf(proposed.action, accounts)
-  const { token } = useToken(from?.chain)
+  const { token } = useToken(transferAsset(proposed.action, from))
   const { client, wallet } = useWallet(id)
   // A transfer changes the open actions and a balance, and nothing else read here.
   const execute = useMutation(

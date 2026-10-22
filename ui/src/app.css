@@ -1679,6 +1679,52 @@ select:focus {
   line-height: 18px;
 }
 
+/* An account's other tokens, a line each, above its address. */
+.holds {
+  display: grid;
+  gap: 4px;
+  padding: 0;
+  list-style: none;
+}
+
+.held {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* The tracked tokens, under the accounts. */
+.tokens {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.tokens > * {
+  margin: 0;
+}
+
+.chip-remove {
+  min-height: 0;
+  margin: -2px -4px -2px 0;
+  padding: 2px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-muted);
+}
+
+.chip-remove:hover {
+  color: var(--ink);
+}
+
+/* Every wallet starts with an account of each kind: adding one comes last. */
+.accounts-more {
+  margin: 8px 0 0;
+}
+
 .avatar {
   display: grid;
   flex: none;

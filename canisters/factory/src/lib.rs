@@ -191,6 +191,7 @@ async fn install(
         release_signers: config.release_signers.clone(),
         release_threshold: config.release_threshold,
         factory: Some(ic_cdk::api::canister_self()),
+        bitcoin_network: None,
     });
     // The IC checks that the chunks make up the module the signers named.
     management::install_chunked_code(
