@@ -96,6 +96,8 @@ export function roleText(role: Role): string {
       return "an approver"
     case "Viewer":
       return "a viewer"
+    case "Proposer":
+      return "a proposer"
   }
 }
 
@@ -223,8 +225,9 @@ export function sourceOf(action: Action, accounts: Account[] | undefined): Accou
 
 /** What a join request asks, in a sentence without its full stop. */
 export function joinRequestText(pending: Pending): string {
-  const label = pending.action.tag === "AddMember" ? pending.action.value.label : ""
-  return `${pending.proposed_by} asks to join as a viewer, “${label}”`
+  if (pending.action.tag !== "AddMember") return ""
+  const { role, label } = pending.action.value
+  return `${pending.proposed_by} asks to join as ${roleText(role)}, “${label}”`
 }
 
 /**
@@ -269,10 +272,10 @@ export function receiptText(receipt: TxReceipt): string {
 
 /**
  * Whether an action waits for `me`: one they may approve and have not, or
- * one approved that they may run now.
+ * one approved that they may run now. Only owners and approvers do either.
  */
 export function waitsFor(pending: Pending, me: Member, nowNs: bigint): boolean {
-  if (me.role.tag === "Viewer") return false
+  if (me.role.tag !== "Owner" && me.role.tag !== "Approver") return false
   if (pending.state.tag === "Waiting") return !pending.approvals.includes(me.id)
   return canRun(pending, nowNs)
 }

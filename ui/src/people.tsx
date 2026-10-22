@@ -8,7 +8,15 @@ import { hueClass, initialOf } from "./mark.ts"
 import { durationText } from "./time.ts"
 import { chainAmountText } from "./tokens.ts"
 
-const RANK: Record<Role["tag"], number> = { Owner: 0, Approver: 1, Viewer: 2 }
+const RANK: Record<Role["tag"], number> = { Owner: 0, Approver: 1, Proposer: 2, Viewer: 3 }
+
+/** A role's chip: owners in the accent, and a proposer, such as an AI agent, apart. */
+const CHIP: Record<Role["tag"], string> = {
+  Owner: "chip accent",
+  Approver: "chip",
+  Proposer: "chip warn",
+  Viewer: "chip",
+}
 
 /** Who the wallet's members are, owners first. */
 export function Members({ me, members }: { me: Member; members: UseQueryResult<Member[]> }) {
@@ -42,9 +50,7 @@ export function Members({ me, members }: { me: Member; members: UseQueryResult<M
                 {member.label || shortText(member.id)}
                 {member.id === me.id && <span className="quiet"> · you</span>}
               </span>
-              <span className={member.role.tag === "Owner" ? "chip accent" : "chip"}>
-                {member.role.tag}
-              </span>
+              <span className={CHIP[member.role.tag]}>{member.role.tag}</span>
             </li>
           ))}
         </ul>
@@ -67,7 +73,8 @@ const KINDS: ReadonlyArray<[ActionKind["tag"], string]> = [
 
 /**
  * The approval policy: for each kind of action, how many approvals it needs
- * of the members who may approve, and how long it waits once it has them.
+ * of the members who may approve, owners and approvers, and how long it waits
+ * once it has them.
  */
 export function Rules({
   wallet: id,
@@ -78,7 +85,9 @@ export function Rules({
 }) {
   const { client, wallet } = useWallet(id)
   const policy = useQuery(client.queryOptions(wallet, "policy"))
-  const approvers = members?.filter((member) => member.role.tag !== "Viewer").length
+  const approvers = members?.filter(
+    (member) => member.role.tag === "Owner" || member.role.tag === "Approver",
+  ).length
   const ruleOf = (kind: ActionKind["tag"]) =>
     policy.data?.rules.find((rule) => rule.kind.tag === kind)
   const transfer = ruleOf("Transfer")
@@ -124,7 +133,8 @@ export function Rules({
           {transfer !== undefined && transfer.daily_limits.length > 0 && (
             <div className="limits">
               <p className="quiet small">
-                Within a day&apos;s limit, a transfer needs only its proposer and no wait:
+                Within a day&apos;s limit, an owner&apos;s transfer needs no other approval and no
+                wait; a proposer&apos;s always waits for one:
               </p>
               <p className="chips">
                 {transfer.daily_limits.map((limit) => (

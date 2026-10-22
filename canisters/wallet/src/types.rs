@@ -21,6 +21,9 @@ pub enum Role {
     Owner,
     Approver,
     Viewer,
+    /// Reads, and proposes transfers that wait for an owner or an approver:
+    /// its own approval never counts. For an AI agent or a script.
+    Proposer,
 }
 
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]

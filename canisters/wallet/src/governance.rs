@@ -283,7 +283,12 @@ mod tests {
     }
 
     fn role() -> impl Strategy<Value = Role> {
-        prop_oneof![Just(Role::Owner), Just(Role::Approver), Just(Role::Viewer)]
+        prop_oneof![
+            Just(Role::Owner),
+            Just(Role::Approver),
+            Just(Role::Viewer),
+            Just(Role::Proposer),
+        ]
     }
 
     fn change() -> impl Strategy<Value = Action> {

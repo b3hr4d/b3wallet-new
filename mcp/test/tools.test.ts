@@ -1,0 +1,327 @@
+import assert from "node:assert/strict"
+import { readFile } from "node:fs/promises"
+import { test } from "node:test"
+import { createTestClient, type TestHandlers } from "@ic-reactor/core/testing"
+import { Ed25519KeyIdentity } from "@icp-sdk/core/identity"
+import { actor as ledgerActor, type Actor as Ledger } from "../src/generated/icrc1.ts"
+import {
+  actor as walletActor,
+  type Account,
+  type Action,
+  type Actor as Wallet,
+  type Pending,
+} from "../src/generated/wallet.ts"
+import { readConfig } from "../src/config.ts"
+import { joinCode } from "../src/join-code.ts"
+import { InvalidArguments } from "../src/protocol.ts"
+import { walletTools } from "../src/tools.ts"
+
+const WALLET = "uxrrr-q7777-77774-qaaaq-cai"
+const ICP_LEDGER = "ryjl3-tyaaa-aaaaa-aaaba-cai"
+const FRIEND = "2vxsx-fae"
+const OWNER = "aaaaa-aa"
+const SECOND = 1_000_000_000n
+
+const icp: Account = {
+  id: 1,
+  chain: { tag: "Icp" },
+  label: "main",
+  address: WALLET,
+  index: 0,
+  holder: { tag: "Wallet" },
+}
+
+/**
+ * A wallet that keeps what is proposed and refuses what the real one refuses
+ * a proposer, and records every method called on it.
+ */
+function setUp(options: { member?: boolean } = {}) {
+  const agent = Ed25519KeyIdentity.generate(new Uint8Array(32).fill(7))
+  const { client, mock, requests } = createTestClient({ identity: agent })
+  const calls: string[] = []
+  const proposals: Action[] = []
+  const joins: unknown[][] = []
+  const pending = (id: bigint, action: Action, by: string): Pending => ({
+    id,
+    action,
+    proposed_by: by as Pending["proposed_by"],
+    proposed_at_ns: 1_800_000_000n * SECOND,
+    approvals: [],
+    quorum: 1,
+    executable_after_ns: 0n,
+    expires_at_ns: 1_800_604_800n * SECOND,
+    state: { tag: "Waiting" },
+  })
+  const record = <A extends unknown[], R>(name: string, run: (...args: A) => R) => {
+    return (...args: A): R => {
+      calls.push(name)
+      return run(...args)
+    }
+  }
+  const forbidden = (name: string) =>
+    record(name, () => ({
+      tag: "Err" as const,
+      value: { tag: "Forbidden" as const, value: `not ${name}` },
+    }))
+  const handlers: TestHandlers<Wallet> = {
+    status: record("status", () => ({
+      version: "0.1.0",
+      claimed: true,
+      claim_expires_at_ns: null,
+      cycles: 5_000_000_000_000n,
+      upgrade: { tag: "Idle" },
+      release_channel: ICP_LEDGER as Pending["proposed_by"],
+    })),
+    whoami: record("whoami", (ctx) =>
+      options.member
+        ? {
+            id: ctx.caller,
+            role: { tag: "Proposer" },
+            label: "Claude",
+            added_at_ns: 1_700_000_000n * SECOND,
+            added_by: null,
+          }
+        : null,
+    ),
+    request_join: record("request_join", (label, role, ctx) => {
+      joins.push([label, role, ctx.caller])
+      return {
+        tag: "Ok",
+        value: pending(
+          9n,
+          { tag: "AddMember", value: { id: ctx.caller, role: role ?? { tag: "Viewer" }, label } },
+          ctx.caller,
+        ),
+      }
+    }),
+    accounts: record("accounts", () => ({ tag: "Ok", value: [icp] })),
+    balance: record("balance", (id) => ({
+      tag: "Ok",
+      value: { account: id, amount: 1_050_000_000n, as_of_ns: 1_800_000_000n * SECOND },
+    })),
+    audit_log: record("audit_log", (request, ctx) => ({
+      tag: "Ok",
+      value: [
+        {
+          seq: 4n,
+          at_ns: 1_800_000_060n * SECOND,
+          by: OWNER as Pending["proposed_by"],
+          event: { tag: "Executed", value: 2n },
+        },
+        {
+          seq: 3n,
+          at_ns: 1_800_000_000n * SECOND,
+          by: ctx.caller,
+          event: { tag: "Proposed", value: 2n },
+        },
+        { seq: 2n, at_ns: 0n, by: null, event: { tag: "CyclesLow", value: BigInt(request.limit) } },
+      ],
+    })),
+    pending: record("pending", () => ({ tag: "Ok", value: [] })),
+    propose: record("propose", (action, ctx) => {
+      if (action.tag !== "Transfer") {
+        return {
+          tag: "Err",
+          value: { tag: "Forbidden", value: "a proposer proposes only transfers" },
+        }
+      }
+      proposals.push(action)
+      return { tag: "Ok", value: pending(BigInt(proposals.length), action, ctx.caller) }
+    }),
+    approve: forbidden("approve"),
+    execute: forbidden("execute"),
+    reject: forbidden("reject"),
+  }
+  mock<Wallet>(walletActor, WALLET, handlers)
+  mock<Ledger>(ledgerActor, ICP_LEDGER, {
+    icrc1_metadata: () => [
+      ["icrc1:symbol", { tag: "Text", value: "ICP" }],
+      ["icrc1:decimals", { tag: "Nat", value: 8n }],
+      ["icrc1:fee", { tag: "Nat", value: 10_000n }],
+    ],
+  })
+  const config = readConfig({ B3WALLET_ID: WALLET, B3WALLET_NETWORK: "local" })
+  const tools = new Map(walletTools(client, config).map((tool) => [tool.name, tool]))
+  const run = (name: string, args: Record<string, unknown> = {}) => {
+    const tool = tools.get(name)
+    assert.ok(tool, name)
+    return tool.run(args)
+  }
+  /** The wallet's methods the tools called, as the fake replica saw them. */
+  const called = () =>
+    new Set(
+      requests
+        .filter((request) => request.canisterId === WALLET && request.methodName)
+        .map((request) => request.methodName),
+    )
+  return { client, agent, tools, run, calls, called, proposals, joins }
+}
+
+test("the tools read and propose, and none approves, runs or rejects", async () => {
+  const { client, tools, run, calls, called } = setUp({ member: true })
+  assert.deepEqual(
+    [...tools.keys()],
+    [
+      "wallet_whoami",
+      "wallet_join",
+      "wallet_accounts",
+      "wallet_balance",
+      "wallet_activity",
+      "wallet_pending",
+      "wallet_propose_transfer",
+    ],
+  )
+  for (const name of tools.keys()) {
+    const args: Record<string, Record<string, unknown>> = {
+      wallet_balance: { account: 1 },
+      wallet_propose_transfer: { from: 1, to: FRIEND, amount: "1" },
+    }
+    await run(name, args[name] ?? {})
+  }
+  assert.deepEqual(
+    calls.filter((name) => ["approve", "execute", "reject"].includes(name)),
+    [],
+  )
+  // The interface file names methods the wallet does not export yet, which
+  // the fake would answer; the real one has only these.
+  const source = await readFile(
+    new URL("../../canisters/wallet/src/lib.rs", import.meta.url),
+    "utf8",
+  )
+  const exported = new Set(
+    [...source.matchAll(/#\[ic_cdk::(?:query|update)[^\]]*\]\s*(?:async\s+)?fn\s+(\w+)/g)].map(
+      (match) => match[1],
+    ),
+  )
+  assert.ok(exported.has("propose"), "the wallet's methods are found")
+  assert.deepEqual(
+    [...called()].filter((name) => !exported.has(name!)),
+    [],
+  )
+  client.dispose()
+})
+
+test("a transfer is proposed in base units of the account's token, and waits", async () => {
+  const { client, run, proposals } = setUp({ member: true })
+  const result = JSON.parse(
+    await run("wallet_propose_transfer", {
+      from: 1,
+      to: ` ${FRIEND} `,
+      amount: "1.5",
+      memo: "rent",
+    }),
+  )
+  assert.deepEqual(proposals, [
+    {
+      tag: "Transfer",
+      value: {
+        from: 1,
+        to: FRIEND,
+        amount: 150_000_000n,
+        fee: null,
+        memo: new TextEncoder().encode("rent"),
+      },
+    },
+  ])
+  assert.equal(result.action, "1")
+  assert.equal(result.what, `Send 1.5 ICP from account 1 (“main”) to ${FRIEND}, memo 72656e74`)
+  assert.equal(result.state, "Waiting for approvals: 0 of 1")
+  assert.equal(result.proposed_by, "you")
+  assert.equal(result.base_units, "150000000")
+  assert.match(result.next, /Nothing is sent yet/)
+  assert.match(result.next, new RegExp(`http://${WALLET}.localhost:8000/approvals`))
+  client.dispose()
+})
+
+test("an amount the token cannot hold is refused before anything is proposed", async () => {
+  const { client, run, proposals } = setUp({ member: true })
+  for (const [amount, reason] of [
+    ["0.123456789", /amount: /],
+    ["-1", /amount: /],
+    ["1e3", /amount: /],
+    ["0", /amount is zero/],
+  ] as const) {
+    await assert.rejects(
+      run("wallet_propose_transfer", { from: 1, to: FRIEND, amount }),
+      (error: unknown) => error instanceof InvalidArguments && reason.test(error.message),
+    )
+  }
+  await assert.rejects(
+    run("wallet_propose_transfer", { from: 2, to: FRIEND, amount: "1" }),
+    /the wallet has no account 2/,
+  )
+  await assert.rejects(
+    run("wallet_propose_transfer", { from: 1, to: FRIEND, amount: "1", memo: "x".repeat(33) }),
+    /memo is 33 bytes/,
+  )
+  await assert.rejects(
+    run("wallet_propose_transfer", { from: 1, to: " ", amount: "1" }),
+    /to is empty/,
+  )
+  assert.deepEqual(proposals, [])
+  client.dispose()
+})
+
+test("joining asks to be a proposer, and returns the code the Approvals page shows", async () => {
+  const { client, agent, run, joins } = setUp()
+  const me = agent.getPrincipal().toText()
+  const before = JSON.parse(await run("wallet_whoami"))
+  assert.equal(before.you, me)
+  assert.equal(before.member, null)
+  assert.match(before.next, /wallet_join/)
+
+  const result = JSON.parse(await run("wallet_join", { label: "Claude on a Mac" }))
+  assert.deepEqual(joins, [["Claude on a Mac", { tag: "Proposer" }, me]])
+  assert.equal(result.asks_to_be, "Proposer")
+  assert.equal(result.code, joinCode(me))
+  assert.match(result.next, new RegExp(joinCode(me)))
+  await run("wallet_join")
+  assert.deepEqual(joins[1], ["AI agent", { tag: "Proposer" }, me])
+  client.dispose()
+})
+
+test("reads come back in the token's units", async () => {
+  const { client, run } = setUp({ member: true })
+  assert.deepEqual(JSON.parse(await run("wallet_accounts")), [
+    {
+      id: 1,
+      label: "main",
+      chain: "ICP",
+      address: WALLET,
+      token: { symbol: "ICP", decimals: 8 },
+    },
+  ])
+  const balance = JSON.parse(await run("wallet_balance", { account: 1 }))
+  assert.equal(balance.amount, "10.5 ICP")
+  assert.equal(balance.base_units, "1050000000")
+  assert.deepEqual(JSON.parse(await run("wallet_activity", { limit: 3 })), [
+    {
+      seq: "4",
+      at: "2027-01-15T08:01:00.000Z",
+      by: OWNER,
+      event: "ran action 2, which may have failed: the log does not say",
+    },
+    { seq: "3", at: "2027-01-15T08:00:00.000Z", by: "you", event: "proposed action 2" },
+    { seq: "2", at: "1970-01-01T00:00:00.000Z", by: "the wallet", event: "cycles ran low: 3" },
+  ])
+  client.dispose()
+})
+
+test("a refusal names the wallet's error", async () => {
+  // The real wallet refuses a member that asks to join; this one is told to.
+  const { client, mock } = createTestClient()
+  mock<Wallet>(walletActor, WALLET, {
+    request_join: () => ({
+      tag: "Err",
+      value: { tag: "InvalidArgument", value: "already a member" },
+    }),
+  })
+  const join = walletTools(client, readConfig({ B3WALLET_ID: WALLET })).find(
+    (tool) => tool.name === "wallet_join",
+  )
+  assert.ok(join)
+  await assert.rejects(join.run({}), {
+    message: "The wallet refused request_join: InvalidArgument: already a member",
+  })
+  client.dispose()
+})

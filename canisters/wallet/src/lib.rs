@@ -27,15 +27,15 @@ mod transfers;
 mod types;
 mod upgrade;
 
-pub use access::{NOT_A_MEMBER, NOT_AN_APPROVER, NOT_AN_OWNER, NOT_CLAIMED};
+pub use access::{NOT_A_MEMBER, NOT_A_PROPOSER, NOT_AN_APPROVER, NOT_AN_OWNER, NOT_CLAIMED};
 pub use claim::message as claim_message;
 pub use types::*;
 pub use upgrade::{FIRST_RESEND_NS, MAX_INSTALL_SENDS, cycles_to_upgrade};
 
 use accounts::StoredAccount;
 use actions::{
-    APPROVAL_WINDOW_NS, BitcoinTx, JOIN_WINDOW_NS, MAX_OPEN_ACTIONS, MAX_OPEN_JOIN_REQUESTS,
-    StoredPending,
+    APPROVAL_WINDOW_NS, BitcoinTx, JOIN_WINDOW_NS, MAX_OPEN_ACTIONS, MAX_OPEN_BY_PROPOSER,
+    MAX_OPEN_JOIN_REQUESTS, StoredPending,
 };
 use candid::{Nat, Principal};
 use policy::{DAY_NS, Spend};
@@ -294,13 +294,21 @@ fn fits_daily_limit(
     Ok(())
 }
 
-/// Proposes an action. The proposer's approval counts toward its quorum, so
+/// Proposes an action. An owner's approval counts toward its quorum, so
 /// with a quorum of one it is ready at once. A transfer that keeps its
-/// chain's spending within the daily limit is ready at once too.
-#[ic_cdk::update(guard = "access::owner")]
+/// chain's spending within the daily limit is ready at once too. A proposer
+/// proposes only transfers, and its approval never counts: each one waits
+/// for an owner or an approver.
+#[ic_cdk::update(guard = "access::proposer")]
 fn propose(action: Action) -> Result<Pending, WalletError> {
     let (caller, now) = (ic_cdk::api::msg_caller(), ic_cdk::api::time());
     let governance = storage::governance();
+    let approves = governance.can_approve(&caller);
+    if !approves && !matches!(action, Action::Transfer(_)) {
+        return Err(WalletError::Forbidden(
+            "a proposer proposes only transfers".to_string(),
+        ));
+    }
     let spend = match &action {
         Action::Transfer(request) => {
             let account = storage::account(request.from);
@@ -326,6 +334,13 @@ fn propose(action: Action) -> Result<Pending, WalletError> {
             "at most {MAX_OPEN_ACTIONS} actions can be open at once"
         )));
     }
+    if !approves
+        && open.iter().filter(|(_, p)| p.proposed_by == caller).count() >= MAX_OPEN_BY_PROPOSER
+    {
+        return Err(WalletError::Forbidden(format!(
+            "a proposer can have at most {MAX_OPEN_BY_PROPOSER} actions open at once"
+        )));
+    }
     let terms = match &spend {
         Some((chain, amount)) => {
             let spent = spent(chain, now, None);
@@ -338,17 +353,25 @@ fn propose(action: Action) -> Result<Pending, WalletError> {
         }
         None => policy::terms(&governance.policy, action.kind(), None),
     };
-    let pending = StoredPending::new(action, caller, vec![caller], terms, APPROVAL_WINDOW_NS, now);
+    let approvals = if approves { vec![caller] } else { vec![] };
+    let pending = StoredPending::new(action, caller, approvals, terms, APPROVAL_WINDOW_NS, now);
     let id = storage::add_action(pending.clone());
     audit(caller, AuditEvent::Proposed(id), now);
     Ok(pending.view(id, now))
 }
 
-/// Asks to join as a viewer. It is an `AddMember` action that the members
-/// approve like any other. Asking again while a request is open returns it.
+/// Asks to join as a viewer, or as a proposer when `role` says so. It is an
+/// `AddMember` action that the members approve like any other. Asking again
+/// while a request is open returns it.
 #[ic_cdk::update(guard = "access::claimed")]
-fn request_join(label: String) -> Result<Pending, WalletError> {
+fn request_join(label: String, role: Option<Role>) -> Result<Pending, WalletError> {
     let (caller, now) = (ic_cdk::api::msg_caller(), ic_cdk::api::time());
+    let role = role.unwrap_or(Role::Viewer);
+    if !matches!(role, Role::Viewer | Role::Proposer) {
+        return Err(WalletError::Forbidden(
+            "a join request asks to be a viewer or a proposer".to_string(),
+        ));
+    }
     if caller == Principal::anonymous() {
         return Err(WalletError::Forbidden(
             "the anonymous principal cannot join".to_string(),
@@ -374,7 +397,7 @@ fn request_join(label: String) -> Result<Pending, WalletError> {
     }
     let action = Action::AddMember {
         id: caller,
-        role: Role::Viewer,
+        role,
         label,
     };
     governance.check(&action, caller, now)?;

@@ -125,6 +125,21 @@ icp deploy wallet --mode reinstall --cycles 20t --yes --args "(variant { Init = 
 wallet=$(icp canister status wallet --id-only)
 page=http://$wallet.localhost:8000
 
+# How to let an AI agent in through mcp/, as a proposer whose transfers wait
+# for an owner. $1 says where the owner approves.
+agent() {
+  cat <<DONE
+
+To let Claude read the wallet and propose transfers, which wait for you,
+set up its MCP server once and add it to Claude Code (mcp/README.md):
+
+  (cd mcp && npm ci)
+  claude mcp add b3wallet -e B3WALLET_ID=$wallet -e B3WALLET_NETWORK=local -- node "$PWD/mcp/src/main.ts"
+
+Then ask Claude to join the wallet, and $1
+DONE
+}
+
 if $browser; then
   cat <<DONE
 
@@ -139,6 +154,9 @@ wallet's own principal, and this sends it 10 local ICP:
 
   icp token transfer 10 $wallet
 DONE
+  agent "approve its join request on $page/approvals once
+the code there is the one Claude gives you. Approve each transfer it proposes
+there too."
   if $bitcoin; then
     cat <<DONE
 
@@ -197,6 +215,12 @@ propose returns the id to execute. Send 1 ICP back to yourself:
     amount = 100_000_000 : nat; fee = null; memo = null } })' ${did[*]}
   icp canister call wallet execute '(1 : nat64)' ${did[*]}
 DONE
+agent "approve and run its join request once its proposed_by
+is the principal Claude gives you, and each transfer it proposes the same way:
+
+  icp canister call wallet pending '()' ${did[*]}
+  icp canister call wallet approve '(<action id> : nat64)' ${did[*]}
+  icp canister call wallet execute '(<action id> : nat64)' ${did[*]}"
 if $bitcoin; then
   cat <<DONE
 

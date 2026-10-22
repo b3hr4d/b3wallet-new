@@ -1,0 +1,33 @@
+{
+  "name": "b3wallet-mcp",
+  "private": true,
+  "type": "module",
+  "description": "An MCP server that lets an AI agent read a wallet and propose transfers, which wait for an owner",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "prepare": "candid-core-cli gen ../candid/wallet.did ../ui/candid/icrc1.did -o src/generated",
+    "start": "node src/main.ts",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.ts",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "@candid-core/cli": "0.3.0",
+    "@candid-core/schema": "0.4.0",
+    "@ic-reactor/core": "4.0.0-beta.6",
+    "@icp-sdk/core": "6.1.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@noble/curves": "2.4.0",
+    "@types/node": "22.20.5",
+    "eslint": "10.13.0",
+    "prettier": "3.9.10",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.0"
+  }
+}

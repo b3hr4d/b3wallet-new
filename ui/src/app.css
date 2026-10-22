@@ -575,6 +575,12 @@ code {
   color: var(--good);
 }
 
+.chip.warn {
+  border-color: transparent;
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
 .chip.bad {
   border-color: transparent;
   background: var(--error-soft);

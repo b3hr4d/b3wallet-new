@@ -35,7 +35,7 @@ export function JoinRequest({ wallet: id }: { wallet: Principal }) {
       className="card form"
       onSubmit={(event) => {
         event.preventDefault()
-        if (label.trim()) join.mutate(label.trim())
+        if (label.trim()) join.mutate([label.trim(), null])
       }}
     >
       <h2>Ask to join</h2>

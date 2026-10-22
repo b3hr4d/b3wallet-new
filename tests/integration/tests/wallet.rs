@@ -23,8 +23,8 @@ use std::time::{Duration, Instant, SystemTime};
 use wallet::{
     Account, AccountHolder, Action, ActionId, ActionKind, ActionState, AddAccountArgs, AuditEntry,
     AuditEvent, AuditRequest, Balance, BitcoinNetwork, Chain, ClaimArgs, DailyLimit, InitArgs,
-    Member, NOT_A_MEMBER, NOT_AN_APPROVER, NOT_AN_OWNER, NOT_CLAIMED, Outcome, Pending, Policy,
-    Role, Status, TransferRequest, UpgradeState, WalletArg, WalletError,
+    Member, NOT_A_MEMBER, NOT_A_PROPOSER, NOT_AN_APPROVER, NOT_AN_OWNER, NOT_CLAIMED, Outcome,
+    Pending, Policy, Role, Status, TransferRequest, UpgradeState, WalletArg, WalletError,
 };
 
 const DAY_NS: u64 = 24 * 60 * 60 * 1_000_000_000;
@@ -597,10 +597,14 @@ fn claimed_wallet(pic: &PocketIc) -> (Principal, Principal) {
 }
 
 fn add_member_action(id: Principal, role: Role) -> Action {
+    add_member_action_labelled(id, role, "device")
+}
+
+fn add_member_action_labelled(id: Principal, role: Role, label: &str) -> Action {
     Action::AddMember {
         id,
         role,
-        label: "device".to_string(),
+        label: label.to_string(),
     }
 }
 
@@ -814,6 +818,55 @@ fn a_join_request_becomes_a_viewer_once_approved() {
     assert_eq!(member.label, "phone");
 }
 
+/// `request_join` with the role it asks for, as an AI agent's MCP server
+/// sends it.
+fn request_join(
+    pic: &PocketIc,
+    id: Principal,
+    caller: Principal,
+    label: &str,
+    role: Option<Role>,
+) -> PendingResult {
+    let reply = pic
+        .update_call(
+            id,
+            caller,
+            "request_join",
+            encode_args((label, role)).unwrap(),
+        )
+        .unwrap_or_else(|reject| panic!("request_join answers: {reject}"));
+    decode_one(&reply).unwrap()
+}
+
+#[test]
+fn a_join_request_asks_to_be_a_viewer_or_a_proposer_and_nothing_more() {
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    let agent = user(8);
+
+    let request = request_join(&pic, id, agent, "agent", Some(Role::Proposer)).unwrap();
+    assert_eq!(request.approvals, []);
+    assert_eq!(
+        request.action,
+        add_member_action_labelled(agent, Role::Proposer, "agent")
+    );
+    act(&pic, id, owner, "approve", request.id).unwrap();
+    act(&pic, id, owner, "execute", request.id).unwrap();
+    assert_eq!(whoami(&pic, id, agent).unwrap().role, Role::Proposer);
+
+    let viewer = request_join(&pic, id, user(9), "phone", Some(Role::Viewer)).unwrap();
+    assert_eq!(
+        viewer.action,
+        add_member_action_labelled(user(9), Role::Viewer, "phone")
+    );
+    for role in [Role::Owner, Role::Approver] {
+        assert!(matches!(
+            request_join(&pic, id, user(10), "x", Some(role)),
+            Err(WalletError::Forbidden(reason)) if reason.contains("a viewer or a proposer")
+        ));
+    }
+}
+
 #[test]
 fn join_requests_are_refused_for_members_and_the_anonymous_principal_and_expire() {
     let pic = PocketIc::new();
@@ -919,19 +972,24 @@ fn the_last_owner_stays_and_unsupported_actions_are_refused() {
 fn each_role_is_refused_what_it_may_not_do() {
     let pic = PocketIc::new();
     let (id, owner) = claimed_wallet(&pic);
-    let (approver, viewer) = (user(8), user(9));
+    let (approver, viewer, proposer) = (user(8), user(9), user(10));
     run_at_once(&pic, id, owner, add_member_action(approver, Role::Approver));
     run_at_once(&pic, id, owner, add_member_action(viewer, Role::Viewer));
+    run_at_once(&pic, id, owner, add_member_action(proposer, Role::Proposer));
 
     let refusals = [
-        (approver, "propose", NOT_AN_OWNER),
+        (approver, "propose", NOT_A_PROPOSER),
         (approver, "reject", NOT_AN_OWNER),
         (approver, "add_account", NOT_AN_OWNER),
-        (viewer, "propose", NOT_AN_OWNER),
+        (viewer, "propose", NOT_A_PROPOSER),
         (viewer, "add_account", NOT_AN_OWNER),
         (viewer, "reject", NOT_AN_OWNER),
         (viewer, "approve", NOT_AN_APPROVER),
         (viewer, "execute", NOT_AN_APPROVER),
+        (proposer, "add_account", NOT_AN_OWNER),
+        (proposer, "reject", NOT_AN_OWNER),
+        (proposer, "approve", NOT_AN_APPROVER),
+        (proposer, "execute", NOT_AN_APPROVER),
     ];
     for (caller, method, refusal) in refusals {
         let reject = call_without_arguments(&pic, id, caller, method, false).unwrap_err();
@@ -942,7 +1000,10 @@ fn each_role_is_refused_what_it_may_not_do() {
     assert_eq!(pending(&pic, id, viewer), []);
     assert_eq!(accounts(&pic, id, viewer), []);
     assert_eq!(policy(&pic, id, viewer), policy(&pic, id, owner));
-    assert_eq!(members(&pic, id, viewer).unwrap().len(), 3);
+    assert_eq!(members(&pic, id, viewer).unwrap().len(), 4);
+    // Proposers read too.
+    assert_eq!(pending(&pic, id, proposer), []);
+    assert_eq!(accounts(&pic, id, proposer), []);
 }
 
 /// A wallet that the previous release installed, that its owner claimed and
@@ -2027,6 +2088,77 @@ fn the_daily_limit_releases_small_transfers_at_once() {
         ledger_balance(&pic, icp_ledger(), friend),
         3 * E8S / 2 + 2 * E8S / 5 + E8S / 5 + 3 * E8S / 2
     );
+}
+
+/// A proposer's transfer waits for an owner even under the daily limit,
+/// which would release an owner's at once, and a proposer proposes nothing
+/// but transfers, at most eight open at once.
+#[test]
+fn a_proposers_transfer_waits_for_an_owner() {
+    let Ledgers {
+        pic, wallet, owner, ..
+    } = wallet_with_ledgers();
+    add_account(&pic, wallet, owner, Chain::Icp, "main").unwrap();
+    icp_daily_limit(&pic, wallet, owner);
+    let agent = user(30);
+    run_at_once(
+        &pic,
+        wallet,
+        owner,
+        add_member_action(agent, Role::Proposer),
+    );
+    let friend = LedgerAccount::from(user(20));
+    let before = audit(&pic, wallet, owner).len();
+
+    let proposed = propose(&pic, wallet, agent, transfer_action(1, friend, E8S)).unwrap();
+    assert_eq!(proposed.proposed_by, agent);
+    assert_eq!(proposed.approvals, []);
+    assert_eq!(proposed.state, ActionState::Waiting);
+    assert_eq!(
+        act(&pic, wallet, owner, "execute", proposed.id),
+        Err(WalletError::QuorumNotMet {
+            approvals: 0,
+            quorum: 1
+        })
+    );
+    let approved = act(&pic, wallet, owner, "approve", proposed.id).unwrap();
+    assert_eq!(approved.state, ActionState::Ready);
+    send(&pic, wallet, owner, proposed.id);
+    assert_eq!(ledger_balance(&pic, icp_ledger(), friend), E8S);
+    assert_eq!(
+        audit_since(&pic, wallet, owner, before),
+        [
+            (Some(agent), AuditEvent::Proposed(proposed.id)),
+            (Some(owner), AuditEvent::Approved(proposed.id)),
+            (Some(owner), AuditEvent::Executed(proposed.id)),
+        ]
+    );
+
+    for action in [
+        add_member_action(user(31), Role::Viewer),
+        Action::RemoveMember(owner),
+        Action::ChangeRole {
+            id: agent,
+            role: Role::Owner,
+        },
+        Action::SetPolicy(policy(&pic, wallet, owner)),
+    ] {
+        assert_eq!(
+            propose(&pic, wallet, agent, action),
+            Err(WalletError::Forbidden(
+                "a proposer proposes only transfers".to_string()
+            ))
+        );
+    }
+    for _ in 0..8 {
+        propose(&pic, wallet, agent, transfer_action(1, friend, 1)).unwrap();
+    }
+    assert!(matches!(
+        propose(&pic, wallet, agent, transfer_action(1, friend, 1)),
+        Err(WalletError::Forbidden(reason)) if reason.contains("at most 8")
+    ));
+    // The owner still proposes.
+    propose(&pic, wallet, owner, transfer_action(1, friend, 1)).unwrap();
 }
 
 #[test]
