@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react"
-import { ApproveIcon, Logo, OverviewIcon, SendIcon } from "./icons.tsx"
+import { B3Mark, Loader, Lockup } from "./brand.tsx"
+import { ApproveIcon, OverviewIcon, SendIcon } from "./icons.tsx"
 import { Live } from "./live.tsx"
 import { HomeOutline } from "./outline.tsx"
 import type { Page } from "./page.ts"
@@ -24,9 +25,8 @@ export function App({ page }: { page: Page }) {
     <>
       <header className="bar">
         <div className="bar-inner">
-          <a className="brand" href="/">
-            <Logo />
-            <span>Wallet</span>
+          <a className="brand" href="/" aria-label="B3Wallet, the start page">
+            <Lockup />
           </a>
           <nav className="nav" aria-label="Pages">
             {LINKS.map((link) => (
@@ -53,26 +53,27 @@ export function App({ page }: { page: Page }) {
         )}
       </main>
       <footer className="foot">
-        <span className="foot-dot" aria-hidden="true" />
+        <span className="foot-brand">
+          <B3Mark />
+          B3Wallet, by B3Pay
+        </span>
         <span>
-          Pages certified from the wallet&apos;s signed release. Every value read by a call this
-          browser verifies.
+          This wallet is its own only controller. Its pages come certified from its signed release,
+          and this browser verifies every value it reads.
         </span>
       </footer>
     </>
   )
 }
 
-/** What a page shows until the app runs: the start page's outline, or a spinner. */
+/** What a page shows until the app runs: the start page's outline, or the loader. */
 function Loading({ page }: { page: Exclude<Page, "missing"> }) {
   return page === "home" ? (
     <HomeOutline />
   ) : (
-    <div className="column">
-      <p className="loading">
-        <span className="spinner" aria-hidden="true" />
-        Loading…
-      </p>
+    <div className="column page-loader">
+      <Loader size={40} />
+      <p>Loading…</p>
     </div>
   )
 }

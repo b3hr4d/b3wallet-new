@@ -8,10 +8,11 @@ import { useWallet } from "./canister.ts"
 import { CopyButton } from "./copy.tsx"
 import { actionText, failureText, isJoinRequest, stateText, waitsFor } from "./describe.ts"
 import type { Member, Pending, Status, UpgradeState } from "./generated/wallet.ts"
+import { Loader } from "./brand.tsx"
 import { AlertIcon, ApproveIcon, ArrowIcon, BoltIcon, WalletMark } from "./icons.tsx"
 import { JoinRequest } from "./join.tsx"
 import { hueClass } from "./mark.ts"
-import { useMe } from "./member.tsx"
+import { Reading, useMe } from "./member.tsx"
 import { useNowNs } from "./now.ts"
 import { HomeOutline } from "./outline.tsx"
 import { Members, Rules } from "./people.tsx"
@@ -69,10 +70,9 @@ export function Home({ wallet: id, local }: { wallet: Principal; local: boolean 
     body = <p className="card error">{failureText(me.error)}</p>
   } else if (!me.isSuccess) {
     body = (
-      <p className="card loading">
-        <span className="spinner" aria-hidden="true" />
-        Reading who you are to the wallet…
-      </p>
+      <div className="card">
+        <Reading>Reading who you are to the wallet…</Reading>
+      </div>
     )
   } else {
     body = <JoinRequest wallet={id} />
@@ -162,7 +162,7 @@ function Hero({
       <div className="hero-top">
         <WalletMark id={id} />
         <div className="hero-name">
-          <h1>Wallet</h1>
+          <h1>{me ? "Your wallet" : "Wallet"}</h1>
           <p className="hero-id">
             <code className="principal">{id}</code>
             <CopyButton text={id} label="Copy the wallet's id" />
@@ -326,6 +326,7 @@ function ActionsTile({
           mine > 0 ? "tile-note accent" : pending.isError ? "tile-note error" : "tile-note"
         }
       >
+        {mine > 0 && <Loader waiting />}
         {note}
       </p>
     </a>

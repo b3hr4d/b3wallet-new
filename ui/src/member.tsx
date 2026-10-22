@@ -5,6 +5,7 @@ import type { ReactNode } from "react"
 import { useWallet } from "./canister.ts"
 import { failureText } from "./describe.ts"
 import type { Member } from "./generated/wallet.ts"
+import { Loader } from "./brand.tsx"
 import { SignIn } from "./session.tsx"
 
 /**
@@ -72,7 +73,7 @@ export function AsMember({
 export function Reading({ children }: { children: ReactNode }) {
   return (
     <p className="loading">
-      <span className="spinner" aria-hidden="true" />
+      <Loader />
       {children}
     </p>
   )

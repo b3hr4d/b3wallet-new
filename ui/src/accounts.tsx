@@ -6,7 +6,6 @@ import { CopyButton } from "./copy.tsx"
 import { failureText, shortText } from "./describe.ts"
 import type { Account, Balance, Chain, Member } from "./generated/wallet.ts"
 import { ChevronIcon, PlusIcon, RefreshIcon } from "./icons.tsx"
-import { hueClass, initialOf } from "./mark.ts"
 import { agoText } from "./time.ts"
 import { amountParts, chainKey, useToken, type Token } from "./tokens.ts"
 
@@ -254,14 +253,9 @@ function chainName(chain: Chain, token: Token | undefined): string {
 }
 
 function TokenAvatar({ chain, token }: { chain: Chain; token: Token | undefined }) {
-  const [kind, text] =
-    chain.tag === "Icp"
-      ? ["icp", "∞"]
-      : chain.tag === "Bitcoin"
-        ? ["btc", "₿"]
-        : [hueClass(chainKey(chain)), token ? initialOf(token.symbol) : ""]
+  const text = chain.tag === "Bitcoin" ? "BTC" : (token?.symbol.slice(0, 4) ?? "")
   return (
-    <span className={`avatar token ${kind}`} aria-hidden="true">
+    <span className="avatar token" aria-hidden="true">
       {text}
     </span>
   )

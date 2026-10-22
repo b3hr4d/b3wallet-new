@@ -4,7 +4,7 @@ import { useWallet } from "./canister.ts"
 import { failureText, shortText } from "./describe.ts"
 import type { ActionKind, Member, Role } from "./generated/wallet.ts"
 import { PeopleIcon, ShieldIcon } from "./icons.tsx"
-import { hueClass, initialOf } from "./mark.ts"
+import { initialOf } from "./mark.ts"
 import { durationText } from "./time.ts"
 import { chainAmountText } from "./tokens.ts"
 
@@ -43,7 +43,7 @@ export function Members({ me, members }: { me: Member; members: UseQueryResult<M
         <ul className="people">
           {sorted.map((member) => (
             <li key={member.id} className="person" title={member.id}>
-              <span className={`avatar ${hueClass(member.id)}`} aria-hidden="true">
+              <span className="avatar" aria-hidden="true">
                 {initialOf(member.label)}
               </span>
               <span className="person-name">

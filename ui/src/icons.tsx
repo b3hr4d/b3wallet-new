@@ -147,23 +147,6 @@ export const DotIcon = () => (
   </Icon>
 )
 
-/** The wallet's logo: a keyhole on the accent's gradient, the same on every page. */
-export function Logo() {
-  return (
-    <svg className="logo" viewBox="0 0 32 32" width="28" height="28" aria-hidden="true">
-      <defs>
-        <linearGradient id="logo-fill" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#8a7dff" />
-          <stop offset="1" stopColor="#4d39e0" />
-        </linearGradient>
-      </defs>
-      <rect width="32" height="32" rx="9" fill="url(#logo-fill)" />
-      <circle cx="16" cy="13.4" r="4.4" fill="#fff" />
-      <path d="M13.5 16.3h5l1.1 7.2h-7.2z" fill="#fff" />
-    </svg>
-  )
-}
-
 /**
  * The mark of the wallet with canister id `id`: its hue, and its pattern of
  * dots (see `mark.ts`).

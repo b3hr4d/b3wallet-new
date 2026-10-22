@@ -67,7 +67,7 @@ export function Claim({ wallet: id }: { wallet: Principal }) {
           own it.
         </p>
         {expiresAt !== null && (
-          <p className="chip">The claim link works until {dateOf(expiresAt)}</p>
+          <p className="quiet small">The claim link works until {dateOf(expiresAt)}.</p>
         )}
         <ol className="steps">
           <li className={auth.status === "signed-in" ? "step done" : "step"}>

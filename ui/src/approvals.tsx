@@ -186,7 +186,7 @@ function OpenAction({
           </button>
         )}
         {owner && (
-          <button type="button" disabled={busy} onClick={onReject}>
+          <button type="button" className="danger" disabled={busy} onClick={onReject}>
             Reject
           </button>
         )}
@@ -195,22 +195,31 @@ function OpenAction({
   )
 }
 
-/** Where an action stands, in a word. */
+/**
+ * Where an action stands, as the design system's status pill: a shape and a
+ * word. Waiting for approvals is pending, approved but in its timelock is
+ * scheduled, ready to run is confirmed, and a run is done.
+ */
 export function StateChip({ pending, now }: { pending: Pending; now: bigint }) {
   const { state } = pending
-  const [tone, text] =
+  const [look, text] =
     state.tag === "Waiting"
-      ? ["accent", "Waiting"]
+      ? ["pending", "Waiting"]
       : state.tag === "Ready"
         ? canRun(pending, now)
-          ? ["good", "Ready"]
-          : ["", "Timelocked"]
+          ? ["confirmed", "Ready"]
+          : ["scheduled", "Timelocked"]
         : state.tag === "Executed"
-          ? ["good", "Done"]
+          ? ["done", "Done"]
           : state.tag === "Expired"
-            ? ["", "Expired"]
-            : ["bad", state.tag]
-  return <span className={tone ? `chip ${tone}` : "chip"}>{text}</span>
+            ? ["pending", "Expired"]
+            : ["failed", state.tag]
+  return (
+    <span className={`pill ${look}`}>
+      <span className="pill-mark" aria-hidden="true" />
+      {text}
+    </span>
+  )
 }
 
 /** An action's approvals, a dot each for as many as its quorum. */

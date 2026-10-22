@@ -2,7 +2,6 @@ import { useAuth } from "@ic-reactor/react"
 import { useState } from "react"
 import { failureText, shortText } from "./describe.ts"
 import { KeyIcon } from "./icons.tsx"
-import { hueClass } from "./mark.ts"
 
 /** Runs a sign-in or sign-out, keeping why it failed. */
 function useRun() {
@@ -28,7 +27,7 @@ export function Account() {
       {auth.status === "signed-in" ? (
         <>
           <span className="who" title={auth.principal}>
-            <span className={`avatar tiny ${hueClass(auth.principal)}`} aria-hidden="true" />
+            <span className="avatar tiny" aria-hidden="true" />
             <code>{shortText(auth.principal)}</code>
           </span>
           <button type="button" className="ghost small" onClick={() => run(auth.signOut)}>

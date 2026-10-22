@@ -1,21 +1,22 @@
 import { renderToString } from "react-dom/server"
 import { App } from "./app.tsx"
+import { THREE } from "./brand.tsx"
 import { PAGES } from "./page.ts"
 
 /**
- * The logo as the tab's icon, inline: the CSP lets images come from data URLs,
- * and an inline icon is no extra file in the release.
+ * B3Wallet's favicon, `b3wallet-favicon.svg` of B3Pay's design system: the
+ * mark on its graphite tile. It is inline, since the CSP lets images come from
+ * data URLs and an inline icon is no extra file in the release.
  */
 const ICON = `data:image/svg+xml,${encodeURIComponent(
   [
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">',
-    '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">',
-    '<stop offset="0" stop-color="#8a7dff"/><stop offset="1" stop-color="#4d39e0"/>',
-    "</linearGradient></defs>",
-    '<rect width="32" height="32" rx="9" fill="url(#g)"/>',
-    '<circle cx="16" cy="13.4" r="4.4" fill="#fff"/>',
-    '<path d="M13.5 16.3h5l1.1 7.2h-7.2z" fill="#fff"/>',
-    "</svg>",
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96">',
+    '<rect width="96" height="96" rx="22" fill="#121110"/>',
+    '<g transform="translate(14 14) scale(.7)">',
+    '<rect x="18.75" y="11" width="14" height="74" rx="3" fill="#f1ede6"/>',
+    `<path d="${THREE}" fill="#f1ede6"/>`,
+    '<circle cx="54.75" cy="62.5" r="6.5" fill="#f0b35a"/>',
+    "</g></svg>",
   ].join(""),
 )}`
 
@@ -34,9 +35,9 @@ export function prerender(): Array<{ file: string; html: string }> {
       '<meta charset="utf-8">',
       '<meta name="viewport" content="width=device-width, initial-scale=1">',
       `<title>${title}</title>`,
-      '<meta name="color-scheme" content="light dark">',
-      '<meta name="theme-color" content="#f4f4f1" media="(prefers-color-scheme: light)">',
-      '<meta name="theme-color" content="#0a0b0d" media="(prefers-color-scheme: dark)">',
+      '<meta name="color-scheme" content="dark light">',
+      '<meta name="theme-color" content="#121110" media="(prefers-color-scheme: dark)">',
+      '<meta name="theme-color" content="#f6f4f0" media="(prefers-color-scheme: light)">',
       `<link rel="icon" href="${ICON}">`,
       '<link rel="stylesheet" href="/app.css">',
       '<script type="module" src="/app.js"></script>',
