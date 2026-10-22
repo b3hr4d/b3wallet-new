@@ -7,10 +7,8 @@ import { CheckIcon, LayersIcon } from "./icons.tsx"
 import { dateOf } from "./time.ts"
 
 /**
- * The version the wallet runs, and a button that asks whether its release
- * channel has a release it would install, which an owner may then propose.
- * The wallet checks the signatures and that the release was tested from the
- * version it runs; it checks them all again before it installs.
+ * The version the wallet runs, as a tile of the start page, with the check
+ * for a new one.
  */
 export function Release({
   wallet: id,
@@ -21,10 +19,6 @@ export function Release({
   me: Member
   version: string
 }) {
-  const { client, wallet } = useWallet(id)
-  const check = useMutation(
-    client.mutationOptions(wallet, "release_available", { invalidates: [] }),
-  )
   return (
     <section className="card tile">
       <p className="tile-label">
@@ -32,6 +26,24 @@ export function Release({
         Version
       </p>
       <p className="tile-value">{version}</p>
+      <ReleaseCheck wallet={id} me={me} />
+    </section>
+  )
+}
+
+/**
+ * A button that asks whether the wallet's release channel has a release it
+ * would install, which an owner may then propose. The wallet checks the
+ * signatures and that the release was tested from the version it runs; it
+ * checks them all again before it installs.
+ */
+export function ReleaseCheck({ wallet: id, me }: { wallet: Principal; me: Member }) {
+  const { client, wallet } = useWallet(id)
+  const check = useMutation(
+    client.mutationOptions(wallet, "release_available", { invalidates: [] }),
+  )
+  return (
+    <>
       {check.isSuccess ? (
         check.data === null ? (
           <p className="tile-note good">
@@ -54,7 +66,7 @@ export function Release({
         </div>
       )}
       {check.isError && <p className="error">{failureText(check.error)}</p>}
-    </section>
+    </>
   )
 }
 

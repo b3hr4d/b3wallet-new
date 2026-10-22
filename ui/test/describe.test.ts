@@ -2,11 +2,13 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 import {
   actionDetails,
+  addressGroups,
   actionText,
   auditText,
   canRun,
   isJoinRequest,
   joinRequestText,
+  receiveNote,
   shortText,
   sourceOf,
   stateText,
@@ -292,5 +294,32 @@ test("the audit log names who did what", () => {
   assert.equal(
     auditText({ tag: "CyclesLow", value: 420_000_000_000n }, []),
     "ran low on cycles, with 0.42T cycles left",
+  )
+})
+
+test("an address reads in groups that join back into it", () => {
+  const bitcoin = "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh"
+  assert.deepEqual(addressGroups(bitcoin).slice(0, 3), ["bc1q", "xy2k", "gdyg"])
+  assert.equal(addressGroups(bitcoin).join(""), bitcoin)
+  assert.deepEqual(addressGroups("uxrrr-q7777-77774-qaaaq-cai"), ["uxrrr-q7777-77774-qaaaq-cai"])
+  assert.deepEqual(addressGroups(""), [])
+})
+
+test("a sender learns the one token an address counts", () => {
+  assert.match(receiveNote({ tag: "Icp" }, undefined), /^Send only ICP here/)
+  assert.match(receiveNote({ tag: "Icp" }, undefined), /account identifier/)
+  const ckbtc = { symbol: "ckBTC", decimals: 8, fee: 10n }
+  const ledger = "mxzaz-hqaaa-aaaar-qaada-cai" as never
+  assert.match(
+    receiveNote({ tag: "Icrc", value: ledger }, ckbtc),
+    /^Send only ckBTC here, through its ledger mxzaz-hqaaa-aaaar-qaada-cai\./,
+  )
+  assert.match(
+    receiveNote({ tag: "Bitcoin", value: { tag: "Mainnet" } }, undefined),
+    /Bitcoin network/,
+  )
+  assert.match(
+    receiveNote({ tag: "Bitcoin", value: { tag: "Regtest" } }, undefined),
+    /regtest bitcoin here, never mainnet/,
   )
 })

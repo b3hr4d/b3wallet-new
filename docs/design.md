@@ -354,10 +354,12 @@ instructions an update may use.
 1. `init` and `post_upgrade` certify the files embedded in the release with
    `ic-asset-certification` and set the canister's certified data to their
    root hash. The certification tree lives on the heap only.
-2. `/` and `/index.html` are the start page; `/send`, `/approvals` and
-   `/claim` the send, approvals and claim pages, each also at its `.html`
-   path; and `/app.js` and `/app.css` the app's script and styles. Any other
-   path is the 404 page with status 404, certified as the fallback for `/`.
+2. `/` and `/index.html` are the start page; `/send`, `/receive`,
+   `/approvals`, `/settings`, `/members` and `/claim` the send, receive,
+   approvals, settings, members and claim pages, each also at its `.html`
+   path; and `/app.js` and `/app.css` the app's
+   script and styles. Any other path is the 404 page with status 404,
+   certified as the fallback for `/`.
 3. Every page carries these headers, all certified: the Content-Security-Policy
    below, `x-content-type-options: nosniff`, `x-frame-options: DENY`,
    `referrer-policy: no-referrer`,
@@ -388,13 +390,19 @@ the subnet certifies, rather than as queries a single replica answers, and
 reads a token's symbol, decimals and fee from its ledger's `icrc1_metadata`
 the same way. The start page shows a member the wallet's holdings per
 token, its accounts with their balances, its open actions, cycles and
-version, its newest audit entries, its members and its policy, with a notice
-for every open action that is not a transfer, since those change who
-controls the wallet or what it runs, and one when it runs low on cycles; it
-lets an owner add an account, and asks to join for someone signed in who is
-not a member; the send page proposes a transfer and runs it when the
-policy lets it through at once; the approvals page lists the open actions
-with the buttons the member's role allows. CI
+version, and its newest audit entries, with a notice for every open action
+that is not a transfer, since those change who controls the wallet or what
+it runs, and one when it runs low on cycles; it lets an owner add an
+account, and asks to join for someone signed in who is not a member. The
+send page proposes a transfer and runs it when the policy lets it through at
+once; the receive page shows each account's whole address and its QR code to
+give a sender ([decision 0009](decisions/0009-qr-encoder.md)); the approvals
+page lists the open actions with the buttons the member's role allows. The
+settings page holds the rest: the members, a security checkup with the
+policy, what the IC's certified state says of the wallet's controllers and
+module hash, and the session; its members page lets an owner propose adding,
+removing or changing the role of a member, refusing first what the wallet
+would refuse. CI
 builds the files twice, the second time from a clean copy in another
 directory, and checks that both builds and the committed files are the same
 bytes.

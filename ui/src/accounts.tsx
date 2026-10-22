@@ -5,7 +5,7 @@ import { useWallet } from "./canister.ts"
 import { CopyButton } from "./copy.tsx"
 import { failureText, shortText } from "./describe.ts"
 import type { Account, Balance, Chain, Member } from "./generated/wallet.ts"
-import { ChevronIcon, PlusIcon, RefreshIcon } from "./icons.tsx"
+import { ChevronIcon, PlusIcon, ReceiveIcon, RefreshIcon } from "./icons.tsx"
 import { agoText } from "./time.ts"
 import { amountParts, chainKey, useToken, type Token } from "./tokens.ts"
 
@@ -224,17 +224,23 @@ function AccountItem({
             <span className="quiet">
               {balance?.data ? `Balance read ${agoText(balance.data.as_of_ns, now)}` : ""}
             </span>
-            {balance && (
-              <button
-                type="button"
-                className="ghost small"
-                disabled={balance.isFetching}
-                onClick={() => void balance.refetch()}
-              >
-                <RefreshIcon />
-                {balance.isFetching ? "Reading…" : "Refresh the balance"}
-              </button>
-            )}
+            <span className="buttons">
+              <a className="button small" href={`/receive?account=${account.id}`}>
+                <ReceiveIcon />
+                Receive
+              </a>
+              {balance && (
+                <button
+                  type="button"
+                  className="ghost small"
+                  disabled={balance.isFetching}
+                  onClick={() => void balance.refetch()}
+                >
+                  <RefreshIcon />
+                  {balance.isFetching ? "Reading…" : "Refresh the balance"}
+                </button>
+              )}
+            </span>
           </div>
         </div>
       </details>
@@ -243,7 +249,7 @@ function AccountItem({
 }
 
 /** A chain in a few words, for under an account's label. */
-function chainName(chain: Chain, token: Token | undefined): string {
+export function chainName(chain: Chain, token: Token | undefined): string {
   switch (chain.tag) {
     case "Icp":
       return "Internet Computer"
@@ -256,7 +262,8 @@ function chainName(chain: Chain, token: Token | undefined): string {
   }
 }
 
-function TokenAvatar({ chain, token }: { chain: Chain; token: Token | undefined }) {
+/** A token by its symbol, in plain text: networks are named, never drawn. */
+export function TokenAvatar({ chain, token }: { chain: Chain; token: Token | undefined }) {
   const text = chain.tag === "Bitcoin" ? "BTC" : (token?.symbol.slice(0, 4) ?? "")
   return (
     <span className="avatar token" aria-hidden="true">

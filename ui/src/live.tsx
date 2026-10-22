@@ -8,7 +8,10 @@ import { Claim } from "./claim.tsx"
 import { Home } from "./home.tsx"
 import { where } from "./host.ts"
 import type { Page } from "./page.ts"
+import { MembersPage } from "./members.tsx"
+import { Receive } from "./receive.tsx"
 import { Send } from "./send.tsx"
+import { Settings } from "./settings.tsx"
 import { Account } from "./session.tsx"
 
 /**
@@ -67,6 +70,12 @@ function Wallet({
       return <Home wallet={wallet} local={local} />
     case "send":
       return <Send wallet={wallet} />
+    case "receive":
+      return <Receive wallet={wallet} />
+    case "members":
+      return <MembersPage wallet={wallet} />
+    case "settings":
+      return <Settings wallet={wallet} local={local} />
     case "approvals":
       return <Approvals wallet={wallet} />
     case "claim":

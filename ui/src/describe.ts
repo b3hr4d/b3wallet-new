@@ -6,6 +6,7 @@ import type {
   ActionKind,
   AuditEvent,
   Budget,
+  Chain,
   Member,
   Pending,
   Permission,
@@ -329,5 +330,34 @@ export function auditText(event: AuditEvent, accounts: readonly Account[] | unde
       return `failed to install version ${event.value}`
     case "CyclesLow":
       return `ran low on cycles, with ${cyclesText(event.value, "down")} left`
+  }
+}
+
+/**
+ * An address in groups to read aloud and check: a principal or an ICRC-1
+ * account already reads in its dash-separated groups, so it stays whole;
+ * anything else, such as a Bitcoin address, goes in fours. Joined, the
+ * groups are the address again.
+ */
+export function addressGroups(address: string): string[] {
+  return address.includes("-") ? [address] : (address.match(/.{1,4}/g) ?? [])
+}
+
+/**
+ * What a sender must know about an account's chain before sending to it: the
+ * one token it counts, on which network, and what happens to anything else.
+ */
+export function receiveNote(chain: Chain, token: Token | undefined): string {
+  switch (chain.tag) {
+    case "Icp":
+      return "Send only ICP here, on the Internet Computer. This address is an ICRC-1 account; an exchange that asks for a 64-character account identifier needs a form this page does not show yet."
+    case "Icrc":
+      return `Send only ${token?.symbol ?? "this token"} here, through its ledger ${chain.value}. Another Internet Computer token sent here is held too, and shows once an owner adds an account for its ledger.`
+    case "Bitcoin":
+      return chain.value.tag === "Mainnet"
+        ? "Send only bitcoin here, on the Bitcoin network. A payment counts in the balance once it has a confirmation."
+        : `Send only ${chain.value.tag.toLowerCase()} bitcoin here, never mainnet's. A payment counts in the balance once it has a confirmation.`
+    case "Evm":
+      return `Send only on EVM chain ${chain.value} here.`
   }
 }

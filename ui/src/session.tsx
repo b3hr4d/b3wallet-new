@@ -133,9 +133,14 @@ function Health({
               <code>{principal}</code>
               <CopyButton text={principal} label="Copy your principal" />
             </p>
-            <button type="button" className="small" onClick={onSignOut}>
-              Sign out
-            </button>
+            <div className="buttons">
+              <a className="button small" href="/settings">
+                Settings
+              </a>
+              <button type="button" className="ghost small" onClick={onSignOut}>
+                Sign out
+              </button>
+            </div>
           </div>
         </div>
       )}

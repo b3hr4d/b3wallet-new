@@ -413,8 +413,9 @@ service : (WalletArg) -> {
   status : () -> (Status) query;
   // Newest first, at most 100 entries.
   audit_log : (AuditRequest) -> (AuditResult) query;
-  // Query only: the start page at / and /index.html, the send, approvals
-  // and claim pages at /send, /approvals and /claim, the app at /app.js and
+  // Query only: the start page at / and /index.html, the send, receive,
+  // approvals, settings, members and claim pages at /send, /receive,
+  // /approvals, /settings, /members and /claim, the app at /app.js and
   // /app.css, and a certified 404 for any other path. See "Serve a page" in
   // docs/design.md.
   http_request : (HttpRequest) -> (HttpResponse) query;

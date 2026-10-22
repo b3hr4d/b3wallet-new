@@ -425,6 +425,31 @@ code {
   line-height: 18px;
 }
 
+/* Settings, beside the health chip: the bar keeps its four pages. */
+.account-slot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.gear {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-pill);
+  color: var(--ink-muted);
+}
+
+.gear:hover,
+.gear[aria-current="page"] {
+  background: var(--surface-raised);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
 /* Who is signed in, as the wallet's health: the chip opens its panel. */
 .account {
   position: relative;
@@ -1543,13 +1568,6 @@ select:focus {
   fill: var(--ink-muted);
 }
 
-.split {
-  display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
-  align-items: start;
-  gap: 16px;
-}
-
 .stack {
   display: grid;
   gap: 16px;
@@ -2024,6 +2042,438 @@ select:focus {
   justify-items: start;
 }
 
+/* ---- Receive ------------------------------------------------------------------ */
+
+.receive {
+  display: grid;
+  gap: 16px;
+}
+
+.picks {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+  gap: 8px;
+}
+
+.pick {
+  display: block;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 22px;
+  cursor: pointer;
+}
+
+.pick input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  min-height: 0;
+  opacity: 0;
+}
+
+.pick-body {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.pick:hover .pick-body {
+  border-color: var(--ink-muted);
+}
+
+.pick input:checked + .pick-body {
+  border-color: var(--ink);
+  background: var(--surface-2);
+}
+
+.pick input:focus-visible + .pick-body {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.pick .avatar {
+  width: 32px;
+  height: 32px;
+}
+
+.pick-name {
+  display: grid;
+  min-width: 0;
+}
+
+.pick-name strong {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pick-name span {
+  overflow: hidden;
+  color: var(--ink-muted);
+  font-size: 13px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.receive-card {
+  display: grid;
+  gap: 20px;
+  padding: 32px;
+  background:
+    radial-gradient(30rem 16rem at 100% 0%, var(--glow), transparent 70%), var(--surface-raised);
+}
+
+.receive-card > * {
+  margin: 0;
+}
+
+.receive-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.receive-head p {
+  margin: 0;
+}
+
+/* The QR code beside the address; on a phone, above it. */
+.receive-body {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 28px;
+}
+
+.receive-main {
+  display: grid;
+  gap: 16px;
+}
+
+.receive-main > * {
+  margin: 0;
+}
+
+/* Always dark on light: scanners read a QR code that way round, in either theme. */
+.qr {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.qr svg {
+  display: block;
+  padding: 6px;
+  border-radius: var(--radius-md);
+  background: #ffffff;
+  box-shadow: 0 0 0 1px var(--line);
+}
+
+.qr-light {
+  fill: #ffffff;
+}
+
+.qr-dark {
+  fill: #121110;
+}
+
+.qr figcaption {
+  color: var(--ink-muted);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.receive-address {
+  display: grid;
+  gap: 8px;
+}
+
+.receive-address > * {
+  margin: 0;
+}
+
+/*
+ * The address, large, its groups apart. Each group is an inline block, so a
+ * line can break between groups, and a selection still copies the address
+ * with no space or line break inside it.
+ */
+.receive-text {
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.receive-text code {
+  display: block;
+  color: var(--ink);
+  font-size: 20px;
+  line-height: 32px;
+  letter-spacing: 0.02em;
+  overflow-wrap: anywhere;
+}
+
+.receive-text code span {
+  display: inline-block;
+  margin-right: 0.6em;
+}
+
+.receive-text code span:last-child {
+  margin-right: 0;
+}
+
+.receive-note {
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  color: var(--ink-muted);
+  font-size: 13px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
+/* ---- Settings -------------------------------------------------------------------- */
+
+.section-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: -8px 0 20px;
+}
+
+.section-nav a {
+  padding: 4px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  color: var(--ink-muted);
+  font-size: 13px;
+  line-height: 18px;
+  text-decoration: none;
+}
+
+.section-nav a:hover {
+  border-color: var(--ink-muted);
+  color: var(--ink);
+}
+
+.stack > [id] {
+  scroll-margin-top: 80px;
+}
+
+.member-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+}
+
+.member-summary > * {
+  margin: 0;
+}
+
+.avatars {
+  display: flex;
+}
+
+.avatars .avatar {
+  width: 34px;
+  height: 34px;
+  font-size: 13px;
+  box-shadow: 0 0 0 2px var(--surface-raised);
+}
+
+.avatars .avatar + .avatar {
+  margin-left: -8px;
+}
+
+/* Settings rows: a label, then what it is, a hairline between. */
+.settings-rows {
+  display: grid;
+  margin: 0 0 16px;
+}
+
+.settings-rows > div {
+  display: grid;
+  grid-template-columns: 9rem minmax(0, 1fr);
+  align-items: baseline;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.settings-rows > div:first-child {
+  padding-top: 0;
+}
+
+.settings-rows dt {
+  color: var(--ink-muted);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.settings-rows dd {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+}
+
+.settings-rows dd > * {
+  margin: 0;
+}
+
+.settings-rows dd .tile-note {
+  padding-top: 0;
+}
+
+.settings-rows .with-copy {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.settings-rows code {
+  overflow-wrap: anywhere;
+}
+
+/* ---- Members -------------------------------------------------------------------- */
+
+.back {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.back a {
+  color: var(--ink-muted);
+  text-decoration: none;
+}
+
+.back a::before {
+  content: "← ";
+}
+
+.back a:hover {
+  color: var(--ink);
+}
+
+.roster {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.roster-item {
+  display: grid;
+  gap: 12px;
+  padding: 16px 0;
+}
+
+.roster-item + .roster-item {
+  border-top: 1px solid var(--line);
+}
+
+.roster-item:first-child {
+  padding-top: 0;
+}
+
+.roster-item:last-child {
+  padding-bottom: 0;
+}
+
+.roster-item > * {
+  margin: 0;
+}
+
+.roster-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.roster-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.roster-name p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.roster-name strong {
+  font-weight: 600;
+}
+
+.roster-open {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
+.roster-item .panel {
+  margin: 0;
+}
+
+.roles {
+  display: grid;
+  gap: 12px;
+  margin: 16px 0 0;
+}
+
+.roles div {
+  display: grid;
+  grid-template-columns: 7.5rem minmax(0, 1fr);
+  align-items: baseline;
+  gap: 12px;
+}
+
+.roles dd {
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+/* From the new device: the wallet's address as a QR code, beside the steps. */
+.add-device {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 24px;
+}
+
+.add-device .steps {
+  margin: 0;
+}
+
+.add-device .step {
+  align-items: flex-start;
+}
+
+.add-device .step > div {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.add-device .step > div > * {
+  margin: 0;
+}
+
 /* ---- Narrow screens and less motion ------------------------------------------ */
 
 /*
@@ -2047,12 +2497,6 @@ select:focus {
 
   .who code {
     display: none;
-  }
-}
-
-@media (max-width: 860px) {
-  .split {
-    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -2083,14 +2527,16 @@ select:focus {
     width: 100%;
   }
 
-  .nav a {
-    flex: 1;
-    justify-content: center;
-    padding: 0 8px;
+  .nav {
+    gap: 2px;
   }
 
-  .nav a .icon {
-    display: block;
+  .nav a {
+    flex: 1;
+    gap: 6px;
+    justify-content: center;
+    padding: 0 4px;
+    font-size: 14px;
   }
 
   .who code {
@@ -2160,6 +2606,31 @@ select:focus {
 
   .account-body {
     padding-left: 8px;
+  }
+
+  .receive-card {
+    padding: 20px;
+  }
+
+  .receive-body,
+  .add-device {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+  }
+
+  .roles div,
+  .settings-rows > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+
+  .receive-text {
+    padding: 14px;
+  }
+
+  .receive-text code {
+    font-size: 16px;
+    line-height: 26px;
   }
 
   .card-head {
