@@ -18,15 +18,15 @@ releases, and the gate's wallet never installs a real one.
   a clang that compiles to WebAssembly (on a Mac, Homebrew's LLVM), as for
   `scripts/try-local.sh`.
 - An icp-cli identity other than the anonymous one as the default, holding
-  about 3.6T cycles in its cycles ledger account:
+  about 7.1T cycles in its cycles ledger account:
 
   ```sh
   icp cycles balance -e ic
-  icp cycles mint --cycles 3.6t -e ic   # converts ICP from the identity's account
+  icp cycles mint --cycles 7.1t -e ic   # converts ICP from the identity's account
   ```
 
   The channel and the factory get 1T each and the wallet the factory's
-  minimum, 1.5T; creating a canister costs 0.5T of that.
+  minimum, 5T; creating a canister costs 0.5T of that.
 - A checkout of `main`, run from its root. The gate keeps its state in
   `.icp/gate/ic/`: the canister ids, the gate's keys, the releases and the
   costs. Keep it until the second half has run.
@@ -87,14 +87,14 @@ A rehearsal on icp-cli's local network, whose application subnet charges as a
 | Create and install the release channel | 2s | -1.000T | +495.142B | | |
 | Publish gate-1 (5 chunks) | 6s | 0 | -9.680B | | |
 | Create and install the factory | 2s | -1.000T | -1.944M | +493.727B | |
-| Let the factory take the wallet's cycles | 0s | -100.000M | -2.212M | -1.944M | |
-| Create the wallet with gate-1 | 7s | -1.500T | -319.233M | -9.525B | +989.415B |
-| Claim the wallet | 1s | 0 | -1.944M | -1.944M | -12.871M |
-| Publish gate-2 and gate-3 (5 chunks each) | 13s | 0 | -19.823B | -2.170M | -0.414M |
+| Let the factory take the wallet's cycles | 0s | -100.000M | -1.944M | -1.944M | |
+| Create the wallet with gate-1 | 6s | -5.000T | -319.233M | -9.525B | +4.489T |
+| Claim the wallet | 0s | 0 | -2.345M | -1.944M | -12.853M |
+| Publish gate-2 and gate-3 (5 chunks each) | 9s | 0 | -19.823B | -2.223M | -0.316M |
 | Propose both upgrades | 0s | 0 | -1.944M | -1.944M | -29.435M |
 | Wait for the timelock | 7d 2h | 0 | -16.580B | -10.659B | -17.936B |
 | Upgrade to gate-2 | 8s | 0 | -340.990M | -1.944M | -20.173B |
-| Upgrade to gate-3 | 8s | 0 | -352.960M | -2.292M | -20.172B |
+| Upgrade to gate-3 | 5s | 0 | -352.852M | -2.223M | -20.172B |
 
 The mainnet numbers replace these once the gate has run.
 
@@ -122,9 +122,9 @@ the old version still runs, and marks the upgrade `Failed` after an hour.
 
 The channel and the factory are yours to delete; the script prints the
 commands. `icp canister delete` returns a canister's cycles to your account
-first. The wallet stays: it is its own only controller, so nobody can delete
-it. It is a working wallet you own, which trusts only the gate's keys for
-releases.
+first. The wallet stays, with the cycles it has left, about 4.4T: it is its
+own only controller, so nobody can delete it. It is a working wallet you own,
+which trusts only the gate's keys for releases.
 
 ## Rehearsing it locally
 

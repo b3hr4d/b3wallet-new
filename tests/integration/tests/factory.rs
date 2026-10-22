@@ -404,7 +404,7 @@ fn the_factory_creates_a_wallet_that_owns_itself_and_upgrades_itself() {
     );
     assert_eq!(net.current_release(net.factory), Ok(release.clone()));
 
-    let paid = 3 * T;
+    let paid = MIN_CYCLES + T;
     net.approve(creator(), net.factory, paid + FEE);
     let before = net.balance(creator());
     let factory_before = net.factory_cycles();
@@ -502,27 +502,27 @@ fn the_factory_takes_nothing_for_a_wallet_it_cannot_create() {
         net.current_release(net.factory),
         Err(FactoryError::ReleaseUnavailable(reason)) if reason.contains("published no release")
     ));
-    net.approve(creator(), net.factory, 2 * T + FEE);
+    net.approve(creator(), net.factory, MIN_CYCLES + FEE);
     let before = net.balance(creator());
     assert!(matches!(
-        net.create(net.factory, creator(), &net.args(None, 2 * T)),
+        net.create(net.factory, creator(), &net.args(None, MIN_CYCLES)),
         Err(FactoryError::ReleaseUnavailable(reason)) if reason.contains("published no release")
     ));
     let release = net.publish("0.1.0", &wallet_wasm(), vec![], &[1, 3]);
 
     assert!(matches!(
-        net.create(net.factory, creator(), &net.args(Some("0.9.0"), 2 * T)),
+        net.create(net.factory, creator(), &net.args(Some("0.9.0"), MIN_CYCLES)),
         Err(FactoryError::ReleaseUnavailable(reason)) if reason.contains("no release 0.9.0")
     ));
     // More than the allowance, and no allowance at all.
     assert_eq!(
-        net.create(net.factory, creator(), &net.args(None, 3 * T)),
+        net.create(net.factory, creator(), &net.args(None, MIN_CYCLES + T)),
         Err(FactoryError::InsufficientAllowance {
-            allowance: Nat::from(2 * T + FEE)
+            allowance: Nat::from(MIN_CYCLES + FEE)
         })
     );
     assert_eq!(
-        net.create(net.factory, user(42), &net.args(None, 2 * T)),
+        net.create(net.factory, user(42), &net.args(None, MIN_CYCLES)),
         Err(FactoryError::InsufficientAllowance {
             allowance: Nat::from(0u8)
         })
@@ -545,9 +545,9 @@ fn the_factory_takes_nothing_for_a_wallet_it_cannot_create() {
         .unwrap(),
     );
     sent.unwrap();
-    net.approve(poor, net.factory, 2 * T + FEE);
+    net.approve(poor, net.factory, MIN_CYCLES + FEE);
     assert_eq!(
-        net.create(net.factory, poor, &net.args(None, 2 * T)),
+        net.create(net.factory, poor, &net.args(None, MIN_CYCLES)),
         Err(FactoryError::InsufficientFunds {
             balance: Nat::from(T - FEE)
         })
@@ -555,12 +555,16 @@ fn the_factory_takes_nothing_for_a_wallet_it_cannot_create() {
 
     // Arguments out of form are refused before anything else.
     let refusals: Vec<(Principal, CreateWalletArgs, &str)> = vec![
-        (Principal::anonymous(), net.args(None, 2 * T), "anonymous"),
+        (
+            Principal::anonymous(),
+            net.args(None, MIN_CYCLES),
+            "anonymous",
+        ),
         (
             creator(),
             CreateWalletArgs {
                 claim_expires_at_ns: net.pic.get_time().as_nanos_since_unix_epoch() + HOUR_NS / 2,
-                ..net.args(None, 2 * T)
+                ..net.args(None, MIN_CYCLES)
             },
             "an hour from now",
         ),
@@ -569,7 +573,7 @@ fn the_factory_takes_nothing_for_a_wallet_it_cannot_create() {
             creator(),
             CreateWalletArgs {
                 claim_public_key: ByteBuf::from(vec![1; 31]),
-                ..net.args(None, 2 * T)
+                ..net.args(None, MIN_CYCLES)
             },
             "claim_public_key",
         ),
@@ -599,10 +603,10 @@ fn the_factory_takes_nothing_for_a_wallet_it_cannot_create() {
         release.version
     ));
     assert_eq!(net.current_release(strict), Err(one_of_two.clone()));
-    net.approve(creator(), strict, 2 * T + FEE);
+    net.approve(creator(), strict, MIN_CYCLES + FEE);
     let before_strict = net.balance(creator());
     assert_eq!(
-        net.create(strict, creator(), &net.args(None, 2 * T)),
+        net.create(strict, creator(), &net.args(None, MIN_CYCLES)),
         Err(one_of_two)
     );
     // Only the approvals were paid for.
@@ -615,7 +619,7 @@ fn a_release_that_does_not_install_leaves_the_canister_to_its_creator() {
     let net = net();
     let broken = trapping_init_module();
     let release = net.publish("0.1.0-broken", &broken, vec![], &[1, 2]);
-    let paid = 2 * T;
+    let paid = MIN_CYCLES;
     net.approve(creator(), net.factory, paid + FEE);
     let before = net.balance(creator());
     let failed = net.create(net.factory, creator(), &net.args(None, paid));
@@ -640,7 +644,7 @@ fn a_release_that_does_not_install_leaves_the_canister_to_its_creator() {
 fn the_timer_hands_over_a_wallet_whose_hand_over_failed() {
     let net = net();
     let release = net.publish("0.1.0", &wallet_wasm(), vec![], &[1, 2]);
-    let paid = 2 * T;
+    let paid = MIN_CYCLES;
     net.approve(creator(), net.factory, paid + FEE);
     let args = net.args(None, paid);
     let message = net

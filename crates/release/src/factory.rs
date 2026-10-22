@@ -70,10 +70,11 @@ pub enum FactoryError {
 }
 
 /// The fewest cycles a wallet is created with. The IC takes 0.5T to create a
-/// canister on a 13-node subnet and about 0.01T to install the wallet, and a
-/// wallet upgrades itself only while it can spend 0.34T above what it keeps
-/// to stay running. A wallet created with 1T could upgrade itself once.
-pub const MIN_CYCLES: u128 = 1_500_000_000_000;
+/// canister on a 13-node subnet and about 0.01T to install the wallet, so a
+/// new wallet starts with about 4.5T. It upgrades itself only while it can
+/// spend 0.34T above what it keeps to stay running, and holding its memory
+/// costs it about 3B a day.
+pub const MIN_CYCLES: u128 = 5_000_000_000_000;
 
 /// The least time a claim key must have left: the factory takes a few
 /// rounds to create and install the wallet, whose install refuses a key

@@ -12,7 +12,7 @@
 #
 # Both halves add their rows to .icp/gate/<environment>/costs.md and print it.
 # They spend cycles from your icp-cli identity's account on the cycles ledger,
-# about 3.6T in all; `icp cycles mint --cycles 3.6t -e ic` buys them with ICP.
+# about 7.1T in all; `icp cycles mint --cycles 7.1t -e ic` buys them with ICP.
 # With -e local the gate runs on the local network instead.
 #
 # The releases are the wallet's own Wasm, stamped with a public metadata
@@ -51,8 +51,8 @@ cycles_ledger=um5iw-rqaaa-aaaaq-qaaba-cai
 # gets the factory's minimum.
 channel_cycles=1t
 factory_cycles=1t
-wallet_cycles=1_500_000_000_000
-needed=3_600_000_000_000
+wallet_cycles=5_000_000_000_000
+needed=7_100_000_000_000
 target=target/wasm32-unknown-unknown/release
 
 missing=()
@@ -331,7 +331,7 @@ if [ "$half" = start ]; then
   have=$(balance_of you)
   short=$(($(echo $needed | digits) - have))
   if [ "$short" -gt 0 ]; then
-    echo "The gate needs about 3.6T cycles in $me's cycles ledger account, which holds $(cycles_text "$have" | tr -d +)." >&2
+    echo "The gate needs about 7.1T cycles in $me's cycles ledger account, which holds $(cycles_text "$have" | tr -d +)." >&2
     echo "Buy the rest with ICP: icp cycles mint --cycles $(((short + 99999999999) / 100000000000))00b ${net[*]}" >&2
     exit 1
   fi
