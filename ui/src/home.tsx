@@ -9,7 +9,15 @@ import { CopyButton } from "./copy.tsx"
 import { actionText, failureText, isJoinRequest, stateText, waitsFor } from "./describe.ts"
 import type { Member, Pending, Status, UpgradeState } from "./generated/wallet.ts"
 import { Loader } from "./brand.tsx"
-import { AlertIcon, ApproveIcon, ArrowIcon, BoltIcon, WalletMark } from "./icons.tsx"
+import {
+  AlertIcon,
+  ApproveIcon,
+  ArrowIcon,
+  BoltIcon,
+  ReceiveIcon,
+  SendIcon,
+  WalletMark,
+} from "./icons.tsx"
 import { JoinRequest } from "./join.tsx"
 import { hueClass } from "./mark.ts"
 import { Reading, useMe } from "./member.tsx"
@@ -17,7 +25,7 @@ import { useNowNs } from "./now.ts"
 import { HomeOutline } from "./outline.tsx"
 import { Members, Rules } from "./people.tsx"
 import { Release } from "./release.tsx"
-import { SignIn } from "./session.tsx"
+import { SignIn } from "./sign-in.tsx"
 import { dateOf } from "./time.ts"
 import { LOW_CYCLES } from "./tokens.ts"
 
@@ -119,6 +127,18 @@ function Dashboard({
     <div className="dashboard">
       <Hero id={id} status={status} me={me}>
         <Holdings accounts={accounts} balances={balances} owner={me.role.tag === "Owner"} />
+        <div className="hero-actions">
+          {(me.role.tag === "Owner" || me.role.tag === "Proposer") && (
+            <a className="button primary" href="/send">
+              <SendIcon />
+              Send
+            </a>
+          )}
+          <a className="button" href="#accounts">
+            <ReceiveIcon />
+            Receive
+          </a>
+        </div>
       </Hero>
       <Notices wallet={id} status={status} pending={pending.data} now={now} />
       <div className="tiles">

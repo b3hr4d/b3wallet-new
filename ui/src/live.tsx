@@ -47,7 +47,7 @@ export function Live({
         })
       }
     >
-      {account && createPortal(<Account />, account)}
+      {account && createPortal(<Account wallet={here.wallet} />, account)}
       <Wallet page={page} wallet={here.wallet} local={here.local} />
     </ReactorProvider>
   )

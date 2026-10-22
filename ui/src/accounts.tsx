@@ -58,42 +58,46 @@ export function Holdings({
     group.reads.push(balances[index])
     groups.set(key, group)
   })
-  const count = accounts.data.length
   return (
-    <>
-      <div className="holdings">
-        {[...groups].map(([key, group]) => (
-          <Holding key={key} chain={group.chain} reads={group.reads} />
-        ))}
-      </div>
-      <p className="holdings-note">
-        Held in {count} account{count === 1 ? "" : "s"}
-      </p>
-    </>
+    <div className="holdings">
+      {[...groups].map(([key, group]) => (
+        <Holding key={key} chain={group.chain} reads={group.reads} />
+      ))}
+    </div>
   )
 }
 
+/** One token's total, under its symbol and how many accounts hold it. */
 function Holding({ chain, reads }: { chain: Chain; reads: Array<BalanceRead | undefined> }) {
   const { token, error } = useToken(chain)
   const amounts = reads.map((read) => read?.data?.amount)
-  if (error !== undefined || reads.some((read) => read?.isError)) {
-    return (
-      <p className="holding">
-        <span className="amount">
-          <span className="amount-whole quiet">Not read</span>
-          {token && <span className="amount-symbol">{token.symbol}</span>}
+  const failed = error !== undefined || reads.some((read) => read?.isError)
+  const total =
+    token === undefined || amounts.some((amount) => amount === undefined)
+      ? undefined
+      : amountParts(
+          amounts.reduce<bigint>((sum, amount) => sum + (amount ?? 0n), 0n),
+          token,
+        )
+  return (
+    <div className="holding">
+      <p className="holding-label">
+        {token ? <strong>{token.symbol}</strong> : <span className="skeleton" />}
+        <span>
+          {reads.length} account{reads.length === 1 ? "" : "s"}
         </span>
       </p>
-    )
-  }
-  if (token === undefined || amounts.some((amount) => amount === undefined)) {
-    return <span className="skeleton big" />
-  }
-  const total = amounts.reduce<bigint>((sum, amount) => sum + (amount ?? 0n), 0n)
-  return (
-    <p className="holding">
-      <Amount amount={total} token={token} />
-    </p>
+      {failed ? (
+        <p className="holding-amount quiet">Not read</p>
+      ) : total === undefined ? (
+        <span className="skeleton big" />
+      ) : (
+        <p className="holding-amount">
+          {total.whole}
+          <span className="amount-fraction">{total.fraction}</span>
+        </p>
+      )}
+    </div>
   )
 }
 
@@ -120,7 +124,7 @@ export function Accounts({
   const [adding, setAdding] = useState(false)
   const reading = balances.some((balance) => balance.isFetching)
   return (
-    <section className="card">
+    <section className="card" id="accounts">
       <div className="card-head">
         <h2>Accounts</h2>
         {accounts.data !== undefined && <span className="count">{accounts.data.length}</span>}

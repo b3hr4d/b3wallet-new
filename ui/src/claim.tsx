@@ -8,7 +8,7 @@ import { claimKeyOf, signClaim } from "./claim-key.ts"
 import { failureText } from "./describe.ts"
 import { WalletMark } from "./icons.tsx"
 import { Reading } from "./member.tsx"
-import { SignIn } from "./session.tsx"
+import { SignIn } from "./sign-in.tsx"
 
 /**
  * The claim link's page: whoever signs in here and claims becomes the

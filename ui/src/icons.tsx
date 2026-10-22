@@ -42,6 +42,12 @@ export const SendIcon = () => (
   </Icon>
 )
 
+export const ReceiveIcon = () => (
+  <Icon>
+    <path d="M17 7 7 17M15 17H7V9" />
+  </Icon>
+)
+
 export const ApproveIcon = () => (
   <Icon>
     <circle cx="12" cy="12" r="8.5" />
