@@ -861,6 +861,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "evm_rpc_mock"
+version = "0.1.0"
+dependencies = [
+ "candid",
+ "candid_parser",
+ "ic-cdk",
+ "secp256k1",
+ "serde",
+ "serde_json",
+ "tiny-keccak",
+]
+
+[[package]]
 name = "factory"
 version = "0.1.0"
 dependencies = [
@@ -3713,6 +3726,7 @@ dependencies = [
  "serde",
  "serde_bytes",
  "sha2",
+ "tiny-keccak",
 ]
 
 [[package]]

@@ -32,8 +32,36 @@ export function ledgerOf(chain: Chain): Principal | undefined {
 export const ICP_ONLY: readonly Chain[] = [{ tag: "Icp" }]
 
 /**
+ * The EVM chains a wallet holds, those the EVM RPC canister has providers
+ * of, by chain id: their names, and their native token's symbol.
+ */
+export const EVM_CHAINS: ReadonlyArray<{ id: bigint; name: string; symbol: string }> = [
+  { id: 1n, name: "Ethereum", symbol: "ETH" },
+  { id: 11_155_111n, name: "Sepolia", symbol: "Sepolia ETH" },
+  { id: 42_161n, name: "Arbitrum One", symbol: "ETH on Arbitrum One" },
+  { id: 8_453n, name: "Base", symbol: "ETH on Base" },
+  { id: 10n, name: "Optimism", symbol: "ETH on Optimism" },
+]
+
+/**
+ * The EVM chains a wallet on `network` holds. A wallet on a test network signs
+ * with the test key, which holds Sepolia alone.
+ */
+export function evmChainsOf(network: BitcoinNetwork): typeof EVM_CHAINS {
+  return network.tag === "Mainnet"
+    ? EVM_CHAINS
+    : EVM_CHAINS.filter((chain) => chain.id === 11_155_111n)
+}
+
+/** The native token of an EVM chain: 18 decimals, and the chain's symbol. */
+export function evmToken(chain: bigint): Token {
+  const known = EVM_CHAINS.find((candidate) => candidate.id === chain)
+  return { symbol: known?.symbol ?? `ETH on chain ${chain}`, decimals: 18, fee: null }
+}
+
+/**
  * What an account of `kind` reads and sends when a transfer names no asset:
- * ICP, or the bitcoin of its network.
+ * ICP, or the bitcoin of its network. An EVM transfer names its chain.
  */
 export function defaultAsset(kind: AccountKind): Chain | undefined {
   switch (kind.tag) {
@@ -47,17 +75,19 @@ export function defaultAsset(kind: AccountKind): Chain | undefined {
 }
 
 /**
- * The assets an account shows, its default first: every tracked asset for an
- * Internet Computer account, its network's bitcoin for a Bitcoin account.
+ * The assets an account shows, its default first: ICP and the tracked
+ * ICRC-1 tokens for an Internet Computer account, its network's bitcoin for
+ * a Bitcoin account, and the native token of each tracked chain for an EVM
+ * account.
  */
 export function assetsOf(account: Account, tracked: readonly Chain[]): Chain[] {
   switch (account.kind.tag) {
     case "InternetComputer":
-      return [...tracked]
+      return tracked.filter((asset) => asset.tag === "Icp" || asset.tag === "Icrc")
     case "Bitcoin":
       return [{ tag: "Bitcoin", value: account.kind.value }]
     case "Evm":
-      return []
+      return tracked.filter((asset) => asset.tag === "Evm")
   }
 }
 
@@ -108,8 +138,9 @@ export function tokenOf(
 }
 
 /**
- * An amount on a chain, as text, where no account names the token: ICP and
- * Bitcoin in their symbols, another ledger's token in its base units.
+ * An amount on a chain, as text, where no account names the token: ICP,
+ * Bitcoin and an EVM chain's token in their symbols, another ledger's token
+ * in its base units.
  */
 export function chainAmountText(amount: bigint, chain: Chain): string {
   switch (chain.tag) {
@@ -117,8 +148,9 @@ export function chainAmountText(amount: bigint, chain: Chain): string {
       return amountText(amount, { symbol: "ICP", decimals: 8, fee: null })
     case "Bitcoin":
       return amountText(amount, bitcoinToken(chain.value))
-    case "Icrc":
     case "Evm":
+      return amountText(amount, evmToken(chain.value))
+    case "Icrc":
       return `${amount} base units`
   }
 }
@@ -138,7 +170,7 @@ export function cyclesText(cycles: bigint, round: "down" | "up"): string {
 
 /**
  * Below this many cycles the pages say the wallet is low. An upgrade needs
- * about 0.32T above what the wallet keeps to stay running, so a wallet under
+ * about 0.35T above what the wallet keeps to stay running, so a wallet under
  * 1T is told before an upgrade stops for want of cycles.
  */
 export const LOW_CYCLES = 1_000_000_000_000n
@@ -213,15 +245,18 @@ export function chainText(chain: Chain): string {
     case "Bitcoin":
       return chain.value.tag === "Mainnet" ? "Bitcoin" : `Bitcoin ${chain.value.tag.toLowerCase()}`
     case "Evm":
-      return `EVM chain ${chain.value}`
+      return (
+        EVM_CHAINS.find((candidate) => candidate.id === chain.value)?.name ??
+        `EVM chain ${chain.value}`
+      )
   }
 }
 
 export type TokenRead = { token: Token; error?: undefined } | { token?: undefined; error?: unknown }
 
 /**
- * The token a chain's accounts hold: Bitcoin's, or what its ledger's
- * metadata says, read as a certified call like every other read.
+ * The token a chain's accounts hold: Bitcoin's, an EVM chain's, or what its
+ * ledger's metadata says, read as a certified call like every other read.
  */
 export function useToken(chain: Chain | undefined): TokenRead {
   const client = useClient()
@@ -235,6 +270,7 @@ export function useToken(chain: Chain | undefined): TokenRead {
     staleTime: Infinity,
   })
   if (chain?.tag === "Bitcoin") return { token: bitcoinToken(chain.value) }
+  if (chain?.tag === "Evm") return { token: evmToken(chain.value) }
   if (metadata.isError) return { error: metadata.error }
   if (metadata.data === undefined) return {}
   const token = tokenOf(metadata.data)

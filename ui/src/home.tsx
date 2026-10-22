@@ -210,7 +210,7 @@ function Notices({
         <Notice tone="warn" title="The wallet is low on cycles">
           <p>
             It has {formatUnits(status.cycles, 12, { maxFractionDigits: 2 })}T. An upgrade needs
-            about 0.32T to spare. Anyone can top it up:
+            about 0.35T to spare. Anyone can top it up:
           </p>
           <p className="command">
             <code>icp canister top-up --amount 1t {id}</code>

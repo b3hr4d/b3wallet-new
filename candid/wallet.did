@@ -24,8 +24,8 @@ type InitArgs = record {
 };
 
 type UpgradeArgs = record {
-  // Sets the network of a wallet that has no Bitcoin account yet; once it
-  // has one, an upgrade never changes it. Without one, a wallet keeps its
+  // Sets the network of a wallet that has no Bitcoin or EVM account yet; once
+  // it has one, an upgrade never changes it. Without one, a wallet keeps its
   // network, or takes that of its first Bitcoin account, or mainnet.
   bitcoin_network : opt BitcoinNetwork;
 };
@@ -76,7 +76,9 @@ type AccountHolder = variant {
 // account, index n is the wallet's ICRC-1 subaccount n as 32 big-endian
 // bytes, and index 0 is the plain principal. For Bitcoin, index n is the
 // threshold ECDSA key of the path "wallet" / "bitcoin-<network>" / n as 4
-// big-endian bytes, and the address is that key's P2WPKH address.
+// big-endian bytes, and the address is that key's P2WPKH address. For EVM,
+// index n is the key of the path "wallet" / "evm" / n, and the address is
+// that key's EIP-55 address on every EVM chain.
 type Account = record {
   id : AccountId;
   kind : AccountKind;
@@ -132,19 +134,21 @@ type ActionId = nat64;
 type TransferRequest = record {
   from : AccountId;
   // What it sends: ICP or a tracked ICRC-1 token from an Internet Computer
-  // account, or the bitcoin of a Bitcoin account's network. None is ICP, or
-  // the account's bitcoin; `propose` stores the asset it sends.
+  // account, the bitcoin of a Bitcoin account's network, or the native token
+  // of a tracked EVM chain from an EVM account. None is ICP, or the account's
+  // bitcoin; `propose` stores the asset it sends.
   asset : opt Chain;
   // For ICP and ICRC, an ICRC-1 account in its text form; for Bitcoin, an
-  // address of the account's network.
+  // address of the account's network; for EVM, an address.
   to : text;
-  // Base units of the asset: e8s, or satoshis.
+  // Base units of the asset: e8s, satoshis, or wei.
   amount : nat;
   // The ledger refuses a fee other than its own; none pays its own. For
   // Bitcoin, the whole fee in satoshis; none pays the median rate of recent
-  // transactions. A Bitcoin fee counts toward the daily limit.
+  // transactions. For EVM, the most it pays in fees, in wei; none pays the
+  // chain's recent fees. A Bitcoin or EVM fee counts toward the daily limit.
   fee : opt nat;
-  // At most 32 bytes. A Bitcoin transfer carries none.
+  // At most 32 bytes. A Bitcoin or EVM transfer carries none.
   memo : opt blob;
 };
 
@@ -412,14 +416,17 @@ service : (WalletArg) -> {
   accounts : () -> (AccountsResult) query;
   add_account : (AddAccountArgs) -> (AccountResult);
   // Update: asks the ledger, the Bitcoin canister or the EVM RPC canister for
-  // what an account holds of an asset: none is ICP, or the account's bitcoin.
+  // what an account holds of an asset: none is ICP, or the account's bitcoin;
+  // an EVM account names its chain.
   // A Bitcoin balance leaves out what the wallet's transactions spend and
   // counts their change, before the network confirms them.
   balance : (AccountId, opt Chain) -> (BalanceResult);
-  // The assets the accounts show: ICP first, then the ICRC-1 ledgers owners
-  // track. Tracking moves nothing, so owners change it without approval.
+  // The assets the accounts show: ICP first, then the ICRC-1 ledgers and EVM
+  // chains owners track; a new wallet tracks Ethereum, or Sepolia on test
+  // keys. Tracking moves nothing, so owners change it without approval.
   // Tracking a ledger asks it for its standards, and refuses a canister that
-  // is not an ICRC-1 ledger.
+  // is not an ICRC-1 ledger; an EVM chain must be one the EVM RPC canister
+  // has providers of, and Sepolia alone on test keys.
   assets : () -> (AssetsResult) query;
   track_asset : (Chain) -> (AssetsResult);
   untrack_asset : (Chain) -> (AssetsResult);
