@@ -31,6 +31,11 @@ pub const CONTENT_SECURITY_POLICY: &str = "default-src 'none'; \
 const INDEX_HTML: &[u8] = include_bytes!("../pages/index.html");
 const SEND_HTML: &[u8] = include_bytes!("../pages/send.html");
 const APPROVALS_HTML: &[u8] = include_bytes!("../pages/approvals.html");
+const RECEIVE_HTML: &[u8] = include_bytes!("../pages/receive.html");
+const ACCOUNT_HTML: &[u8] = include_bytes!("../pages/account.html");
+const MEMBERS_HTML: &[u8] = include_bytes!("../pages/members.html");
+const SETTINGS_HTML: &[u8] = include_bytes!("../pages/settings.html");
+const NOTIFICATIONS_HTML: &[u8] = include_bytes!("../pages/notifications.html");
 const CLAIM_HTML: &[u8] = include_bytes!("../pages/claim.html");
 const NOT_FOUND_HTML: &[u8] = include_bytes!("../pages/404.html");
 const APP_JS: &[u8] = include_bytes!("../pages/app.js");
@@ -64,14 +69,25 @@ thread_local! {
 }
 
 /// The embedded files, certified: `/` and `/index.html` are the start page,
-/// `/send`, `/approvals` and `/claim` the other pages, each also at its
+/// `/send`, `/receive`, `/account`, `/approvals`, `/notifications`,
+/// `/settings`, `/members` and `/claim` the other pages, each also at its
 /// `.html` path, `/app.js` and `/app.css` the app they load, and any other
 /// path is the 404 page with status 404.
 fn router() -> AssetRouter<'static> {
-    let files: [(&str, &[u8], &str, &[&str]); 7] = [
+    let files: [(&str, &[u8], &str, &[&str]); 12] = [
         ("index.html", INDEX_HTML, HTML, &["/"]),
         ("send.html", SEND_HTML, HTML, &["/send"]),
+        ("receive.html", RECEIVE_HTML, HTML, &["/receive"]),
+        ("account.html", ACCOUNT_HTML, HTML, &["/account"]),
         ("approvals.html", APPROVALS_HTML, HTML, &["/approvals"]),
+        (
+            "notifications.html",
+            NOTIFICATIONS_HTML,
+            HTML,
+            &["/notifications"],
+        ),
+        ("settings.html", SETTINGS_HTML, HTML, &["/settings"]),
+        ("members.html", MEMBERS_HTML, HTML, &["/members"]),
         ("claim.html", CLAIM_HTML, HTML, &["/claim"]),
         ("404.html", NOT_FOUND_HTML, HTML, &[]),
         ("app.js", APP_JS, JAVASCRIPT, &[]),
@@ -160,8 +176,20 @@ mod tests {
         for (url, body, content_type) in [
             ("/send", SEND_HTML, HTML),
             ("/send.html", SEND_HTML, HTML),
+            ("/receive", RECEIVE_HTML, HTML),
+            ("/receive.html", RECEIVE_HTML, HTML),
+            ("/receive?account=2", RECEIVE_HTML, HTML),
+            ("/account", ACCOUNT_HTML, HTML),
+            ("/account.html", ACCOUNT_HTML, HTML),
+            ("/account?id=1", ACCOUNT_HTML, HTML),
             ("/approvals", APPROVALS_HTML, HTML),
             ("/approvals.html", APPROVALS_HTML, HTML),
+            ("/notifications", NOTIFICATIONS_HTML, HTML),
+            ("/notifications.html", NOTIFICATIONS_HTML, HTML),
+            ("/settings", SETTINGS_HTML, HTML),
+            ("/settings.html", SETTINGS_HTML, HTML),
+            ("/members", MEMBERS_HTML, HTML),
+            ("/members.html", MEMBERS_HTML, HTML),
             ("/claim", CLAIM_HTML, HTML),
             ("/claim.html", CLAIM_HTML, HTML),
             ("/claim?x=1", CLAIM_HTML, HTML),
@@ -185,6 +213,12 @@ mod tests {
             "/claims",
             "/claim/",
             "/send/1",
+            "/receive/1",
+            "/account/1",
+            "/accounts",
+            "/member",
+            "/settings/members",
+            "/notification",
             "/approval",
             "/index.htm",
             "/a/b/c.js",
@@ -202,7 +236,12 @@ mod tests {
         for url in [
             "/",
             "/send",
+            "/receive",
+            "/account",
             "/approvals",
+            "/notifications",
+            "/settings",
+            "/members",
             "/claim",
             "/app.js",
             "/app.css",
@@ -241,7 +280,12 @@ mod tests {
         for page in [
             INDEX_HTML,
             SEND_HTML,
+            RECEIVE_HTML,
+            ACCOUNT_HTML,
             APPROVALS_HTML,
+            NOTIFICATIONS_HTML,
+            SETTINGS_HTML,
+            MEMBERS_HTML,
             CLAIM_HTML,
             NOT_FOUND_HTML,
         ] {

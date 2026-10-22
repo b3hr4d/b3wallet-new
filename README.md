@@ -15,15 +15,21 @@ leaves one entry in an append-only audit log. It serves its own UI, certified
 and with a strict Content-Security-Policy: a React app from `ui/`, prerendered
 at build. Its start page shows the wallet's version and who you are to it,
 and shows members a dashboard of its holdings per token, open actions,
-cycles, accounts and their balances, newest audit entries, members and
-policy, with a notice for every open action that is not a transfer; it lets
+cycles, accounts and their balances and newest audit entries, with a notice
+for every open action that is not a transfer; it lets
 owners add accounts, and lets someone signed in who is not a member ask to
 join, as a viewer or, for an AI agent through the MCP server in `mcp/`, as a
 proposer whose transfers always wait for an owner
 ([decision 0007](docs/decisions/0007-agent-proposer.md)); its send page
-proposes and runs a transfer, its approvals page approves, rejects and runs
-the open actions, and its claim page lets the holder of the claim link sign
-in with Internet Identity and claim the wallet
+proposes and runs a transfer, its receive page shows each account's whole
+address and its QR code to give a sender, each account's page shows what it
+holds and its open transfers, its notifications page lists what needs you
+and what happened, its approvals page approves,
+rejects and runs the open actions, its settings page shows the members, a
+security checkup and the controllers and module hash the IC certifies, its
+members page proposes adding, removing and changing the role of members, and
+its claim page lets the
+holder of the claim link sign in with Internet Identity and claim the wallet
 ([decision 0006](docs/decisions/0006-client-library.md) chose ic-reactor 4 to
 call it). It
 holds ICP and ICRC tokens on its own principal and subaccounts, reads their

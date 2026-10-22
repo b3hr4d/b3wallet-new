@@ -88,12 +88,17 @@ const files = [
 ]
 const expected = [
   "404.html",
+  "account.html",
   "app.css",
   "app.js",
   "approvals.html",
   "claim.html",
   "index.html",
+  "members.html",
+  "notifications.html",
+  "receive.html",
   "send.html",
+  "settings.html",
 ]
 const names = files.map(({ file }) => file).sort()
 if (names.join() !== expected.join()) {

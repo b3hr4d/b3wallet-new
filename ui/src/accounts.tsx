@@ -2,7 +2,6 @@ import { isPrincipal, principal, type Principal } from "@candid-core/schema"
 import { useMutation, type UseQueryResult } from "@tanstack/react-query"
 import { useState, type ReactNode } from "react"
 import { useWallet } from "./canister.ts"
-import { CopyButton } from "./copy.tsx"
 import { failureText, shortText } from "./describe.ts"
 import type {
   Account,
@@ -12,8 +11,7 @@ import type {
   Chain,
   Member,
 } from "./generated/wallet.ts"
-import { ChevronIcon, CrossIcon, PlusIcon, RefreshIcon } from "./icons.tsx"
-import { agoText } from "./time.ts"
+import { ArrowIcon, CrossIcon, PlusIcon, RefreshIcon } from "./icons.tsx"
 import {
   amountParts,
   chainKey,
@@ -66,42 +64,46 @@ export function Holdings({
     group.reads.push(read)
     groups.set(key, group)
   }
-  const count = accounts.data.length
   return (
-    <>
-      <div className="holdings">
-        {[...groups].map(([key, group]) => (
-          <Holding key={key} asset={group.asset} reads={group.reads} />
-        ))}
-      </div>
-      <p className="holdings-note">
-        Held in {count} account{count === 1 ? "" : "s"}
-      </p>
-    </>
+    <div className="holdings">
+      {[...groups].map(([key, group]) => (
+        <Holding key={key} asset={group.asset} reads={group.reads} />
+      ))}
+    </div>
   )
 }
 
+/** One asset's total, under its symbol and how many accounts hold it. */
 function Holding({ asset, reads }: { asset: Chain; reads: Array<UseQueryResult<Balance>> }) {
   const { token, error } = useToken(asset)
   const amounts = reads.map((read) => read.data?.amount)
-  if (error !== undefined || reads.some((read) => read.isError)) {
-    return (
-      <p className="holding">
-        <span className="amount">
-          <span className="amount-whole quiet">Not read</span>
-          {token && <span className="amount-symbol">{token.symbol}</span>}
+  const failed = error !== undefined || reads.some((read) => read.isError)
+  const total =
+    token === undefined || amounts.some((amount) => amount === undefined)
+      ? undefined
+      : amountParts(
+          amounts.reduce<bigint>((sum, amount) => sum + (amount ?? 0n), 0n),
+          token,
+        )
+  return (
+    <div className="holding">
+      <p className="holding-label">
+        {token ? <strong>{token.symbol}</strong> : <span className="skeleton" />}
+        <span>
+          {reads.length} account{reads.length === 1 ? "" : "s"}
         </span>
       </p>
-    )
-  }
-  if (token === undefined || amounts.some((amount) => amount === undefined)) {
-    return <span className="skeleton big" />
-  }
-  const total = amounts.reduce<bigint>((sum, amount) => sum + (amount ?? 0n), 0n)
-  return (
-    <p className="holding">
-      <Amount amount={total} token={token} />
-    </p>
+      {failed ? (
+        <p className="holding-amount quiet">Not read</p>
+      ) : total === undefined ? (
+        <span className="skeleton big" />
+      ) : (
+        <p className="holding-amount">
+          {total.whole}
+          <span className="amount-fraction">{total.fraction}</span>
+        </p>
+      )}
+    </div>
   )
 }
 
@@ -118,7 +120,6 @@ export function Accounts({
   accounts,
   assets,
   balances,
-  now,
 }: {
   wallet: Principal
   me: Member
@@ -126,13 +127,12 @@ export function Accounts({
   accounts: UseQueryResult<Account[]>
   assets: UseQueryResult<Chain[]>
   balances: BalanceRead[]
-  now: bigint
 }) {
   const owner = me.role.tag === "Owner"
   const [adding, setAdding] = useState(false)
   const reading = balances.some(({ read }) => read.isFetching)
   return (
-    <section className="card">
+    <section className="card" id="accounts">
       <div className="card-head">
         <h2>Accounts</h2>
         {accounts.data !== undefined && <span className="count">{accounts.data.length}</span>}
@@ -166,7 +166,6 @@ export function Accounts({
               key={account.id}
               account={account}
               reads={balances.filter((balance) => balance.account.id === account.id)}
-              now={now}
             />
           ))}
         </ul>
@@ -188,96 +187,45 @@ export function Accounts({
 }
 
 /**
- * One account: the balance of its first asset, which the wallet asks a
- * ledger, the Bitcoin canister or an EVM chain's providers for, and, opened,
- * its other tokens and the whole address that receives funds.
+ * One account in the list: its first asset's balance, which the wallet asks
+ * a ledger, the Bitcoin canister or an EVM chain's providers for, and how
+ * many tokens it shows. It opens the account's own page, which holds the rest.
  */
-function AccountItem({
-  account,
-  reads,
-  now,
-}: {
-  account: Account
-  reads: BalanceRead[]
-  now: bigint
-}) {
-  const [first, ...more] = reads
+function AccountItem({ account, reads }: { account: Account; reads: BalanceRead[] }) {
+  const [first] = reads
   const token = useToken(first?.asset)
   const failure = first?.read.isError ? first.read.error : token.error
   let shown: ReactNode
-  if (failure !== undefined && failure !== null) {
+  if (first === undefined) {
+    // An EVM account while the wallet tracks no EVM chain: nothing to read.
+    shown = <span className="quiet">No chain tracked</span>
+  } else if (failure !== undefined && failure !== null) {
     shown = <span className="error">Not read</span>
-  } else if (first?.read.data === undefined || token.token === undefined) {
+  } else if (first.read.data === undefined || token.token === undefined) {
     shown = <span className="skeleton" />
   } else {
     shown = <Amount amount={first.read.data.amount} token={token.token} />
   }
-  const fetching = reads.some(({ read }) => read.isFetching)
   return (
     <li className="account">
-      <details>
-        <summary>
-          <KindAvatar kind={account.kind} />
-          <span className="account-name">
-            <strong>{account.label}</strong>
-            <span>{kindText(account.kind)}</span>
+      <a className="account-link" href={`/account?id=${account.id}`}>
+        <KindAvatar kind={account.kind} />
+        <span className="account-name">
+          <strong>{account.label}</strong>
+          <span>
+            {kindText(account.kind)}
+            {reads.length > 1 ? ` · ${reads.length} tokens` : ""}
           </span>
-          <span className="account-balance">{shown}</span>
-          <ChevronIcon />
-        </summary>
-        <div className="account-body">
-          {failure !== undefined && failure !== null && (
-            <p className="error">{failureText(failure)}</p>
-          )}
-          {more.length > 0 && (
-            <ul className="holds">
-              {more.map(({ asset, read }) => (
-                <HeldAsset key={chainKey(asset)} asset={asset} read={read} />
-              ))}
-            </ul>
-          )}
-          <p className="field-label">{receivesText(account.kind)}</p>
-          <p className="address-box">
-            <code>{account.address}</code>
-            <CopyButton text={account.address} label="Copy the address" />
-          </p>
-          {account.icp_account_id !== null && (
-            <>
-              <p className="field-label">Its ICP account identifier, for exchanges</p>
-              <p className="address-box">
-                <code>{account.icp_account_id}</code>
-                <CopyButton text={account.icp_account_id} label="Copy the account identifier" />
-              </p>
-            </>
-          )}
-          <div className="account-foot">
-            <span className="quiet">
-              {first?.read.data ? `Balance read ${agoText(first.read.data.as_of_ns, now)}` : ""}
-            </span>
-            {reads.length > 0 && (
-              <button
-                type="button"
-                className="ghost small"
-                disabled={fetching}
-                onClick={() => reads.forEach(({ read }) => void read.refetch())}
-              >
-                <RefreshIcon />
-                {fetching
-                  ? "Reading…"
-                  : reads.length > 1
-                    ? "Refresh the balances"
-                    : "Refresh the balance"}
-              </button>
-            )}
-          </div>
-        </div>
-      </details>
+        </span>
+        <span className="account-balance">{shown}</span>
+        <ArrowIcon />
+      </a>
     </li>
   )
 }
 
 /** Another token an account holds, on a line of its own. */
-function HeldAsset({ asset, read }: { asset: Chain; read: UseQueryResult<Balance> }) {
+export function HeldAsset({ asset, read }: { asset: Chain; read: UseQueryResult<Balance> }) {
   const { token, error } = useToken(asset)
   let shown: ReactNode
   if (error !== undefined || read.isError) shown = <span className="error">Not read</span>
@@ -292,7 +240,7 @@ function HeldAsset({ asset, read }: { asset: Chain; read: UseQueryResult<Balance
 }
 
 /** What an account receives, over its address. */
-function receivesText(kind: AccountKind): string {
+export function receivesText(kind: AccountKind): string {
   switch (kind.tag) {
     case "InternetComputer":
       return "Receives ICP and ICRC-1 tokens at"
@@ -303,7 +251,8 @@ function receivesText(kind: AccountKind): string {
   }
 }
 
-function KindAvatar({ kind }: { kind: AccountKind }) {
+/** An account by its kind, in plain text: networks are named, never drawn. */
+export function KindAvatar({ kind }: { kind: AccountKind }) {
   const text = kind.tag === "InternetComputer" ? "ICP" : kind.tag === "Bitcoin" ? "BTC" : "EVM"
   return (
     <span className="avatar token" aria-hidden="true">

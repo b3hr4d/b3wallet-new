@@ -1338,6 +1338,12 @@ fn an_audit_page_holds_at_most_a_hundred_entries() {
 const INDEX_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/index.html");
 const SEND_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/send.html");
 const APPROVALS_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/approvals.html");
+const RECEIVE_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/receive.html");
+const ACCOUNT_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/account.html");
+const MEMBERS_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/members.html");
+const SETTINGS_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/settings.html");
+const NOTIFICATIONS_HTML: &[u8] =
+    include_bytes!("../../../canisters/wallet/pages/notifications.html");
 const CLAIM_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/claim.html");
 const NOT_FOUND_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/404.html");
 const APP_JS: &[u8] = include_bytes!("../../../canisters/wallet/pages/app.js");
@@ -1458,8 +1464,18 @@ fn check_every_page(pic: &PocketIc, id: Principal) {
         ("/?from=link", 200, INDEX_HTML, HTML),
         ("/send", 200, SEND_HTML, HTML),
         ("/send.html", 200, SEND_HTML, HTML),
+        ("/receive", 200, RECEIVE_HTML, HTML),
+        ("/receive.html", 200, RECEIVE_HTML, HTML),
+        ("/account", 200, ACCOUNT_HTML, HTML),
+        ("/account.html", 200, ACCOUNT_HTML, HTML),
         ("/approvals", 200, APPROVALS_HTML, HTML),
         ("/approvals.html", 200, APPROVALS_HTML, HTML),
+        ("/members", 200, MEMBERS_HTML, HTML),
+        ("/members.html", 200, MEMBERS_HTML, HTML),
+        ("/notifications", 200, NOTIFICATIONS_HTML, HTML),
+        ("/notifications.html", 200, NOTIFICATIONS_HTML, HTML),
+        ("/settings", 200, SETTINGS_HTML, HTML),
+        ("/settings.html", 200, SETTINGS_HTML, HTML),
         ("/claim", 200, CLAIM_HTML, HTML),
         ("/claim.html", 200, CLAIM_HTML, HTML),
         ("/app.js", 200, APP_JS, "text/javascript; charset=utf-8"),

@@ -2,11 +2,13 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 import {
   actionDetails,
+  addressGroups,
   actionText,
   auditText,
   canRun,
   isJoinRequest,
   joinRequestText,
+  receiveNote,
   shortText,
   sourceOf,
   stateText,
@@ -354,4 +356,29 @@ test("the audit log names who did what", () => {
     auditText({ tag: "CyclesLow", value: 420_000_000_000n }, []),
     "ran low on cycles, with 0.42T cycles left",
   )
+})
+
+test("an address reads in groups that join back into it", () => {
+  const bitcoin = "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh"
+  assert.deepEqual(addressGroups(bitcoin).slice(0, 3), ["bc1q", "xy2k", "gdyg"])
+  assert.equal(addressGroups(bitcoin).join(""), bitcoin)
+  assert.deepEqual(addressGroups("uxrrr-q7777-77774-qaaaq-cai"), ["uxrrr-q7777-77774-qaaaq-cai"])
+  assert.deepEqual(addressGroups(""), [])
+})
+
+test("a sender learns what an address counts, and in which form", () => {
+  const ic = { tag: "InternetComputer" } as const
+  assert.match(receiveNote(ic), /^Send ICP or an ICRC-1 token the wallet tracks here/)
+  assert.match(receiveNote(ic), /once an owner tracks its ledger/)
+  assert.match(receiveNote(ic, "identifier"), /^For ICP only, from an exchange/)
+  assert.match(receiveNote({ tag: "Bitcoin", value: { tag: "Mainnet" } }), /Bitcoin network/)
+  assert.match(
+    receiveNote({ tag: "Bitcoin", value: { tag: "Regtest" } }),
+    /regtest bitcoin here, never mainnet/,
+  )
+  assert.match(
+    receiveNote({ tag: "Evm" }),
+    /^Send only ETH here, on an EVM chain the wallet tracks/,
+  )
+  assert.match(receiveNote({ tag: "Evm" }), /no ERC-20 token/)
 })

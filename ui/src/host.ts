@@ -21,3 +21,14 @@ export function where(hostname: string): Here {
   }
   return { ok: true, wallet: principal(first), local: domain === "localhost" }
 }
+
+/**
+ * A whole number the page's address names, such as the account in
+ * `?account=2`, or undefined when it names none.
+ */
+export function numberParam(search: string, name: string): number | undefined {
+  const text = new URLSearchParams(search).get(name)
+  if (text === null || !/^\d{1,10}$/.test(text)) return undefined
+  const value = Number(text)
+  return value <= 0xffff_ffff ? value : undefined
+}

@@ -6,7 +6,7 @@ import { useWallet } from "./canister.ts"
 import { failureText } from "./describe.ts"
 import type { Member } from "./generated/wallet.ts"
 import { Loader } from "./brand.tsx"
-import { SignIn } from "./session.tsx"
+import { SignIn } from "./sign-in.tsx"
 
 /**
  * The wallet's status, and who the signed-in caller is to it once it is

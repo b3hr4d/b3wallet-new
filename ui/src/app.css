@@ -2,9 +2,10 @@
  * The wallet's styles, on B3Pay's design system (B3Pay/b3pay-design-system,
  * `project/tokens.json` and `project/README.md`): its tokens, then the shell,
  * then each part of the pages. B3Pay is dark-first, so dark is the default
- * and light the variant. Amber is its one brand colour, for the primary
- * action, links, selection, focus and the logo's node; everything else is
- * warm graphite.
+ * and light the variant. The wallet belongs to its owners, so the brand is a
+ * flavour, not the whole look: warm graphite throughout, and amber only as a
+ * signal, on the primary action, links, focus, the logo's node and the dot of
+ * the page you are on.
  *
  * The CSP allows styles only from this file and fonts only from the wallet's
  * own origin, so the brand's fonts, which B3Pay loads from Google Fonts, are
@@ -26,6 +27,10 @@
   --accent: #f0b35a;
   --on-accent: #1d1405;
   --danger: #f07a6e;
+  --surface-2: #24211e;
+  --glow: rgba(240, 179, 90, 0.09);
+  --grain: rgba(241, 237, 230, 0.025);
+  --highlight: inset 0 1px 0 rgba(255, 255, 255, 0.04);
   --bar: rgba(18, 17, 16, 0.82);
   --mark-light: 22%;
   --mark-tint: 26%;
@@ -33,6 +38,7 @@
   --font-mono: "Martian Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
   --radius-sm: 4px;
   --radius-md: 10px;
+  --radius-lg: 16px;
   --radius-pill: 999px;
   font-family: var(--font-sans);
   font-size: 15px;
@@ -59,6 +65,10 @@
     --accent: #e8a33d;
     --on-accent: #1a1714;
     --danger: #b3261e;
+    --surface-2: #efebe4;
+    --glow: rgba(232, 163, 61, 0.14);
+    --grain: rgba(26, 23, 20, 0.035);
+    --highlight: 0 1px 2px rgba(26, 23, 20, 0.04);
     --bar: rgba(246, 244, 240, 0.85);
     --mark-light: 84%;
     --mark-tint: 40%;
@@ -147,7 +157,9 @@
 
 body {
   margin: 0;
-  background: var(--surface);
+  background:
+    radial-gradient(70rem 26rem at 50% -12rem, var(--glow), transparent 70%) no-repeat,
+    var(--surface);
 }
 
 #root {
@@ -244,20 +256,26 @@ code {
   overflow-wrap: anywhere;
 }
 
-/* `label`: uppercase field labels, table headers and chips. */
+/* `label`, uppercase, kept for table headers; other labels read in sentence case. */
 .label,
-.field-label,
-.tile-label,
-.chip,
-.count,
-.rules thead th,
-.pill {
+.rules thead th {
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   line-height: 16px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+.field-label,
+.tile-label,
+.chip,
+.count,
+.pill {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
 }
 
 /* ---- The logo and its motion -------------------------------------------------- */
@@ -273,7 +291,7 @@ code {
 .lockup {
   display: block;
   width: auto;
-  height: 24px;
+  height: 18px;
 }
 
 .loader {
@@ -376,10 +394,21 @@ code {
   color: var(--ink);
 }
 
-/* The current page is the selection: amber tint, ink text. */
+/* The page you are on: raised, with the logo's amber node beside its name. */
 .nav a[aria-current="page"] {
-  background: var(--brand-soft);
+  background: var(--surface-raised);
   color: var(--ink);
+  box-shadow:
+    inset 0 0 0 1px var(--line),
+    var(--highlight);
+}
+
+.nav a[aria-current="page"]::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
 }
 
 .bar-end {
@@ -396,20 +425,252 @@ code {
   line-height: 18px;
 }
 
-.who {
-  display: inline-flex;
+/* Settings, beside the health chip: the bar keeps its four pages. */
+.account-slot {
+  display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+}
+
+.gear {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
   height: 32px;
-  padding: 0 12px 0 6px;
+  border-radius: var(--radius-pill);
+  color: var(--ink-muted);
+}
+
+.gear:hover,
+.gear[aria-current="page"] {
+  background: var(--surface-raised);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+/* Who is signed in, as the wallet's health: the chip opens its panel. */
+.account-menu {
+  position: relative;
+  display: flex;
+}
+
+button.who {
+  gap: 10px;
+  min-height: 32px;
+  height: 32px;
+  padding: 0 12px 0 11px;
   border: 1px solid var(--line);
   border-radius: var(--radius-pill);
   background: var(--surface-raised);
   color: var(--ink-muted);
+  font-weight: 500;
+}
+
+button.who:hover,
+button.who[aria-expanded="true"] {
+  border-color: var(--ink-muted);
+  color: var(--ink);
+}
+
+/* All good: the logo's node, still. */
+.health-dot {
+  position: relative;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* Needs you: a ring leaves the node, as in the design system's loader. */
+.who.attention .health-dot::after,
+.who.problem .health-dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1.5px solid var(--accent);
+  border-radius: 50%;
+  animation: health-ring 2.6s ease-out infinite;
+}
+
+/* Something is wrong: the node turns to danger. */
+.who.problem .health-dot {
+  background: var(--danger);
+}
+
+.who.problem .health-dot::after {
+  border-color: var(--danger);
+}
+
+@keyframes health-ring {
+  0% {
+    opacity: 0.85;
+    transform: scale(1);
+  }
+  40%,
+  100% {
+    opacity: 0;
+    transform: scale(3);
+  }
+}
+
+/* How many notifications are new: amber, beside the dot. */
+.badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--brand);
+  color: var(--on-brand);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.health-news {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.health-news:hover {
+  border-color: var(--ink-muted);
+  color: var(--ink);
+}
+
+.health-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 20;
+  display: grid;
+  gap: 16px;
+  width: min(22rem, calc(100vw - 32px));
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  box-shadow:
+    var(--highlight),
+    0 24px 48px -20px rgba(0, 0, 0, 0.55);
+  white-space: normal;
+}
+
+.health-panel > * {
+  margin: 0;
+}
+
+.health-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 24px;
+}
+
+.health-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.health-item {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+
+.health-item > div > * {
+  margin: 0;
+}
+
+.health-title {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.health-text {
+  color: var(--ink-muted);
+  font-size: 13px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
+/* Each check is a shape and a word: a node, a ringed node, a danger diamond. */
+.health-mark {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.health-head .health-mark {
+  margin-top: 0;
+}
+
+.health-mark.attention {
+  box-shadow:
+    0 0 0 1.5px var(--surface-raised),
+    0 0 0 3px var(--accent);
+}
+
+.health-mark.problem {
+  border-radius: 1px;
+  background: var(--danger);
+  transform: rotate(45deg);
+}
+
+.health-foot {
+  display: grid;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.health-foot > * {
+  margin: 0;
+}
+
+.health-foot button {
+  justify-self: start;
 }
 
 .who code {
   font-size: 12px;
+}
+
+/* Nothing in the bar wraps: what does not fit goes, below. */
+.brand,
+.nav a,
+.who,
+.bar-end button {
+  flex: none;
+  white-space: nowrap;
+}
+
+#accounts {
+  scroll-margin-top: 80px;
 }
 
 .page {
@@ -457,8 +718,9 @@ code {
   margin: 0;
   padding: 24px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: var(--surface-raised);
+  box-shadow: var(--highlight);
 }
 
 .card > :last-child {
@@ -532,7 +794,7 @@ code {
   margin: 16px 0 0;
   padding: 12px 16px;
   border-radius: var(--radius-md);
-  background: var(--brand-soft);
+  background: var(--surface-2);
   color: var(--ink);
   font-size: 13px;
   line-height: 18px;
@@ -612,16 +874,16 @@ code {
   align-items: center;
   gap: 4px;
   margin: 0;
-  padding: 3px 8px;
+  padding: 3px 10px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-pill);
   color: var(--ink-muted);
   white-space: nowrap;
 }
 
 .chip.accent {
   border-color: transparent;
-  background: var(--brand-soft);
+  background: var(--surface-2);
   color: var(--ink);
 }
 
@@ -632,7 +894,7 @@ code {
 
 .chip.good {
   border-color: transparent;
-  background: var(--brand-soft);
+  background: var(--surface-2);
   color: var(--ink);
 }
 
@@ -692,7 +954,7 @@ code {
 
 .pill.confirmed,
 .pill.done {
-  background: var(--brand-soft);
+  background: var(--surface-2);
 }
 
 .pill.confirmed .pill-mark,
@@ -751,12 +1013,12 @@ button.primary:hover,
 button.ghost {
   border-color: transparent;
   background: transparent;
-  color: var(--brand);
+  color: var(--ink-muted);
 }
 
 button.ghost:hover {
   border-color: transparent;
-  background: var(--brand-soft);
+  background: var(--surface-2);
   color: var(--ink);
 }
 
@@ -796,7 +1058,7 @@ button.icon-only {
 }
 
 button.icon-only:hover {
-  background: var(--brand-soft);
+  background: var(--surface-2);
   color: var(--ink);
 }
 
@@ -849,11 +1111,9 @@ label,
   display: grid;
   gap: 8px;
   color: var(--ink-muted);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 16px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
 }
 
 label .error {
@@ -948,8 +1208,9 @@ select:focus {
 }
 
 .segmented input:checked + span {
-  background: var(--brand-soft);
+  background: var(--surface-2);
   color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--line);
 }
 
 .segmented input:focus-visible + span {
@@ -976,16 +1237,27 @@ select:focus {
   padding: 32px;
 }
 
-/* The wallet's own hue, as a faint wash: the page is the owner's, not the brand's. */
-.hero::before {
+/*
+ * Under the content: the amber node's light from the top corner and a faint
+ * ruling, like a well-kept ledger's. Both are drawn here, so nothing in the
+ * page carries a style.
+ */
+.hero {
+  padding: 32px 32px 28px;
+  border-color: var(--line);
+  background:
+    radial-gradient(38rem 22rem at 100% 0%, var(--glow), transparent 70%), var(--surface-raised);
+}
+
+/* A faint dot grid that fades out from the corner the light comes from. */
+.hero::after {
   content: "";
   position: absolute;
-  top: -70%;
-  right: -15%;
+  inset: 0;
   z-index: -1;
-  width: 60%;
-  height: 220%;
-  background: radial-gradient(closest-side, hsl(var(--hue, 36) 40% 50% / 0.1), transparent);
+  background: radial-gradient(circle, var(--grain) 1px, transparent 1.5px) 0 0 / 18px 18px;
+  -webkit-mask-image: radial-gradient(40rem 20rem at 100% 0%, #000, transparent 75%);
+  mask-image: radial-gradient(40rem 20rem at 100% 0%, #000, transparent 75%);
   pointer-events: none;
 }
 
@@ -1041,16 +1313,59 @@ select:focus {
   margin-top: 24px;
 }
 
+/*
+ * The holdings, a column per token, split by hairlines like a ledger's. Each
+ * column draws its line on its left, one pixel out, and the row clips the
+ * line of whichever column starts it, so a column that wraps starts clean.
+ */
 .holdings {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px 40px;
-  margin-top: 32px;
+  row-gap: 20px;
+  margin: 36px -32px 0;
+  overflow: hidden;
 }
 
 .holding {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 0 0 0 -1px;
+  padding: 0 32px;
+  border-left: 1px solid var(--line);
+}
+
+.holding > * {
   margin: 0;
+}
+
+.holding-label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--ink-muted);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.holding-label strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* The total reads as a headline: the brand's sans at display size, tabular. */
+.holding-amount {
+  color: var(--ink);
+  font-size: 44px;
+  font-weight: 600;
+  line-height: 50px;
+  letter-spacing: -0.035em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.holding-amount .amount-fraction {
+  color: var(--ink-muted);
 }
 
 /* `Amount`, extra large: mono, tabular, the unit smaller and muted. */
@@ -1068,10 +1383,15 @@ select:focus {
   font-size: 0.7em;
 }
 
-.holding .amount {
-  font-size: 40px;
-  line-height: 44px;
-  letter-spacing: -0.02em;
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 28px;
+}
+
+.hero-actions .button {
+  min-width: 8.5rem;
 }
 
 .holdings-note {
@@ -1090,10 +1410,11 @@ select:focus {
   display: flex;
   align-items: flex-start;
   gap: 12px;
-  padding: 16px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  background: var(--brand-soft);
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  box-shadow: inset 3px 0 0 var(--ink-muted);
 }
 
 .notice-card > .icon {
@@ -1101,15 +1422,13 @@ select:focus {
   color: var(--brand);
 }
 
-/* Needs you: raised, with a brand edge. */
+/* Needs you: an amber edge. Failed: a danger edge. */
 .notice-card.warn {
-  border-color: var(--brand);
-  background: var(--surface-raised);
+  box-shadow: inset 3px 0 0 var(--brand);
 }
 
 .notice-card.bad {
-  border-color: var(--danger);
-  background: var(--surface-raised);
+  box-shadow: inset 3px 0 0 var(--danger);
 }
 
 .notice-card.bad > .icon {
@@ -1190,11 +1509,10 @@ select:focus {
   align-items: baseline;
   gap: 6px;
   margin-top: 12px;
-  font-family: var(--font-mono);
-  font-size: 28px;
-  font-weight: 500;
-  line-height: 36px;
-  letter-spacing: -0.01em;
+  font-size: 32px;
+  font-weight: 600;
+  line-height: 38px;
+  letter-spacing: -0.03em;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1286,13 +1604,6 @@ select:focus {
   fill: var(--ink-muted);
 }
 
-.split {
-  display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
-  align-items: start;
-  gap: 16px;
-}
-
 .stack {
   display: grid;
   gap: 16px;
@@ -1311,6 +1622,7 @@ select:focus {
 }
 
 .account summary,
+.account-link,
 .account-outline {
   display: grid;
   grid-template-columns: 40px minmax(0, 1fr) auto auto;
@@ -1327,6 +1639,27 @@ select:focus {
 
 .account summary::-webkit-details-marker {
   display: none;
+}
+
+.account-link {
+  border-radius: var(--radius-md);
+  color: inherit;
+  text-decoration: none;
+}
+
+.account-link:hover {
+  background: var(--surface);
+  color: inherit;
+}
+
+.account-link > .icon {
+  color: var(--ink-muted);
+  transition: transform 0.2s;
+}
+
+.account-link:hover > .icon {
+  color: var(--brand);
+  transform: translateX(2px);
 }
 
 .account summary:hover {
@@ -1457,18 +1790,11 @@ select:focus {
   width: 40px;
   height: 40px;
   border-radius: 50%;
-  background: var(--brand-soft);
+  background: var(--surface-2);
   color: var(--ink);
   font-size: 14px;
   font-weight: 600;
   line-height: 1;
-}
-
-.avatar.tiny {
-  width: 20px;
-  height: 20px;
-  background: var(--brand-soft);
-  box-shadow: inset 0 0 0 5px var(--surface-raised);
 }
 
 /* A token by its symbol, as plain text: networks are named, never drawn. */
@@ -1526,7 +1852,7 @@ select:focus {
 
 .event-dot.good {
   border-color: transparent;
-  background: var(--brand-soft);
+  background: var(--surface-2);
   color: var(--brand);
 }
 
@@ -1659,8 +1985,9 @@ select:focus {
 .item {
   padding: 20px 24px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: var(--surface-raised);
+  box-shadow: var(--highlight);
 }
 
 .item p {
@@ -1727,7 +2054,7 @@ select:focus {
 .notice {
   padding: 12px 16px;
   border-radius: var(--radius-md);
-  background: var(--brand-soft);
+  background: var(--surface-2);
   color: var(--ink);
 }
 
@@ -1745,7 +2072,7 @@ select:focus {
   width: 44px;
   height: 44px;
   border-radius: 50%;
-  background: var(--brand-soft);
+  background: var(--surface-2);
   color: var(--brand);
 }
 
@@ -1819,11 +2146,553 @@ select:focus {
   justify-items: start;
 }
 
+/* ---- Receive ------------------------------------------------------------------ */
+
+.receive {
+  display: grid;
+  gap: 16px;
+}
+
+.picks {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+  gap: 8px;
+}
+
+.pick {
+  display: block;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 22px;
+  cursor: pointer;
+}
+
+.pick input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  min-height: 0;
+  opacity: 0;
+}
+
+.pick-body {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+}
+
+.pick:hover .pick-body {
+  border-color: var(--ink-muted);
+}
+
+.pick input:checked + .pick-body {
+  border-color: var(--ink);
+  background: var(--surface-2);
+}
+
+.pick input:focus-visible + .pick-body {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.pick .avatar {
+  width: 32px;
+  height: 32px;
+}
+
+.pick-name {
+  display: grid;
+  min-width: 0;
+}
+
+.pick-name strong {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pick-name span {
+  overflow: hidden;
+  color: var(--ink-muted);
+  font-size: 13px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.receive-card {
+  display: grid;
+  gap: 20px;
+  padding: 32px;
+  background:
+    radial-gradient(30rem 16rem at 100% 0%, var(--glow), transparent 70%), var(--surface-raised);
+}
+
+.receive-card > * {
+  margin: 0;
+}
+
+.receive-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.receive-head p {
+  margin: 0;
+}
+
+/* The QR code beside the address; on a phone, above it. */
+.receive-body {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 28px;
+}
+
+.receive-main {
+  display: grid;
+  gap: 16px;
+}
+
+.receive-main > * {
+  margin: 0;
+}
+
+/* Always dark on light: scanners read a QR code that way round, in either theme. */
+.qr {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.qr svg {
+  display: block;
+  padding: 6px;
+  border-radius: var(--radius-md);
+  background: #ffffff;
+  box-shadow: 0 0 0 1px var(--line);
+}
+
+.qr-light {
+  fill: #ffffff;
+}
+
+.qr-dark {
+  fill: #121110;
+}
+
+.qr figcaption {
+  color: var(--ink-muted);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.receive-address {
+  display: grid;
+  gap: 8px;
+}
+
+.receive-address > * {
+  margin: 0;
+}
+
+/*
+ * The address, large, its groups apart. Each group is an inline block, so a
+ * line can break between groups, and a selection still copies the address
+ * with no space or line break inside it.
+ */
+.receive-text {
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.receive-text code {
+  display: block;
+  color: var(--ink);
+  font-size: 20px;
+  line-height: 32px;
+  letter-spacing: 0.02em;
+  overflow-wrap: anywhere;
+}
+
+.receive-text code span {
+  display: inline-block;
+  margin-right: 0.6em;
+}
+
+.receive-text code span:last-child {
+  margin-right: 0;
+}
+
+.receive-note {
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  color: var(--ink-muted);
+  font-size: 13px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
+/* ---- Settings -------------------------------------------------------------------- */
+
+.section-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: -8px 0 20px;
+}
+
+.section-nav a {
+  padding: 4px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  color: var(--ink-muted);
+  font-size: 13px;
+  line-height: 18px;
+  text-decoration: none;
+}
+
+.section-nav a:hover {
+  border-color: var(--ink-muted);
+  color: var(--ink);
+}
+
+.stack > [id] {
+  scroll-margin-top: 80px;
+}
+
+.member-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+}
+
+.member-summary > * {
+  margin: 0;
+}
+
+.avatars {
+  display: flex;
+}
+
+.avatars .avatar {
+  width: 34px;
+  height: 34px;
+  font-size: 13px;
+  box-shadow: 0 0 0 2px var(--surface-raised);
+}
+
+.avatars .avatar + .avatar {
+  margin-left: -8px;
+}
+
+/* Settings rows: a label, then what it is, a hairline between. */
+.settings-rows {
+  display: grid;
+  margin: 0 0 16px;
+}
+
+.settings-rows > div {
+  display: grid;
+  grid-template-columns: 9rem minmax(0, 1fr);
+  align-items: baseline;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.settings-rows > div:first-child {
+  padding-top: 0;
+}
+
+.settings-rows dt {
+  color: var(--ink-muted);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.settings-rows dd {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+}
+
+.settings-rows dd > * {
+  margin: 0;
+}
+
+.settings-rows dd .tile-note {
+  padding-top: 0;
+}
+
+.settings-rows .with-copy {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.settings-rows code {
+  overflow-wrap: anywhere;
+}
+
+/* ---- An account's page -------------------------------------------------------------- */
+
+.hero-top > .avatar {
+  width: 56px;
+  height: 56px;
+  font-size: 13px;
+}
+
+.addresses {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.addresses > * {
+  margin: 0;
+}
+
+.addresses .field-label:not(:first-child) {
+  margin-top: 8px;
+}
+
+.open-list {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+}
+
+.open-item {
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.open-item p {
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
+}
+
+/* ---- Notifications ---------------------------------------------------------------- */
+
+.all-good {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  color: var(--ink-muted);
+}
+
+.all-good .health-mark {
+  margin-top: 0;
+}
+
+/* An entry new since you last looked: the amber word, and a faint wash. */
+.event.fresh::after {
+  content: "";
+  position: absolute;
+  inset: 2px -10px;
+  z-index: -1;
+  border-radius: var(--radius-md);
+  background: var(--brand-soft);
+  opacity: 0.45;
+}
+
+.timeline {
+  isolation: isolate;
+}
+
+.new-mark {
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--brand);
+  color: var(--on-brand);
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: 1px;
+}
+
+.fresh-count {
+  background: var(--brand);
+  color: var(--on-brand);
+}
+
+.buttons.more {
+  justify-content: center;
+  margin-top: 12px;
+}
+
+/* ---- Members -------------------------------------------------------------------- */
+
+.back {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.back a {
+  color: var(--ink-muted);
+  text-decoration: none;
+}
+
+.back a::before {
+  content: "← ";
+}
+
+.back a:hover {
+  color: var(--ink);
+}
+
+.roster {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.roster-item {
+  display: grid;
+  gap: 12px;
+  padding: 16px 0;
+}
+
+.roster-item + .roster-item {
+  border-top: 1px solid var(--line);
+}
+
+.roster-item:first-child {
+  padding-top: 0;
+}
+
+.roster-item:last-child {
+  padding-bottom: 0;
+}
+
+.roster-item > * {
+  margin: 0;
+}
+
+.roster-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.roster-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.roster-name p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.roster-name strong {
+  font-weight: 600;
+}
+
+.roster-open {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
+.roster-item .panel {
+  margin: 0;
+}
+
+.roles {
+  display: grid;
+  gap: 12px;
+  margin: 16px 0 0;
+}
+
+.roles div {
+  display: grid;
+  grid-template-columns: 7.5rem minmax(0, 1fr);
+  align-items: baseline;
+  gap: 12px;
+}
+
+.roles dd {
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+/* From the new device: the wallet's address as a QR code, beside the steps. */
+.add-device {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 24px;
+}
+
+.add-device .steps {
+  margin: 0;
+}
+
+.add-device .step {
+  align-items: flex-start;
+}
+
+.add-device .step > div {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.add-device .step > div > * {
+  margin: 0;
+}
+
 /* ---- Narrow screens and less motion ------------------------------------------ */
 
-@media (max-width: 860px) {
-  .split {
-    grid-template-columns: minmax(0, 1fr);
+/*
+ * Between a phone and a laptop the bar keeps one row: the pages lose their
+ * icons, and who is signed in shrinks to the dot, the principal on hover.
+ */
+@media (max-width: 900px) {
+  .bar-inner {
+    gap: 16px;
+  }
+
+  .nav a .icon {
+    display: none;
+  }
+
+  button.who {
+    width: 32px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .who code {
+    display: none;
   }
 }
 
@@ -1854,18 +2723,24 @@ select:focus {
     width: 100%;
   }
 
+  .nav {
+    gap: 2px;
+  }
+
   .nav a {
     flex: 1;
+    gap: 6px;
     justify-content: center;
-    padding: 0 8px;
+    padding: 0 4px;
+    font-size: 14px;
   }
 
   .who code {
     display: none;
   }
 
-  .who {
-    padding: 0 6px;
+  button.who {
+    padding: 0;
   }
 
   .page {
@@ -1899,17 +2774,59 @@ select:focus {
   }
 
   .holdings {
-    gap: 8px 24px;
-    margin-top: 24px;
+    margin: 24px 0 0;
+    overflow: visible;
   }
 
-  .holding .amount {
-    font-size: 30px;
-    line-height: 36px;
+  .holding {
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    border-left: 0;
+  }
+
+  .holding + .holding {
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+  }
+
+  .holding-amount {
+    font-size: 36px;
+    line-height: 42px;
+  }
+
+  .hero-actions .button {
+    flex: 1;
+    min-width: 0;
   }
 
   .account-body {
     padding-left: 8px;
+  }
+
+  .receive-card {
+    padding: 20px;
+  }
+
+  .receive-body,
+  .add-device {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+  }
+
+  .roles div,
+  .settings-rows > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+
+  .receive-text {
+    padding: 14px;
+  }
+
+  .receive-text code {
+    font-size: 16px;
+    line-height: 26px;
   }
 
   .card-head {

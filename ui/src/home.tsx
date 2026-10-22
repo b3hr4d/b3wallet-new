@@ -9,22 +9,30 @@ import { CopyButton } from "./copy.tsx"
 import { actionText, failureText, isJoinRequest, stateText, waitsFor } from "./describe.ts"
 import type { Member, Pending, Status, UpgradeState } from "./generated/wallet.ts"
 import { Loader } from "./brand.tsx"
-import { AlertIcon, ApproveIcon, ArrowIcon, BoltIcon, WalletMark } from "./icons.tsx"
+import {
+  AlertIcon,
+  ApproveIcon,
+  ArrowIcon,
+  BoltIcon,
+  ReceiveIcon,
+  SendIcon,
+  WalletMark,
+} from "./icons.tsx"
 import { JoinRequest } from "./join.tsx"
 import { hueClass } from "./mark.ts"
 import { Reading, useMe } from "./member.tsx"
 import { useNowNs } from "./now.ts"
 import { HomeOutline } from "./outline.tsx"
-import { Members, Rules } from "./people.tsx"
 import { Release } from "./release.tsx"
-import { SignIn } from "./session.tsx"
+import { SignIn } from "./sign-in.tsx"
 import { dateOf } from "./time.ts"
 import { assetsOf, ICP_ONLY, LOW_CYCLES } from "./tokens.ts"
 
 /**
  * The wallet's start page: what it runs and who you are to it, then for a
- * member a dashboard of its holdings, open actions, accounts, activity,
- * members and policy, and for anyone else signed in a request to join.
+ * member a dashboard of its holdings, open actions, accounts and activity
+ * (members, policy and the rest live on the settings page), and for anyone
+ * else signed in a request to join.
  */
 export function Home({ wallet: id }: { wallet: Principal }) {
   const { auth, status, claimed, me } = useMe(id)
@@ -117,6 +125,18 @@ function Dashboard({ wallet: id, me, status }: { wallet: Principal; me: Member; 
     <div className="dashboard">
       <Hero id={id} status={status} me={me}>
         <Holdings accounts={accounts} balances={balances} />
+        <div className="hero-actions">
+          {(me.role.tag === "Owner" || me.role.tag === "Proposer") && (
+            <a className="button primary" href="/send">
+              <SendIcon />
+              Send
+            </a>
+          )}
+          <a className="button" href="/receive">
+            <ReceiveIcon />
+            Receive
+          </a>
+        </div>
       </Hero>
       <Notices wallet={id} status={status} pending={pending.data} now={now} />
       <div className="tiles">
@@ -131,15 +151,8 @@ function Dashboard({ wallet: id, me, status }: { wallet: Principal; me: Member; 
         accounts={accounts}
         assets={assets}
         balances={balances}
-        now={now}
       />
-      <div className="split">
-        <Activity wallet={id} me={me} members={members.data} accounts={accounts.data} now={now} />
-        <div className="stack">
-          <Members me={me} members={members} />
-          <Rules wallet={id} members={members.data} />
-        </div>
-      </div>
+      <Activity wallet={id} me={me} members={members.data} accounts={accounts.data} now={now} />
     </div>
   )
 }
