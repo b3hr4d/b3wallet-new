@@ -5,7 +5,7 @@ import type { ReactNode } from "react"
 import { useWallet } from "./canister.ts"
 import { failureText } from "./describe.ts"
 import type { Member } from "./generated/wallet.ts"
-import { Session } from "./session.tsx"
+import { SignIn } from "./session.tsx"
 
 /**
  * The wallet's status, and who the signed-in caller is to it once it is
@@ -28,7 +28,7 @@ export function useMe(id: Principal) {
 
 /**
  * A page for members: `children` renders for a signed-in member, and anyone
- * else reads what is missing. The sign-in sits below either.
+ * else reads what is missing, with the sign-in for someone not signed in.
  */
 export function AsMember({
   wallet,
@@ -42,15 +42,20 @@ export function AsMember({
   if (status.isError) {
     body = <p className="error">{failureText(status.error)}</p>
   } else if (status.data === undefined) {
-    body = <p className="quiet">Reading the wallet…</p>
+    body = <Reading>Reading the wallet…</Reading>
   } else if (!status.data.claimed) {
     body = <p>This wallet has no owner yet.</p>
   } else if (auth.status !== "signed-in") {
-    body = <p>Sign in to see this page.</p>
+    body = (
+      <>
+        <p>Sign in to see this page.</p>
+        <SignIn />
+      </>
+    )
   } else if (me.isError) {
     body = <p className="error">{failureText(me.error)}</p>
   } else if (!me.isSuccess) {
-    body = <p className="quiet">Reading who you are to the wallet…</p>
+    body = <Reading>Reading who you are to the wallet…</Reading>
   } else if (me.data === null) {
     body = (
       <p>
@@ -58,12 +63,17 @@ export function AsMember({
       </p>
     )
   } else {
-    body = children(me.data)
+    return children(me.data)
   }
+  return <div className="card empty">{body}</div>
+}
+
+/** What a page says while it waits for the wallet. */
+export function Reading({ children }: { children: ReactNode }) {
   return (
-    <>
-      {body}
-      <Session />
-    </>
+    <p className="loading">
+      <span className="spinner" aria-hidden="true" />
+      {children}
+    </p>
   )
 }

@@ -1,12 +1,14 @@
 import type { Principal } from "@candid-core/schema"
 import { useAuth } from "@ic-reactor/react"
 import { useMutation, useQuery } from "@tanstack/react-query"
-import { useEffect, useState } from "react"
+import { useEffect, useState, type ReactNode } from "react"
 import { useWallet } from "./canister.ts"
 import { dateOf } from "./time.ts"
 import { claimKeyOf, signClaim } from "./claim-key.ts"
 import { failureText } from "./describe.ts"
-import { Session } from "./session.tsx"
+import { WalletMark } from "./icons.tsx"
+import { Reading } from "./member.tsx"
+import { SignIn } from "./session.tsx"
 
 /**
  * The claim link's page: whoever signs in here and claims becomes the
@@ -28,79 +30,84 @@ export function Claim({ wallet: id }: { wallet: Principal }) {
   const status = useQuery(client.queryOptions(wallet, "status"))
   const claim = useMutation(client.mutationOptions(wallet, "claim"))
 
+  let body: ReactNode
   if (claim.isSuccess) {
-    return (
-      <section>
+    body = (
+      <>
         <h1>The wallet is yours</h1>
-        <p>You are its first owner, signed in with this Internet Identity.</p>
-        <p>
-          <a href="/">Go to the wallet</a>
-        </p>
-      </section>
+        <p className="quiet">You are its first owner, signed in with this Internet Identity.</p>
+        <a className="button primary" href="/">
+          Go to the wallet
+        </a>
+      </>
     )
-  }
-  if (status.isError) {
-    return (
-      <section>
-        <h1>Claim your wallet</h1>
-        <p className="error">{failureText(status.error)}</p>
-      </section>
-    )
-  }
-  if (status.data === undefined) {
-    return (
-      <section>
-        <h1>Claim your wallet</h1>
-        <p className="quiet">Reading the wallet…</p>
-      </section>
-    )
-  }
-  if (status.data.claimed) {
-    return (
-      <section>
-        <h1>Claim your wallet</h1>
-        <p>
-          This wallet is already claimed. <a href="/">Go to the wallet.</a>
-        </p>
-      </section>
-    )
-  }
-  if (seed === undefined) {
-    return (
-      <section>
-        <h1>Claim your wallet</h1>
-        <p className="error">
-          This address holds no claim key. Open the claim link you were given again, exactly as it
-          was sent.
-        </p>
-      </section>
-    )
-  }
-  const expiresAt = status.data.claim_expires_at_ns
-  return (
-    <section>
-      <h1>Claim your wallet</h1>
+  } else if (status.isError) {
+    body = <p className="error">{failureText(status.error)}</p>
+  } else if (status.data === undefined) {
+    body = <Reading>Reading the wallet…</Reading>
+  } else if (status.data.claimed) {
+    body = (
       <p>
-        Whoever claims this wallet becomes its first owner. Sign in with the identity that should
-        own it.
+        This wallet is already claimed. <a href="/">Go to the wallet.</a>
       </p>
-      {expiresAt !== null && (
-        <p className="quiet">The claim link works until {dateOf(expiresAt)}.</p>
-      )}
-      <Session />
-      {auth.status === "signed-in" && (
-        <>
-          <button
-            type="button"
-            className="primary"
-            disabled={claim.isPending}
-            onClick={() => claim.mutate({ signature: signClaim(seed, id, auth.principal) })}
-          >
-            {claim.isPending ? "Claiming…" : "Claim the wallet"}
-          </button>
-          {claim.isError && <p className="error">{failureText(claim.error)}</p>}
-        </>
-      )}
+    )
+  } else if (seed === undefined) {
+    body = (
+      <p className="error">
+        This address holds no claim key. Open the claim link you were given again, exactly as it was
+        sent.
+      </p>
+    )
+  } else {
+    const expiresAt = status.data.claim_expires_at_ns
+    body = (
+      <>
+        <p className="quiet">
+          Whoever claims this wallet becomes its first owner. Sign in with the identity that should
+          own it.
+        </p>
+        {expiresAt !== null && (
+          <p className="chip">The claim link works until {dateOf(expiresAt)}</p>
+        )}
+        <ol className="steps">
+          <li className={auth.status === "signed-in" ? "step done" : "step"}>
+            <span className="step-number">1</span>
+            {auth.status === "signed-in" ? (
+              <p>
+                Signed in as <code className="principal">{auth.principal}</code>
+              </p>
+            ) : (
+              <SignIn />
+            )}
+          </li>
+          <li className="step">
+            <span className="step-number">2</span>
+            <div>
+              <button
+                type="button"
+                className="primary"
+                disabled={auth.status !== "signed-in" || claim.isPending}
+                onClick={() =>
+                  auth.status === "signed-in" &&
+                  claim.mutate({ signature: signClaim(seed, id, auth.principal) })
+                }
+              >
+                {claim.isPending ? "Claiming…" : "Claim the wallet"}
+              </button>
+              {claim.isError && <p className="error">{failureText(claim.error)}</p>}
+            </div>
+          </li>
+        </ol>
+      </>
+    )
+  }
+  return (
+    <section className="column">
+      <div className="card claim">
+        <WalletMark id={id} />
+        {!claim.isSuccess && <h1>Claim your wallet</h1>}
+        {body}
+      </div>
     </section>
   )
 }

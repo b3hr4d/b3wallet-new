@@ -4,21 +4,28 @@ import { useState } from "react"
 import { useWallet } from "./canister.ts"
 import { actionText, canRun, failureText, roleText, sourceOf, stateText } from "./describe.ts"
 import type { Account, Pending } from "./generated/wallet.ts"
-import { AsMember } from "./member.tsx"
+import { StateChip } from "./approvals.tsx"
+import { AsMember, Reading } from "./member.tsx"
 import { useNowNs } from "./now.ts"
 import { amountText, chainText, readAmount, useToken } from "./tokens.ts"
 
 /** The send page: an owner proposes a transfer, and runs it once it may. */
 export function Send({ wallet }: { wallet: Principal }) {
   return (
-    <section>
-      <h1>Send</h1>
+    <section className="column">
+      <div className="page-head">
+        <h1>Send</h1>
+        <p className="quiet">
+          An owner proposes a transfer. Within the daily limit it runs at once; above it, it waits
+          for the approvals the policy asks for.
+        </p>
+      </div>
       <AsMember wallet={wallet}>
         {(me) =>
           me.role.tag === "Owner" ? (
             <SendForm wallet={wallet} />
           ) : (
-            <p>
+            <p className="card">
               Only an owner proposes a transfer, and you are {roleText(me.role)} of this wallet. You
               approve and run transfers on the <a href="/approvals">Approvals page</a>.
             </p>
@@ -57,11 +64,17 @@ function SendForm({ wallet: id }: { wallet: Principal }) {
       />
     )
   }
-  if (accounts.isError) return <p className="error">{failureText(accounts.error)}</p>
-  if (accounts.data === undefined) return <p className="quiet">Reading the accounts…</p>
+  if (accounts.isError) return <p className="card error">{failureText(accounts.error)}</p>
+  if (accounts.data === undefined) {
+    return (
+      <div className="card">
+        <Reading>Reading the accounts…</Reading>
+      </div>
+    )
+  }
   if (from === undefined) {
     return (
-      <p>
+      <p className="card">
         This wallet has no account to send from. <a href="/">Add one on its start page.</a>
       </p>
     )
@@ -69,7 +82,7 @@ function SendForm({ wallet: id }: { wallet: Principal }) {
   const bitcoin = from.chain.tag === "Bitcoin"
   return (
     <form
-      className="form"
+      className="card form"
       onSubmit={(event) => {
         event.preventDefault()
         if (amount?.amount === undefined || !to.trim()) return
@@ -117,7 +130,7 @@ function SendForm({ wallet: id }: { wallet: Principal }) {
         {amount?.error !== undefined && <span className="error">{amount.error}</span>}
       </label>
       {tokenError !== undefined && <p className="error">{failureText(tokenError)}</p>}
-      <p className="quiet">
+      <p className="quiet small">
         {bitcoin
           ? "The fee is the median rate of recent transactions, and counts toward the daily limit."
           : token?.fee != null
@@ -170,11 +183,13 @@ function Proposed({
   const now = useNowNs()
   const current = execute.data ?? proposed
   return (
-    <div className="block">
-      <p>{actionText(current.action, from, token)}.</p>
-      <p>
-        Action {String(current.id)}. {stateText(current, now)}
+    <div className="card">
+      <p className="item-head">
+        <strong>Action {String(current.id)}</strong>
+        <StateChip pending={current} now={now} />
       </p>
+      <p>{actionText(current.action, from, token)}.</p>
+      <p className="quiet">{stateText(current, now)}</p>
       {current.state.tag === "Waiting" && (
         <p>
           The other owners and approvers approve it on the <a href="/approvals">Approvals page</a>.

@@ -2,8 +2,10 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 import type { MetadataValue } from "../src/generated/icrc1.ts"
 import {
+  amountParts,
   amountText,
   bitcoinToken,
+  chainKey,
   chainText,
   cyclesText,
   ledgerOf,
@@ -80,4 +82,34 @@ test("cycles read in trillions, rounded to a hundredth either way", () => {
   assert.equal(cyclesText(320_000_000_000n, "up"), "0.32T cycles")
   assert.equal(cyclesText(1_500_000_000_000n, "down"), "1.5T cycles")
   assert.equal(cyclesText(4_000_000_000n, "down"), "0T cycles")
+})
+
+test("a large amount groups its thousands and keeps every digit", () => {
+  const icp = { symbol: "ICP", decimals: 8, fee: null }
+  assert.deepEqual(amountParts(123_456_789_012n, icp), {
+    whole: "1,234",
+    fraction: ".56789012",
+    symbol: "ICP",
+  })
+  assert.deepEqual(amountParts(100_000_000_000_000n, icp), {
+    whole: "1,000,000",
+    fraction: "",
+    symbol: "ICP",
+  })
+  assert.deepEqual(amountParts(0n, icp), { whole: "0", fraction: "", symbol: "ICP" })
+  assert.equal(amountParts(-123_400_000_000n, icp).whole, "-1,234")
+  assert.equal(amountParts(999n, { symbol: "X", decimals: 0, fee: null }).whole, "999")
+})
+
+test("accounts of one chain share a key, and other chains have others", () => {
+  const ledger = "mxzaz-hqaaa-aaaar-qaada-cai" as never
+  assert.equal(chainKey({ tag: "Icp" }), chainKey({ tag: "Icp" }))
+  const keys = [
+    chainKey({ tag: "Icp" }),
+    chainKey({ tag: "Icrc", value: ledger }),
+    chainKey({ tag: "Icrc", value: "ryjl3-tyaaa-aaaaa-aaaba-cai" as never }),
+    chainKey({ tag: "Bitcoin", value: { tag: "Mainnet" } }),
+    chainKey({ tag: "Bitcoin", value: { tag: "Regtest" } }),
+  ]
+  assert.equal(new Set(keys).size, keys.length)
 })

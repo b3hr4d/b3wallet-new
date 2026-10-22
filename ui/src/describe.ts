@@ -4,7 +4,9 @@ import type {
   Account,
   Action,
   ActionKind,
+  AuditEvent,
   Budget,
+  Member,
   Pending,
   Permission,
   PolicyRule,
@@ -263,4 +265,66 @@ export function receiptText(receipt: TxReceipt): string {
   return receipt.chain.tag === "Bitcoin"
     ? `Bitcoin transaction ${receipt.tx_id}`
     : `block ${receipt.tx_id} of the ledger`
+}
+
+/**
+ * Whether an action waits for `me`: one they may approve and have not, or
+ * one approved that they may run now.
+ */
+export function waitsFor(pending: Pending, me: Member, nowNs: bigint): boolean {
+  if (me.role.tag === "Viewer") return false
+  if (pending.state.tag === "Waiting") return !pending.approvals.includes(me.id)
+  return canRun(pending, nowNs)
+}
+
+/** A long id or address cut to its ends, for where the whole one does not fit. */
+export function shortText(text: string, head = 6, tail = 4): string {
+  return text.length <= head + tail + 1 ? text : `${text.slice(0, head)}…${text.slice(-tail)}`
+}
+
+/**
+ * Who did what the audit log records: “You”, a member's name, or a
+ * principal cut short; the wallet itself for what its timers do.
+ */
+export function whoText(
+  by: string | null,
+  me: Member,
+  members: readonly Member[] | undefined,
+): string {
+  if (by === null) return "The wallet"
+  if (by === me.id) return "You"
+  const label = members?.find((member) => member.id === by)?.label
+  return label ? label : shortText(by)
+}
+
+/** What an audit event did, to follow who did it: `proposed action 4`. */
+export function auditText(event: AuditEvent, accounts: readonly Account[] | undefined): string {
+  switch (event.tag) {
+    case "Claimed":
+      return "claimed the wallet"
+    case "JoinRequested":
+      return "asked to join"
+    case "AccountAdded": {
+      const account = accounts?.find((candidate) => candidate.id === event.value)
+      return account ? `added the account “${account.label}”` : `added account ${event.value}`
+    }
+    case "Proposed":
+      return `proposed action ${event.value}`
+    case "Approved":
+      return `approved action ${event.value}`
+    case "Rejected":
+      return `rejected action ${event.value}`
+    case "Executed":
+      return `ran action ${event.value}`
+    case "ExtensionCall":
+      return `asked for ${event.value.request}, as an extension`
+    case "UpgradeStaged":
+      return `staged version ${event.value}`
+    case "UpgradeInstalled":
+      return `installed version ${event.value}`
+    case "UpgradeFailed":
+      return `failed to install version ${event.value}`
+    case "CyclesLow":
+      return `ran low on cycles, with ${cyclesText(event.value, "down")} left`
+  }
 }

@@ -14,7 +14,8 @@ import {
 } from "./describe.ts"
 import type { Account, Member, Pending } from "./generated/wallet.ts"
 import { joinCode } from "./join-code.ts"
-import { AsMember } from "./member.tsx"
+import { CheckIcon } from "./icons.tsx"
+import { AsMember, Reading } from "./member.tsx"
 import { useNowNs } from "./now.ts"
 import { dateOf } from "./time.ts"
 import { useToken } from "./tokens.ts"
@@ -25,8 +26,14 @@ import { useToken } from "./tokens.ts"
  */
 export function Approvals({ wallet }: { wallet: Principal }) {
   return (
-    <section>
-      <h1>Approvals</h1>
+    <section className="column">
+      <div className="page-head">
+        <h1>Approvals</h1>
+        <p className="quiet">
+          Every open action, with what your role lets you do. An action runs once it has its
+          approvals and its wait is over.
+        </p>
+      </div>
       <AsMember wallet={wallet}>{(me) => <OpenActions wallet={wallet} me={me} />}</AsMember>
     </section>
   )
@@ -69,11 +76,18 @@ function OpenActions({ wallet: id, me }: { wallet: Principal; me: Member }) {
         </p>
       )}
       {pending.isError ? (
-        <p className="error">{failureText(pending.error)}</p>
+        <p className="card error">{failureText(pending.error)}</p>
       ) : pending.data === undefined ? (
-        <p className="quiet">Reading the open actions…</p>
+        <div className="card">
+          <Reading>Reading the open actions…</Reading>
+        </div>
       ) : pending.data.length === 0 ? (
-        <p>Nothing waits for approval.</p>
+        <div className="card empty">
+          <p className="done-badge" aria-hidden="true">
+            <CheckIcon />
+          </p>
+          <p>Nothing waits for approval.</p>
+        </div>
       ) : (
         <ul className="list">
           {pending.data.map((action) => (
@@ -126,6 +140,8 @@ function OpenAction({
     <li className="item">
       <p className="item-head">
         <strong>Action {String(pending.id)}</strong>
+        <StateChip pending={pending} now={now} />
+        <ApprovalDots pending={pending} />
       </p>
       <p>{join ? joinRequestText(pending) : actionText(action, from, token)}.</p>
       {details.length > 0 && (
@@ -170,5 +186,38 @@ function OpenAction({
         )}
       </div>
     </li>
+  )
+}
+
+/** Where an action stands, in a word. */
+export function StateChip({ pending, now }: { pending: Pending; now: bigint }) {
+  const { state } = pending
+  const [tone, text] =
+    state.tag === "Waiting"
+      ? ["accent", "Waiting"]
+      : state.tag === "Ready"
+        ? canRun(pending, now)
+          ? ["good", "Ready"]
+          : ["", "Timelocked"]
+        : state.tag === "Executed"
+          ? ["good", "Done"]
+          : state.tag === "Expired"
+            ? ["", "Expired"]
+            : ["bad", state.tag]
+  return <span className={tone ? `chip ${tone}` : "chip"}>{text}</span>
+}
+
+/** An action's approvals, a dot each for as many as its quorum. */
+function ApprovalDots({ pending }: { pending: Pending }) {
+  const count = pending.approvals.length
+  return (
+    <span className="dots" title={`${count} of ${pending.quorum} approvals`}>
+      {Array.from({ length: pending.quorum }, (_, index) => (
+        <span key={index} className={index < count ? "dot on" : "dot"} />
+      ))}
+      <span className="visually-hidden">
+        {count} of {pending.quorum} approvals
+      </span>
+    </span>
   )
 }
