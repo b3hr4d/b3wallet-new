@@ -78,7 +78,7 @@ scripts/build-controller.sh
 ```
 
 ```
-23f2c2497193035affb187868f8efeb53f896630d7a2ef4850646e26344a9494  .../target/controller-build/wasm32-unknown-unknown/release/controller.wasm
+8455334b712142130bf3a405a75b2834bc615ab692f23c88e5983e057971b9e3  .../target/controller-build/wasm32-unknown-unknown/release/controller.wasm
 ```
 
 It builds with the toolchain `rust-toolchain.toml` pins and maps the
@@ -205,14 +205,14 @@ recovery-tool check --controller $CONTROLLER --wallet $WALLET \
 From the rehearsal on icp-cli's local network:
 
 ```
-Controller ibrml-ld777-77774-qaabq-cai: module 23f2c2497193035affb187868f8efeb53f896630d7a2ef4850646e26344a9494, controllers [].
+Controller ibrml-ld777-77774-qaabq-cai: module 8455334b712142130bf3a405a75b2834bc615ab692f23c88e5983e057971b9e3, controllers [].
 Wallet igqk7-g3777-77774-qaaba-cai: module 96147e6f36dbd8d7ccedfabfcaa5aa93f3e5ff71f01e86fba11ce1093c6df7da, controllers [igqk7-g3777-77774-qaaba-cai].
 The controller runs on subnet srkif-m33vd-rsyll-hrrsp-o6jlq-a6ad4-7pyvj-hi6b5-ncfgy-qdn5s-tqe, with a freezing threshold of 30 days.
-The controller's state: policy version 1, next nonce 1, 2_486_820_183_234 cycles.
+The controller's state: policy version 1, next nonce 1, 2_486_816_167_269 cycles.
 Everything matches.
 Propose the hand-over on the wallet's Recovery card with:
   Controller id     ibrml-ld777-77774-qaabq-cai
-  Its module hash   23f2c2497193035affb187868f8efeb53f896630d7a2ef4850646e26344a9494
+  Its module hash   8455334b712142130bf3a405a75b2834bc615ab692f23c88e5983e057971b9e3
   Its policy hash   fa7aaef13ec231dbf612225c3c3a113effc0d8d11a6652739a86a2aed44ae9db
 ```
 
@@ -307,12 +307,12 @@ recovery-tool show --interface $DID/wallet.did upgrade.did
 
 ```
 Operation 1 for recovery controller ibrml-ld777-77774-qaabq-cai of wallet igqk7-g3777-77774-qaaba-cai,
-under policy version 1, expiring at 2026-11-13 19:58:00 UTC.
+under policy version 1, expiring at 2026-11-13 20:25:40 UTC.
 It would upgrade the wallet's code, keeping its state
 to the module with SHA-256 96147e6f36dbd8d7ccedfabfcaa5aa93f3e5ff71f01e86fba11ce1093c6df7da, in 5 chunks,
 with an install argument of 66 bytes, SHA-256 024a270aebd3f0778ac4bcf8a55f992b35d4a78d45baeccab7280735a11b4035.
 Route: sovereign. No release signer vouches for this module: check it yourself.
-Digest: 4b44f8e8fc1e8bb548bc152c24481e96b6ebb7e991fc62b97581a5883ebc4a1a
+Digest: 082277c4a5cec93fa237aad83da68f6c88373eabaf30048a37716e90abfd5b56
 Install argument: (variant { Upgrade })
 No approvals in this file yet.
 ```
@@ -332,9 +332,11 @@ icp canister call $CONTROLLER propose --args-file upgrade.did \
   --candid $DID/controller.did --identity recovery-daily -n ic
 ```
 
-A key that signs later sends its approval with `recovery-tool approval
-upgrade.did > approval.did` and `icp canister call $CONTROLLER approve
---args-file approval.did …`. Once the threshold is met, upload the module:
+A key that signs later signs the same file and sends its approval with
+`recovery-tool approval upgrade.did > approval.did` and `icp canister call
+$CONTROLLER approve --args-file approval.did …`. The file may hold approvals
+the controller has already; each key counts once. Once the threshold is
+met, upload the module:
 
 ```sh
 recovery-tool chunks --wasm wallet.wasm --out chunks upgrade.did

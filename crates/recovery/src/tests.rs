@@ -475,6 +475,27 @@ fn every_new_key_needs_a_proof_for_this_controller_and_wallet() {
         .is_err()
     );
 
+    // A proof for a key enrolled already may come along, but it is checked
+    // too: the operation stores it.
+    assert_eq!(
+        check_proposal(
+            &set(vec![
+                proof(4, controller(), wallet()),
+                proof(1, controller(), wallet())
+            ]),
+            &context(&current)
+        ),
+        Ok(Route::Sovereign)
+    );
+    let mut padded = proof(1, controller(), wallet());
+    padded.signature = ByteBuf::from(vec![0; 1 << 20]);
+    let reason = check_proposal(
+        &set(vec![proof(4, controller(), wallet()), padded]),
+        &context(&current),
+    )
+    .unwrap_err();
+    assert!(reason.contains("does not verify"), "{reason}");
+
     // At install every key needs one.
     assert!(check_proofs(&current, &[], &[], controller(), wallet()).is_err());
     let all: Vec<Proof> = (1..=3)

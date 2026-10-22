@@ -660,9 +660,9 @@ fn the_tools_files_drive_a_controller() {
     );
     assert_eq!(setup.wallet_module(), sha256(&next));
 
-    // Key 4 replaces key 3: key 1 proposes with no approvals, and keys 1
-    // and 2 approve later from the same file. Key 3 cannot cancel its own
-    // removal.
+    // Key 4 replaces key 3: key 1 proposes with its approval, and key 2
+    // signs the same file later and sends every approval in it, key 1's
+    // included. Key 3 cannot cancel its own removal.
     let next_policy = setup.policy_file("next-policy.did", &[1, 2, 4]);
     let rotation = setup.operation(
         "rotation.did",
@@ -676,14 +676,16 @@ fn the_tools_files_drive_a_controller() {
         1,
         2,
     );
+    setup.sign(&[1], &rotation);
     let proposed = view(setup.call(1, "propose", "rotation.did")).unwrap();
     assert_eq!(proposed.status, OperationStatus::Approving);
-    setup.sign(&[1, 2], &rotation);
+    setup.sign(&[2], &rotation);
     setup
         .dir
         .write("approve-2.did", tool(&["approval", &rotation]));
     let approved = view(setup.call(2, "approve", "approve-2.did")).unwrap();
     assert!(matches!(approved.status, OperationStatus::Waiting { .. }));
+    assert_eq!(approved.approvals.len(), 2);
     setup.dir.write(
         "cancel-3.did",
         tool(&["cancel", "--key", &setup.dir.path("key-3.pem"), &rotation]),

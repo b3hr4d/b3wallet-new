@@ -156,7 +156,9 @@ impl StoredOperation {
     }
 
     /// Adds approvals that `verify_all` checked against the operation's
-    /// digest. A key that approved already is refused.
+    /// digest. An approval it holds already adds nothing, so a file that
+    /// gathers approvals as keys sign it can be sent again; a request with
+    /// no new approval is refused.
     pub fn approve(
         &mut self,
         keys: Vec<ByteBuf>,
@@ -164,13 +166,16 @@ impl StoredOperation {
         now: u64,
     ) -> Result<(), ControllerError> {
         self.check_open(policy_version, now)?;
-        if let Some(key) = keys.iter().find(|key| self.approvals.contains(key)) {
-            return Err(ControllerError::InvalidArgument(format!(
-                "key {} approved this operation already",
-                hex(key)
-            )));
+        let new: Vec<ByteBuf> = keys
+            .into_iter()
+            .filter(|key| !self.approvals.contains(key))
+            .collect();
+        if new.is_empty() {
+            return Err(ControllerError::InvalidArgument(
+                "every key in the request approved this operation already".to_string(),
+            ));
         }
-        self.add_approvals(keys, now);
+        self.add_approvals(new, now);
         Ok(())
     }
 
@@ -384,6 +389,9 @@ mod tests {
         let mut op = stored(repair(), &[1]);
         assert!(op.approve(vec![public(1)], 1, T0).is_err());
         assert_eq!(op.approvals.len(), 1);
+        // Sent again beside a new one, an approval counts once.
+        assert_eq!(op.approve(vec![public(1), public(2)], 1, T0), Ok(()));
+        assert_eq!(op.approvals, vec![public(1), public(2)]);
         let digest = op.digest();
         let message = recovery::approve_message(&digest);
         let twice = [approval(2, &op.operation), approval(2, &op.operation)];

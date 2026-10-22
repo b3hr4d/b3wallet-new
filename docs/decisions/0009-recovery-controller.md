@@ -99,9 +99,11 @@ the key is kept.
   history, which the IC gives only to canisters: the wallet checks the
   controller's history itself before it hands itself over (below).
 - **Rotation.** A `SetPolicy` operation replaces the keys, thresholds,
-  delays and release signers, with a proof of possession for each new key.
-  It needs the sovereign threshold and delay. Executing it raises the policy
-  version, which turns every other open operation stale.
+  delays and release signers, with a proof of possession for each new key;
+  a proof sent for a key enrolled already is checked too, since the
+  operation stores it. It needs the sovereign threshold and delay.
+  Executing it raises the policy version, which turns every other open
+  operation stale.
 - **Passkeys and hardware wallets** are not in this version: verifying a
   WebAuthn assertion or a secp256k1 signature needs another dependency. Each
   key carries no kind field yet; a later key kind is a new variant.

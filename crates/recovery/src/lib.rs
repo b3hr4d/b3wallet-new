@@ -485,7 +485,9 @@ pub fn check_proposal(operation: &Operation, context: &Context) -> Result<Route,
 
 /// Checks that `proofs` holds a valid proof of possession for every key of
 /// `policy` that `enrolled` does not hold. A proof for a key outside the
-/// policy, or a second proof for a key, is refused.
+/// policy, a second proof for a key, or a proof that does not verify is
+/// refused, also for a key enrolled already: the operation stores its
+/// proofs, so none may carry unchecked bytes.
 pub fn check_proofs(
     policy: &Policy,
     proofs: &[Proof],
@@ -494,32 +496,18 @@ pub fn check_proofs(
     wallet: Principal,
 ) -> Result<(), String> {
     for (index, proof) in proofs.iter().enumerate() {
-        if !policy.holds(&proof.public_key) {
-            return Err(format!(
-                "proof {index} is for a key the policy does not hold"
-            ));
-        }
+        let key = proof.public_key.as_slice();
+        let authority = policy
+            .authorities
+            .iter()
+            .find(|authority| authority.public_key.as_slice() == key)
+            .ok_or_else(|| format!("proof {index} is for a key the policy does not hold"))?;
         if proofs[..index]
             .iter()
             .any(|other| other.public_key == proof.public_key)
         {
             return Err(format!("proof {index} repeats a key"));
         }
-    }
-    for authority in &policy.authorities {
-        let key = authority.public_key.as_slice();
-        if enrolled.contains(&key) {
-            continue;
-        }
-        let proof = proofs
-            .iter()
-            .find(|proof| proof.public_key.as_slice() == key)
-            .ok_or_else(|| {
-                format!(
-                    "recovery key \"{}\" needs a proof of possession",
-                    authority.label
-                )
-            })?;
         if !verify(
             key,
             &enroll_message(controller, wallet, key),
@@ -528,6 +516,19 @@ pub fn check_proofs(
             return Err(format!(
                 "the proof of possession of recovery key \"{}\" does not verify for this \
                  controller and wallet",
+                authority.label
+            ));
+        }
+    }
+    for authority in &policy.authorities {
+        let key = authority.public_key.as_slice();
+        if !enrolled.contains(&key)
+            && !proofs
+                .iter()
+                .any(|proof| proof.public_key.as_slice() == key)
+        {
+            return Err(format!(
+                "recovery key \"{}\" needs a proof of possession",
                 authority.label
             ));
         }
