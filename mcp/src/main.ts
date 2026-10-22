@@ -26,7 +26,7 @@ try {
       version: "0.1.0",
       instructions: [
         `You reach the wallet ${config.wallet} on ${config.network === "ic" ? "the Internet Computer" : "a local network"} as a proposer.`,
-        "You read its accounts, balances, history and open actions, and propose transfers.",
+        "You read its accounts, balances, open actions and audit log, and propose transfers.",
         "You cannot approve, send or reject anything: every transfer you propose waits for an owner or an approver",
         `to approve and run it at ${config.pages}/approvals, so say so to the user each time.`,
         "Start with wallet_whoami. If you are not a member, call wallet_join and give the user the code it returns.",

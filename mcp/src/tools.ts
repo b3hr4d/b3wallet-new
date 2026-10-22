@@ -9,6 +9,7 @@ import {
   type Account,
   type Action,
   type Actor as Wallet,
+  type AuditEvent,
   type Chain,
   type Pending,
 } from "./generated/wallet.ts"
@@ -61,6 +62,33 @@ export function failureText(error: unknown): string {
     return `The wallet refused ${error.method}: ${err.tag}${detail}`
   }
   return error instanceof Error ? error.message : String(error)
+}
+
+/** An audit log event, in a few words. */
+export function eventText(event: AuditEvent): string {
+  switch (event.tag) {
+    case "Claimed":
+      return "claimed the wallet"
+    case "JoinRequested":
+      return "asked to join"
+    case "AccountAdded":
+      return `added account ${event.value}`
+    case "Proposed":
+    case "Approved":
+    case "Rejected":
+    case "Executed":
+      return `${event.tag.toLowerCase()} action ${event.value}`
+    case "ExtensionCall":
+      return `extension ${event.value.extension} asked: ${event.value.request}`
+    case "UpgradeStaged":
+      return `staged the upgrade to ${event.value}`
+    case "UpgradeInstalled":
+      return `installed version ${event.value}`
+    case "UpgradeFailed":
+      return `the upgrade failed: ${event.value}`
+    case "CyclesLow":
+      return `cycles ran low: ${event.value}`
+  }
 }
 
 /** A string argument with its whitespace trimmed, or undefined when absent. */
@@ -292,19 +320,13 @@ function tools(client: Client, config: Config): Tool[] {
       },
     },
     {
-      name: "wallet_history",
-      title: "Transfers in and out",
+      name: "wallet_activity",
+      title: "What happened in the wallet",
       description:
-        "The wallet's transfers in and out, newest first: of one account, or of all of them.",
+        "The wallet's audit log, newest first: who proposed, approved, ran or rejected each action, who asked to join, and accounts added. A transfer that ran is no longer open: its action shows here as executed.",
       inputSchema: {
         type: "object",
         properties: {
-          account: {
-            type: "integer",
-            description: "Only this account's transfers. Absent, every account's.",
-            minimum: 0,
-            maximum: 2 ** 32 - 1,
-          },
           limit: {
             type: "integer",
             description: "At most this many entries. Defaults to 20.",
@@ -321,33 +343,18 @@ function tools(client: Client, config: Config): Tool[] {
       },
       readOnly: true,
       run: async (args) => {
-        const account = integer(args, "account")
         const before = integer(args, "before_seq")
-        const [entries, accounts] = await Promise.all([
-          wallet.history({
-            account: account ?? null,
-            before_seq: before === undefined ? null : BigInt(before),
-            limit: integer(args, "limit") ?? 20,
-          }),
-          wallet.accounts(),
-        ])
+        const entries = await wallet.audit_log({
+          before_seq: before === undefined ? null : BigInt(before),
+          limit: integer(args, "limit") ?? 20,
+        })
         return json(
-          await Promise.all(
-            entries.map(async (entry) => {
-              const chain = accounts.find((account) => account.id === entry.account)?.chain
-              const token = chain && (await tokenOf(chain).catch(() => undefined))
-              return {
-                seq: entry.seq,
-                account: entry.account,
-                direction: entry.direction.tag,
-                amount: amountText(entry.amount, token),
-                counterparty: entry.counterparty,
-                tx_id: entry.tx_id,
-                at: dateOf(entry.at_ns),
-                action: entry.action,
-              }
-            }),
-          ),
+          entries.map((entry) => ({
+            seq: entry.seq,
+            at: dateOf(entry.at_ns),
+            by: entry.by === null ? "the wallet" : entry.by === client.caller() ? "you" : entry.by,
+            event: eventText(entry.event),
+          })),
         )
       },
     },

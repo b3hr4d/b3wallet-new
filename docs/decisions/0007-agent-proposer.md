@@ -16,8 +16,8 @@ approver on the Approvals page.**
 
 What a proposer may do, and why:
 
-1. **Read** what a viewer reads: the accounts, balances, history, open
-   actions and members.
+1. **Read** what a viewer reads: the accounts, balances, open actions,
+   audit log and members.
 2. **Propose transfers, and nothing else.** A proposer's `propose` of any
    other action is refused (`Forbidden`), so it cannot ask to add a member,
    change a role or the policy, or upgrade the wallet.

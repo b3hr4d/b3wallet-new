@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { readFile } from "node:fs/promises"
 import { test } from "node:test"
 import { createTestClient, type TestHandlers } from "@ic-reactor/core/testing"
 import { Ed25519KeyIdentity } from "@icp-sdk/core/identity"
@@ -18,6 +19,7 @@ import { walletTools } from "../src/tools.ts"
 const WALLET = "uxrrr-q7777-77774-qaaaq-cai"
 const ICP_LEDGER = "ryjl3-tyaaa-aaaaa-aaaba-cai"
 const FRIEND = "2vxsx-fae"
+const OWNER = "aaaaa-aa"
 const SECOND = 1_000_000_000n
 
 const icp: Account = {
@@ -35,7 +37,7 @@ const icp: Account = {
  */
 function setUp(options: { member?: boolean } = {}) {
   const agent = Ed25519KeyIdentity.generate(new Uint8Array(32).fill(7))
-  const { client, mock } = createTestClient({ identity: agent })
+  const { client, mock, requests } = createTestClient({ identity: agent })
   const calls: string[] = []
   const proposals: Action[] = []
   const joins: unknown[][] = []
@@ -97,19 +99,22 @@ function setUp(options: { member?: boolean } = {}) {
       tag: "Ok",
       value: { account: id, amount: 1_050_000_000n, as_of_ns: 1_800_000_000n * SECOND },
     })),
-    history: record("history", () => ({
+    audit_log: record("audit_log", (request, ctx) => ({
       tag: "Ok",
       value: [
         {
-          seq: 3n,
-          account: 1,
-          direction: { tag: "In" },
-          counterparty: FRIEND,
-          amount: 25_000_000n,
-          tx_id: "17",
-          at_ns: 1_800_000_000n * SECOND,
-          action: null,
+          seq: 4n,
+          at_ns: 1_800_000_060n * SECOND,
+          by: OWNER as Pending["proposed_by"],
+          event: { tag: "Executed", value: 2n },
         },
+        {
+          seq: 3n,
+          at_ns: 1_800_000_000n * SECOND,
+          by: ctx.caller,
+          event: { tag: "Proposed", value: 2n },
+        },
+        { seq: 2n, at_ns: 0n, by: null, event: { tag: "CyclesLow", value: BigInt(request.limit) } },
       ],
     })),
     pending: record("pending", () => ({ tag: "Ok", value: [] })),
@@ -142,11 +147,18 @@ function setUp(options: { member?: boolean } = {}) {
     assert.ok(tool, name)
     return tool.run(args)
   }
-  return { client, agent, tools, run, calls, proposals, joins }
+  /** The wallet's methods the tools called, as the fake replica saw them. */
+  const called = () =>
+    new Set(
+      requests
+        .filter((request) => request.canisterId === WALLET && request.methodName)
+        .map((request) => request.methodName),
+    )
+  return { client, agent, tools, run, calls, called, proposals, joins }
 }
 
 test("the tools read and propose, and none approves, runs or rejects", async () => {
-  const { client, tools, run, calls } = setUp({ member: true })
+  const { client, tools, run, calls, called } = setUp({ member: true })
   assert.deepEqual(
     [...tools.keys()],
     [
@@ -154,7 +166,7 @@ test("the tools read and propose, and none approves, runs or rejects", async () 
       "wallet_join",
       "wallet_accounts",
       "wallet_balance",
-      "wallet_history",
+      "wallet_activity",
       "wallet_pending",
       "wallet_propose_transfer",
     ],
@@ -168,6 +180,22 @@ test("the tools read and propose, and none approves, runs or rejects", async () 
   }
   assert.deepEqual(
     calls.filter((name) => ["approve", "execute", "reject"].includes(name)),
+    [],
+  )
+  // The interface file names methods the wallet does not export yet, which
+  // the fake would answer; the real one has only these.
+  const source = await readFile(
+    new URL("../../canisters/wallet/src/lib.rs", import.meta.url),
+    "utf8",
+  )
+  const exported = new Set(
+    [...source.matchAll(/#\[ic_cdk::(?:query|update)[^\]]*\]\s*(?:async\s+)?fn\s+(\w+)/g)].map(
+      (match) => match[1],
+    ),
+  )
+  assert.ok(exported.has("propose"), "the wallet's methods are found")
+  assert.deepEqual(
+    [...called()].filter((name) => !exported.has(name!)),
     [],
   )
   client.dispose()
@@ -266,10 +294,11 @@ test("reads come back in the token's units", async () => {
   const balance = JSON.parse(await run("wallet_balance", { account: 1 }))
   assert.equal(balance.amount, "10.5 ICP")
   assert.equal(balance.base_units, "1050000000")
-  const [entry] = JSON.parse(await run("wallet_history", { account: 1 }))
-  assert.equal(entry.amount, "0.25 ICP")
-  assert.equal(entry.direction, "In")
-  assert.equal(entry.at, "2027-01-15T08:00:00.000Z")
+  assert.deepEqual(JSON.parse(await run("wallet_activity", { limit: 3 })), [
+    { seq: "4", at: "2027-01-15T08:01:00.000Z", by: OWNER, event: "executed action 2" },
+    { seq: "3", at: "2027-01-15T08:00:00.000Z", by: "you", event: "proposed action 2" },
+    { seq: "2", at: "1970-01-01T00:00:00.000Z", by: "the wallet", event: "cycles ran low: 3" },
+  ])
   client.dispose()
 })
 

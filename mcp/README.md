@@ -2,7 +2,7 @@
 
 Lets an AI agent, such as Claude, read one wallet and propose transfers from
 it. The agent joins the wallet as a **proposer**: it sees the accounts,
-balances, history and open actions, and proposes transfers, but its approval
+balances, open actions and audit log, and proposes transfers, but its approval
 never counts, so every transfer it proposes waits until an owner or an
 approver approves and runs it on the wallet's Approvals page
 ([decision 0007](../docs/decisions/0007-agent-proposer.md)). The server offers
@@ -77,7 +77,7 @@ To see the agent's principal yourself, import its key into icp-cli:
 | `wallet_join`             | Asks to join as a proposer and returns the code the Approvals page shows         |
 | `wallet_accounts`         | The accounts, with each one's chain, address and token                           |
 | `wallet_balance`          | One account's balance, in its token's units                                      |
-| `wallet_history`          | Transfers in and out, newest first                                               |
+| `wallet_activity`         | The audit log, newest first: who proposed, approved, ran or rejected what        |
 | `wallet_pending`          | The open actions, who proposed them, and where each stands                       |
 | `wallet_propose_transfer` | Proposes a transfer of a decimal amount, which waits for an owner or an approver |
 
