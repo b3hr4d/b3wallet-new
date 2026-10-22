@@ -386,9 +386,13 @@ icp-cli's network), takes the wallet's id from it, and fills in everything
 else from calls to the wallet. It makes its reads as replicated calls, which
 the subnet certifies, rather than as queries a single replica answers, and
 reads a token's symbol, decimals and fee from its ledger's `icrc1_metadata`
-the same way. The start page shows a member the accounts with their
-balances and lets an owner add one, and asks to join for someone signed in
-who is not a member; the send page proposes a transfer and runs it when the
+the same way. The start page shows a member the wallet's holdings per
+token, its accounts with their balances, its open actions, cycles and
+version, its newest audit entries, its members and its policy, with a notice
+for every open action that is not a transfer, since those change who
+controls the wallet or what it runs, and one when it runs low on cycles; it
+lets an owner add an account, and asks to join for someone signed in who is
+not a member; the send page proposes a transfer and runs it when the
 policy lets it through at once; the approvals page lists the open actions
 with the buttons the member's role allows. CI
 builds the files twice, the second time from a clean copy in another

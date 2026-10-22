@@ -23,3 +23,20 @@ export function durationText(ns: bigint): string {
   const last = parts.pop()
   return parts.length === 0 ? `${last}` : `${parts.join(", ")} and ${last}`
 }
+
+const WEEK_NS = 7n * 86_400_000_000_000n
+
+/**
+ * How long ago `ns` was at `nowNs`, in the largest whole unit: `5 minutes
+ * ago`. A time over a week back is its date; one within a minute, or ahead of
+ * the browser's clock, is `just now`.
+ */
+export function agoText(ns: bigint, nowNs: bigint): string {
+  const past = nowNs - ns
+  if (past >= WEEK_NS) return new Date(Number(ns / 1_000_000n)).toLocaleDateString()
+  for (const [size, unit] of UNITS.slice(0, 3)) {
+    const count = past / size
+    if (count > 0n) return `${count} ${unit}${count === 1n ? "" : "s"} ago`
+  }
+  return "just now"
+}

@@ -18,7 +18,7 @@ export function JoinRequest({ wallet: id }: { wallet: Principal }) {
 
   if (join.isSuccess) {
     return (
-      <section className="block">
+      <section className="card empty">
         <h2>Your request to join</h2>
         <p>An owner approves it on the wallet&apos;s Approvals page, where it shows the code</p>
         <p className="code">{joinCode(join.data.proposed_by)}</p>
@@ -32,13 +32,14 @@ export function JoinRequest({ wallet: id }: { wallet: Principal }) {
   }
   return (
     <form
-      className="form block"
+      className="card form"
       onSubmit={(event) => {
         event.preventDefault()
         if (label.trim()) join.mutate([label.trim(), null])
       }}
     >
-      <p>
+      <h2>Ask to join</h2>
+      <p className="quiet">
         You are not a member of this wallet. Ask to join as a viewer, and an owner approves the
         request.
       </p>

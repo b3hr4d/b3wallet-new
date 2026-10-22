@@ -14,10 +14,12 @@ their quorum and timelock, a new device can ask to join, and every change
 leaves one entry in an append-only audit log. It serves its own UI, certified
 and with a strict Content-Security-Policy: a React app from `ui/`, prerendered
 at build. Its start page shows the wallet's version and who you are to it,
-shows members the accounts and their balances, lets owners add accounts, and
-lets someone signed in who is not a member ask to join, as a viewer or, for
-an AI agent through the MCP server in `mcp/`, as a proposer whose transfers
-always wait for an owner
+and shows members a dashboard of its holdings per token, open actions,
+cycles, accounts and their balances, newest audit entries, members and
+policy, with a notice for every open action that is not a transfer; it lets
+owners add accounts, and lets someone signed in who is not a member ask to
+join, as a viewer or, for an AI agent through the MCP server in `mcp/`, as a
+proposer whose transfers always wait for an owner
 ([decision 0007](docs/decisions/0007-agent-proposer.md)); its send page
 proposes and runs a transfer, its approvals page approves, rejects and runs
 the open actions, and its claim page lets the holder of the claim link sign

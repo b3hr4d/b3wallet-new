@@ -82,9 +82,46 @@ export function cyclesText(cycles: bigint, round: "down" | "up"): string {
   return `${formatUnits(cycles - rest + up, 12)}T cycles`
 }
 
+/**
+ * Below this many cycles the pages say the wallet is low. An upgrade needs
+ * about 0.32T above what the wallet keeps to stay running, so a wallet under
+ * 1T is told before an upgrade stops for want of cycles.
+ */
+export const LOW_CYCLES = 1_000_000_000_000n
+
 /** An amount in a token's base units, as text: `1.5 ICP`. */
 export function amountText(amount: bigint, token: Token): string {
   return `${formatUnits(amount, token.decimals)} ${token.symbol}`
+}
+
+/**
+ * An amount split to show large: the whole part with its thousands grouped,
+ * the fraction with its point, and the symbol. Every digit stays.
+ */
+export function amountParts(
+  amount: bigint,
+  token: Token,
+): { whole: string; fraction: string; symbol: string } {
+  const [whole = "0", fraction] = formatUnits(amount, token.decimals).split(".")
+  return {
+    whole: whole.replace(/\B(?=(\d{3})+(?!\d))/g, ","),
+    fraction: fraction === undefined ? "" : `.${fraction}`,
+    symbol: token.symbol,
+  }
+}
+
+/** One text per chain, the same for every account of it: what totals group by. */
+export function chainKey(chain: Chain): string {
+  switch (chain.tag) {
+    case "Icp":
+      return "Icp"
+    case "Icrc":
+      return `Icrc ${chain.value}`
+    case "Bitcoin":
+      return `Bitcoin ${chain.value.tag}`
+    case "Evm":
+      return `Evm ${chain.value}`
+  }
 }
 
 /**

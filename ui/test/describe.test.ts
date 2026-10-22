@@ -3,15 +3,19 @@ import { test } from "node:test"
 import {
   actionDetails,
   actionText,
+  auditText,
   canRun,
   isJoinRequest,
   joinRequestText,
+  shortText,
   sourceOf,
   stateText,
+  waitsFor,
   walletErrorText,
+  whoText,
 } from "../src/describe.ts"
-import type { Account, Action, Pending } from "../src/generated/wallet.ts"
-import { dateOf, durationText } from "../src/time.ts"
+import type { Account, Action, Member, Pending } from "../src/generated/wallet.ts"
+import { agoText, dateOf, durationText } from "../src/time.ts"
 
 const owner = "fvski-cdv2h-g6ldz-eacds-4wfcf-px5sn-yfwv7-bwtxb-wvytu-cm3qa-sae" as never
 const device = "gxhcg-wz6ja-zbwh7-s6ha4-nnlhc-ya5hh-2dv23-dwksw-ujozj-ymkcv-tae" as never
@@ -221,5 +225,72 @@ test("a wallet too short of cycles says what it has and what it needs", () => {
       value: { available: 290_850_696_536n, needed: 340_000_000_001n },
     }),
     "The wallet has 0.29T cycles to spend, and this needs 0.35T cycles. Send it cycles, then try again.",
+  )
+})
+
+test("a time in the last week reads as how long ago it was", () => {
+  const minute = 60n * SECOND
+  assert.equal(agoText(NOW, NOW), "just now")
+  assert.equal(agoText(NOW - 59n * SECOND, NOW), "just now")
+  assert.equal(agoText(NOW + minute, NOW), "just now")
+  assert.equal(agoText(NOW - minute, NOW), "1 minute ago")
+  assert.equal(agoText(NOW - 150n * minute, NOW), "2 hours ago")
+  assert.equal(agoText(NOW - 6n * 1_440n * minute, NOW), "6 days ago")
+  const weekAgo = NOW - 7n * 1_440n * minute
+  assert.equal(agoText(weekAgo, NOW), new Date(Number(weekAgo / 1_000_000n)).toLocaleDateString())
+})
+
+const me: Member = {
+  id: owner,
+  role: { tag: "Owner" },
+  label: "Laptop",
+  added_at_ns: NOW,
+  added_by: null,
+}
+
+test("an action waits for a member who may approve or run it", () => {
+  const waiting: Pending = {
+    ...transfer,
+    approvals: [device],
+    quorum: 2,
+    state: { tag: "Waiting" },
+  }
+  assert.equal(waitsFor(waiting, me, NOW), true)
+  assert.equal(waitsFor({ ...waiting, approvals: [device, owner] }, me, NOW), false)
+  assert.equal(waitsFor(transfer, me, NOW), true)
+  assert.equal(
+    waitsFor({ ...transfer, executable_after_ns: NOW + 3_600n * SECOND }, me, NOW),
+    false,
+  )
+  assert.equal(waitsFor({ ...transfer, state: { tag: "Expired" } }, me, NOW), false)
+  for (const tag of ["Viewer", "Proposer"] as const) {
+    const reader: Member = { ...me, role: { tag } }
+    assert.equal(waitsFor(waiting, reader, NOW), false, tag)
+    assert.equal(waitsFor(transfer, reader, NOW), false, tag)
+  }
+})
+
+test("a long id is cut to its ends", () => {
+  assert.equal(shortText("uxrrr-q7777-77774-qaaaq-cai"), "uxrrr-…-cai")
+  assert.equal(shortText("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq", 8, 6), "bc1qar0s…wf5mdq")
+  assert.equal(shortText("aaaaa-aa"), "aaaaa-aa")
+})
+
+test("the audit log names who did what", () => {
+  const phone: Member = { ...me, id: device, role: { tag: "Approver" }, label: "Phone" }
+  assert.equal(whoText(owner, me, [me, phone]), "You")
+  assert.equal(whoText(device, me, [me, phone]), "Phone")
+  assert.equal(whoText(device, me, undefined), "gxhcg-…-tae")
+  assert.equal(whoText(null, me, [me]), "The wallet")
+  assert.equal(auditText({ tag: "Proposed", value: 4n }, undefined), "proposed action 4")
+  assert.equal(auditText({ tag: "AccountAdded", value: 1 }, [main]), "added the account “Main”")
+  assert.equal(auditText({ tag: "AccountAdded", value: 2 }, [main]), "added account 2")
+  assert.equal(
+    auditText({ tag: "UpgradeInstalled", value: "0.2.0" }, []),
+    "installed version 0.2.0",
+  )
+  assert.equal(
+    auditText({ tag: "CyclesLow", value: 420_000_000_000n }, []),
+    "ran low on cycles, with 0.42T cycles left",
   )
 })
