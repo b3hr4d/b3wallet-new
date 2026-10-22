@@ -365,9 +365,9 @@ instructions an update may use.
    `ic-asset-certification` and set the canister's certified data to their
    root hash. The certification tree lives on the heap only.
 2. `/` and `/index.html` are the start page; `/send`, `/receive`,
-   `/approvals`, `/settings`, `/members` and `/claim` the send, receive,
-   approvals, settings, members and claim pages, each also at its `.html`
-   path; and `/app.js` and `/app.css` the app's
+   `/account`, `/approvals`, `/settings`, `/members` and `/claim` the send,
+   receive, account, approvals, settings, members and claim pages, each also
+   at its `.html` path; and `/app.js` and `/app.css` the app's
    script and styles. Any other path is the 404 page with status 404,
    certified as the fallback for `/`.
 3. Every page carries these headers, all certified: the Content-Security-Policy
@@ -406,7 +406,9 @@ it runs, and one when it runs low on cycles; it lets an owner add an
 account, and asks to join for someone signed in who is not a member. The
 send page proposes a transfer and runs it when the policy lets it through at
 once; the receive page shows each account's whole address and its QR code to
-give a sender ([decision 0009](decisions/0009-qr-encoder.md)); the approvals
+give a sender ([decision 0009](decisions/0009-qr-encoder.md)), in both forms
+for an Internet Computer account; each account's own page shows what it
+holds of each asset, its addresses and its open transfers; the approvals
 page lists the open actions with the buttons the member's role allows. The
 settings page holds the rest: the members, a security checkup with the
 policy, what the IC's certified state says of the wallet's controllers and

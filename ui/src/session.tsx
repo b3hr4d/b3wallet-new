@@ -90,7 +90,7 @@ function Health({
   }, [open])
 
   return (
-    <div className="account" ref={box}>
+    <div className="account-menu" ref={box}>
       <button
         type="button"
         className={`who ${health.level}`}

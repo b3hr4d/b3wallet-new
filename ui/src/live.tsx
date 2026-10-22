@@ -3,6 +3,7 @@ import { createClient } from "@ic-reactor/core"
 import { ReactorProvider } from "@ic-reactor/react"
 import { AuthClient } from "@icp-sdk/auth/client"
 import { createPortal } from "react-dom"
+import { AccountPage } from "./account.tsx"
 import { Approvals } from "./approvals.tsx"
 import { Claim } from "./claim.tsx"
 import { Home } from "./home.tsx"
@@ -76,6 +77,8 @@ function Wallet({
       return <Send wallet={wallet} />
     case "receive":
       return <Receive wallet={wallet} />
+    case "account":
+      return <AccountPage wallet={wallet} />
     case "members":
       return <MembersPage wallet={wallet} />
     case "settings":

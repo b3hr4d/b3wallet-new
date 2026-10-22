@@ -1334,6 +1334,7 @@ const INDEX_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/index.
 const SEND_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/send.html");
 const APPROVALS_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/approvals.html");
 const RECEIVE_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/receive.html");
+const ACCOUNT_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/account.html");
 const MEMBERS_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/members.html");
 const SETTINGS_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/settings.html");
 const CLAIM_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/claim.html");
@@ -1458,6 +1459,8 @@ fn check_every_page(pic: &PocketIc, id: Principal) {
         ("/send.html", 200, SEND_HTML, HTML),
         ("/receive", 200, RECEIVE_HTML, HTML),
         ("/receive.html", 200, RECEIVE_HTML, HTML),
+        ("/account", 200, ACCOUNT_HTML, HTML),
+        ("/account.html", 200, ACCOUNT_HTML, HTML),
         ("/approvals", 200, APPROVALS_HTML, HTML),
         ("/approvals.html", 200, APPROVALS_HTML, HTML),
         ("/members", 200, MEMBERS_HTML, HTML),

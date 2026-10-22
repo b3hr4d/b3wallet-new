@@ -2,6 +2,7 @@ import type { Principal } from "@candid-core/schema"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { useState } from "react"
 import { useWallet } from "./canister.ts"
+import { numberParam } from "./host.ts"
 import { actionText, canRun, failureText, roleText, sourceOf, stateText } from "./describe.ts"
 import type { Account, Chain, Pending } from "./generated/wallet.ts"
 import { StateChip } from "./approvals.tsx"
@@ -65,7 +66,8 @@ function SendForm({ wallet: id }: { wallet: Principal }) {
   const propose = useMutation(
     client.mutationOptions(wallet, "propose", { invalidates: [[wallet, "pending"]] }),
   )
-  const [fromId, setFromId] = useState<number>()
+  // `?from=<id>` opens the form on that account, as an account's page links it.
+  const [fromId, setFromId] = useState(() => numberParam(window.location.search, "from"))
   const [assetKey, setAssetKey] = useState<string>()
   const [to, setTo] = useState("")
   const [typed, setTyped] = useState("")

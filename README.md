@@ -22,7 +22,8 @@ join, as a viewer or, for an AI agent through the MCP server in `mcp/`, as a
 proposer whose transfers always wait for an owner
 ([decision 0007](docs/decisions/0007-agent-proposer.md)); its send page
 proposes and runs a transfer, its receive page shows each account's whole
-address and its QR code to give a sender, its approvals page approves,
+address and its QR code to give a sender, each account's page shows what it
+holds and its open transfers, its approvals page approves,
 rejects and runs the open actions, its settings page shows the members, a
 security checkup and the controllers and module hash the IC certifies, its
 members page proposes adding, removing and changing the role of members, and

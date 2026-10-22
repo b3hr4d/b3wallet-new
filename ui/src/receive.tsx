@@ -6,6 +6,7 @@ import { useWallet } from "./canister.ts"
 import { CopyButton } from "./copy.tsx"
 import { addressGroups, failureText, receiveNote, type AddressForm } from "./describe.ts"
 import type { Account } from "./generated/wallet.ts"
+import { numberParam } from "./host.ts"
 import { AsMember, Reading } from "./member.tsx"
 import { qrOf } from "./qr.ts"
 import { kindText } from "./tokens.ts"
@@ -30,18 +31,10 @@ export function Receive({ wallet }: { wallet: Principal }) {
   )
 }
 
-/** The account the address names, as a number, if it names one. */
-function accountInAddress(): number | undefined {
-  const id = Number(new URLSearchParams(window.location.search).get("account") ?? "")
-  return Number.isInteger(id) && id >= 0 && window.location.search.includes("account=")
-    ? id
-    : undefined
-}
-
 function Accounts({ wallet: id }: { wallet: Principal }) {
   const { client, wallet } = useWallet(id)
   const accounts = useQuery(client.queryOptions(wallet, "accounts"))
-  const [picked, setPicked] = useState(accountInAddress)
+  const [picked, setPicked] = useState(() => numberParam(window.location.search, "account"))
   if (accounts.isError) return <p className="card error">{failureText(accounts.error)}</p>
   if (accounts.data === undefined) {
     return (

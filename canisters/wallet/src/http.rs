@@ -32,6 +32,7 @@ const INDEX_HTML: &[u8] = include_bytes!("../pages/index.html");
 const SEND_HTML: &[u8] = include_bytes!("../pages/send.html");
 const APPROVALS_HTML: &[u8] = include_bytes!("../pages/approvals.html");
 const RECEIVE_HTML: &[u8] = include_bytes!("../pages/receive.html");
+const ACCOUNT_HTML: &[u8] = include_bytes!("../pages/account.html");
 const MEMBERS_HTML: &[u8] = include_bytes!("../pages/members.html");
 const SETTINGS_HTML: &[u8] = include_bytes!("../pages/settings.html");
 const CLAIM_HTML: &[u8] = include_bytes!("../pages/claim.html");
@@ -67,14 +68,16 @@ thread_local! {
 }
 
 /// The embedded files, certified: `/` and `/index.html` are the start page,
-/// `/send`, `/receive`, `/approvals`, `/settings`, `/members` and `/claim`
-/// the other pages, each also at its `.html` path, `/app.js` and `/app.css`
-/// the app they load, and any other path is the 404 page with status 404.
+/// `/send`, `/receive`, `/account`, `/approvals`, `/settings`, `/members` and
+/// `/claim` the other pages, each also at its `.html` path, `/app.js` and
+/// `/app.css` the app they load, and any other path is the 404 page with
+/// status 404.
 fn router() -> AssetRouter<'static> {
-    let files: [(&str, &[u8], &str, &[&str]); 10] = [
+    let files: [(&str, &[u8], &str, &[&str]); 11] = [
         ("index.html", INDEX_HTML, HTML, &["/"]),
         ("send.html", SEND_HTML, HTML, &["/send"]),
         ("receive.html", RECEIVE_HTML, HTML, &["/receive"]),
+        ("account.html", ACCOUNT_HTML, HTML, &["/account"]),
         ("approvals.html", APPROVALS_HTML, HTML, &["/approvals"]),
         ("settings.html", SETTINGS_HTML, HTML, &["/settings"]),
         ("members.html", MEMBERS_HTML, HTML, &["/members"]),
@@ -169,6 +172,9 @@ mod tests {
             ("/receive", RECEIVE_HTML, HTML),
             ("/receive.html", RECEIVE_HTML, HTML),
             ("/receive?account=2", RECEIVE_HTML, HTML),
+            ("/account", ACCOUNT_HTML, HTML),
+            ("/account.html", ACCOUNT_HTML, HTML),
+            ("/account?id=1", ACCOUNT_HTML, HTML),
             ("/approvals", APPROVALS_HTML, HTML),
             ("/approvals.html", APPROVALS_HTML, HTML),
             ("/settings", SETTINGS_HTML, HTML),
@@ -199,6 +205,8 @@ mod tests {
             "/claim/",
             "/send/1",
             "/receive/1",
+            "/account/1",
+            "/accounts",
             "/member",
             "/settings/members",
             "/approval",
@@ -219,6 +227,7 @@ mod tests {
             "/",
             "/send",
             "/receive",
+            "/account",
             "/approvals",
             "/settings",
             "/members",
@@ -261,6 +270,7 @@ mod tests {
             INDEX_HTML,
             SEND_HTML,
             RECEIVE_HTML,
+            ACCOUNT_HTML,
             APPROVALS_HTML,
             SETTINGS_HTML,
             MEMBERS_HTML,

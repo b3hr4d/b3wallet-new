@@ -30,6 +30,8 @@ test("an address's QR code reads back as exactly the address", () => {
     "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",
     "bc1p5d7rjq7g6rdk2yhzks9smlaqtedr4dekq08ge8ztwac72sfr9rusxg3297",
     "bcrt1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080",
+    // An ICP account identifier, the form exchanges ask for.
+    "8af54f1fa09faeca18d294e0787346264f9f1d6189ed20ff14f029a160b787e8",
   ]) {
     assert.equal(scan(address), address, address)
   }

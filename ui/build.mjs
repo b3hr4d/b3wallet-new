@@ -88,6 +88,7 @@ const files = [
 ]
 const expected = [
   "404.html",
+  "account.html",
   "app.css",
   "app.js",
   "approvals.html",

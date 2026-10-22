@@ -451,7 +451,7 @@ code {
 }
 
 /* Who is signed in, as the wallet's health: the chip opens its panel. */
-.account {
+.account-menu {
   position: relative;
   display: flex;
 }
@@ -1586,6 +1586,7 @@ select:focus {
 }
 
 .account summary,
+.account-link,
 .account-outline {
   display: grid;
   grid-template-columns: 40px minmax(0, 1fr) auto auto;
@@ -1602,6 +1603,27 @@ select:focus {
 
 .account summary::-webkit-details-marker {
   display: none;
+}
+
+.account-link {
+  border-radius: var(--radius-md);
+  color: inherit;
+  text-decoration: none;
+}
+
+.account-link:hover {
+  background: var(--surface);
+  color: inherit;
+}
+
+.account-link > .icon {
+  color: var(--ink-muted);
+  transition: transform 0.2s;
+}
+
+.account-link:hover > .icon {
+  color: var(--brand);
+  transform: translateX(2px);
 }
 
 .account summary:hover {
@@ -2388,6 +2410,48 @@ select:focus {
 }
 
 .settings-rows code {
+  overflow-wrap: anywhere;
+}
+
+/* ---- An account's page -------------------------------------------------------------- */
+
+.hero-top > .avatar {
+  width: 56px;
+  height: 56px;
+  font-size: 13px;
+}
+
+.addresses {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.addresses > * {
+  margin: 0;
+}
+
+.addresses .field-label:not(:first-child) {
+  margin-top: 8px;
+}
+
+.open-list {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+}
+
+.open-item {
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.open-item p {
+  margin: 0 0 8px;
   overflow-wrap: anywhere;
 }
 
