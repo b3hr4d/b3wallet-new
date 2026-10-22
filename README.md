@@ -15,7 +15,10 @@ leaves one entry in an append-only audit log. It serves its own UI, certified
 and with a strict Content-Security-Policy: a React app from `ui/`, prerendered
 at build. Its start page shows the wallet's version and who you are to it,
 shows members the accounts and their balances, lets owners add accounts, and
-lets someone signed in who is not a member ask to join; its send page
+lets someone signed in who is not a member ask to join, as a viewer or, for
+an AI agent through the MCP server in `mcp/`, as a proposer whose transfers
+always wait for an owner
+([decision 0007](docs/decisions/0007-agent-proposer.md)); its send page
 proposes and runs a transfer, its approvals page approves, rejects and runs
 the open actions, and its claim page lets the holder of the claim link sign
 in with Internet Identity and claim the wallet
@@ -68,6 +71,7 @@ design, in [docs/design.md](docs/design.md).
 | `candid/` | The target Candid interfaces of the wallet, release channel, factory and extensions |
 | `canisters/wallet/` | The wallet canister; `pages/` holds the UI build it embeds |
 | `ui/` | The wallet's UI: React pages prerendered at build, and the app that hydrates them |
+| `mcp/` | An MCP server that lets an AI agent read a wallet and propose transfers, as a proposer whose transfers wait for an owner |
 | `canisters/release_channel/` | The release channel canister |
 | `canisters/factory/` | The factory canister, which creates wallets |
 | `crates/release/` | Release manifests and their checks, shared by the channel, wallets and the tool |
@@ -119,6 +123,10 @@ build needs no Node; a change to `ui/` commits its build output with it. CI
 checks the committed files are the build's, and builds again from a clean copy
 in another directory to check it gives the same bytes.
 
+The MCP server in `mcp/` runs on Node 22.18 or later; CI runs it on the UI's
+Node. In `mcp/`, `npm ci` also writes its bindings, and CI then runs
+`npm run format:check`, `npm run lint`, `npm run typecheck` and `npm test`.
+
 The interface checks compare every method a canister exports with the same
 method in its file in `candid/`; the wallet's prints the methods not
 implemented yet. One release channel test publishes a release of 100 MiB, the
@@ -151,6 +159,10 @@ Bitcoin account; without it the wallet gets only the ICP one.
 ./scripts/try-local.sh             # claimed by your icp-cli identity
 ./scripts/try-local.sh --browser   # claimed in the browser, from its claim link
 ```
+
+Either way it also prints how to add the MCP server in `mcp/` to Claude Code
+for the new wallet, so Claude can join it as a proposer, read it and propose
+transfers that wait for your approval ([mcp/README.md](mcp/README.md)).
 
 ## Publishing a release
 

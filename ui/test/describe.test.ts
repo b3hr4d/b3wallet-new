@@ -89,6 +89,13 @@ test("a join request is an AddMember of its own proposer", () => {
   assert.equal(stateText(join, NOW), "Waiting for approvals: 0 of 1.")
   assert.equal(isJoinRequest({ ...join, proposed_by: owner }), false)
   assert.equal(actionText(join.action, undefined, undefined), `Add ${device} as a viewer, “Phone”`)
+
+  // An agent asks to be a proposer, and the owner reads that before approving.
+  const agent: Pending = {
+    ...join,
+    action: { tag: "AddMember", value: { id: device, role: { tag: "Proposer" }, label: "Claude" } },
+  }
+  assert.equal(joinRequestText(agent), `${device} asks to join as a proposer, “Claude”`)
 })
 
 test("an action runs once its timelock ends, within a minute's difference of clocks", () => {

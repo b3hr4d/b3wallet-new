@@ -40,6 +40,9 @@ pub const MAX_OPEN_ACTIONS: usize = 64;
 /// At most this many join requests are open at once, apart from the
 /// proposals, so strangers cannot crowd the members out.
 pub const MAX_OPEN_JOIN_REQUESTS: usize = 8;
+/// At most this many of the open proposals are one proposer's, so an agent
+/// cannot crowd the owners out.
+pub const MAX_OPEN_BY_PROPOSER: usize = 8;
 
 /// A pending action as stored, under its id.
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -127,8 +130,9 @@ impl BitcoinAttempt {
 }
 
 impl StoredPending {
-    /// A new action. `approvals` holds the proposer for a member's proposal,
-    /// and nobody for a join request, whose proposer is not a member yet.
+    /// A new action. `approvals` holds the proposer for a proposal by a
+    /// member who approves, and nobody for a proposer's proposal or a join
+    /// request, whose proposer is not a member yet.
     pub fn new(
         action: Action,
         proposed_by: Principal,

@@ -103,7 +103,7 @@ change code, and they act only on actions the policy module released.
 | Module | What it owns | Calls out to |
 | --- | --- | --- |
 | HTTP and pages | `http_request` for the prerendered pages and browser bundle embedded in the release, certified in `init` and `post_upgrade`; the certified 404; CSP and frame headers | Certification tree, `certified_data_set` |
-| Claim and members | One-time claim with the claim key; members with roles Owner, Approver, Viewer; the guards that refuse a caller before its arguments are decoded | None |
+| Claim and members | One-time claim with the claim key; members with roles Owner, Approver, Viewer, Proposer; the guards that refuse a caller before its arguments are decoded | None |
 | Policy and approvals | Rules per action kind: quorum, daily limits, timelocks; the pending-action queue | Members |
 | Signer | Addresses and signatures by derivation path: threshold ECDSA (secp256k1) for Bitcoin and EVM, threshold Schnorr later | Management canister |
 | Chain adapters | ICP and ICRC tokens held by the canister's own principal and subaccounts; Bitcoin through the Bitcoin canister; EVM through the EVM RPC canister | Ledgers, Bitcoin canister, EVM RPC canister |
@@ -160,7 +160,8 @@ action that the policy module releases only after its quorum and timelock.
    yields the same principals.
 2. A new device or anchor signs in, is not a member yet, and calls
    `request_join` with a label. The wallet creates a pending `AddMember` action
-   that adds it as a viewer, open for an hour, and the page shows a short code
+   that adds it as a viewer, or as a proposer when it asks for that role,
+   open for an hour, and the page shows a short code
    on both screens: eight digits from the SHA-256 of the new principal's
    text. At most eight join requests are open at once, counted apart from the
    members' proposals.
@@ -171,7 +172,10 @@ action that the policy module releases only after its quorum and timelock.
 ### Approve an action
 
 1. Owners propose and reject; owners and approvers approve and execute;
-   viewers only read. The proposer's approval counts toward the quorum.
+   viewers only read. A proposer, such as an AI agent, reads and proposes
+   transfers and nothing else, at most 8 open at once
+   ([decision 0007](decisions/0007-agent-proposer.md)). The approval of an
+   owner who proposes counts toward the quorum; a proposer's never does.
 2. An action waits seven days for its quorum. Once it has it, the timelock of
    its rule starts, and it can be executed from then until seven days after
    the timelock ends. Past either window it is expired.
@@ -202,11 +206,11 @@ action that the policy module releases only after its quorum and timelock.
    `n` as 4 big-endian bytes; `add_account` asks the management canister for
    that key. `balance` asks the account's ledger, or the Bitcoin canister for
    the satoshis in outputs with at least one confirmation.
-2. An owner calls `propose` with a `Transfer`. A chain's spending is what it
+2. An owner or a proposer calls `propose` with a `Transfer`. A chain's spending is what it
    sent in the last 24 hours plus what its open transfers under the daily
-   limit may still send. A transfer that keeps it within the limit is
-   released at once; above it, the action waits for approvals and its
-   timelock. Under a Transfer rule of one approval and no timelock, the limit
+   limit may still send. An owner's transfer that keeps it within the limit
+   is released at once; above it, the action waits for approvals and its
+   timelock. A proposer's transfer always waits for one approval. Under a Transfer rule of one approval and no timelock, the limit
    changes nothing.
 3. Approvers call `approve` from their own devices; any owner can `reject`.
 4. On `execute` the chain adapter sends it, with one ledger or Bitcoin call at
@@ -467,6 +471,7 @@ exists in canister memory, but whoever can install code can move every fund.
 | A malicious or compromised factory | It installs only a release two of the three signer keys signed, pins those keys in the wallet, and leaves each wallet its own only controller; a wallet's module hash and controllers are public in the IC's certified state | A factory whose controllers change its code can create wallets that run other code or that it still controls, and nothing checks a new wallet's module hash and controllers before the claim yet. Wallets already handed over are out of its reach |
 | Strangers calling the factory | `create_wallet` checks its arguments and the release before the creator pays; the creator pays the wallet's cycles | Each call costs the factory cycles: a refused one a channel read and the signature checks, and each wallet about 8.5B for the factory's calls, which the creator does not pay |
 | An upgrade that bricks the wallet | One-way install keeps the old code when `post_upgrade` traps, the wallet sends an install the IC refused again, and marks the upgrade `Failed` an hour later; an upgrade the wallet cannot pay for stops before it stages; `tested_from` refuses untested paths; every release is tested over the last two versions | No rescue if a release breaks its own upgrade method ([decision 0005](decisions/0005-rescue-path.md)) |
+| An AI agent that is misled or compromised | It joins as a proposer: it reads and proposes only transfers, its approval never counts, so each transfer waits for an owner or an approver; at most 8 of its actions are open at once; its MCP server runs on its user's computer with a key file only that user can read, and offers no tool that approves, runs or rejects ([decision 0007](decisions/0007-agent-proposer.md)) | An owner who approves what the agent proposes without reading it; what the agent can read: balances, the audit log and members |
 | One owner's device or anchor stolen | Quorum and timelock above the daily limit; any owner can reject; removing an owner needs the others | Losses up to the daily limit |
 | Claim link intercepted | Private key only in the fragment; one use; expiry; the signature names the caller | Whoever opens the link first owns the wallet |
 | Injected script or phishing on the wallet's page | Every byte certified; no third-party scripts; CSP `script-src 'self'`, `frame-src 'none'`, `frame-ancestors 'none'`; the UI is prerendered at build and ships inside the signed release, with no per-user data in HTML | Look-alike domains; the browser trusts the HTTP gateway to verify the page |
