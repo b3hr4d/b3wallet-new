@@ -7,7 +7,7 @@ import {
   type Actor as Ledger,
   type MetadataValue,
 } from "./generated/icrc1.ts"
-import type { BitcoinNetwork, Chain } from "./generated/wallet.ts"
+import type { Account, AccountKind, Action, BitcoinNetwork, Chain } from "./generated/wallet.ts"
 
 /** The ICP ledger, at its mainnet id on every network. */
 export const ICP_LEDGER = principal("ryjl3-tyaaa-aaaaa-aaaba-cai")
@@ -25,6 +25,60 @@ export function ledgerOf(chain: Chain): Principal | undefined {
     case "Bitcoin":
     case "Evm":
       return undefined
+  }
+}
+
+/** The assets every wallet shows: ICP, which is always tracked. */
+export const ICP_ONLY: readonly Chain[] = [{ tag: "Icp" }]
+
+/**
+ * What an account of `kind` reads and sends when a transfer names no asset:
+ * ICP, or the bitcoin of its network.
+ */
+export function defaultAsset(kind: AccountKind): Chain | undefined {
+  switch (kind.tag) {
+    case "InternetComputer":
+      return { tag: "Icp" }
+    case "Bitcoin":
+      return { tag: "Bitcoin", value: kind.value }
+    case "Evm":
+      return undefined
+  }
+}
+
+/**
+ * The assets an account shows, its default first: every tracked asset for an
+ * Internet Computer account, its network's bitcoin for a Bitcoin account.
+ */
+export function assetsOf(account: Account, tracked: readonly Chain[]): Chain[] {
+  switch (account.kind.tag) {
+    case "InternetComputer":
+      return [...tracked]
+    case "Bitcoin":
+      return [{ tag: "Bitcoin", value: account.kind.value }]
+    case "Evm":
+      return []
+  }
+}
+
+/**
+ * The asset a transfer sends: the one it names, or its account's default
+ * once the account is known.
+ */
+export function transferAsset(action: Action, from: Account | undefined): Chain | undefined {
+  if (action.tag !== "Transfer") return undefined
+  return action.value.asset ?? (from && defaultAsset(from.kind))
+}
+
+/** An account's kind, named for a person. */
+export function kindText(kind: AccountKind): string {
+  switch (kind.tag) {
+    case "InternetComputer":
+      return "Internet Computer"
+    case "Bitcoin":
+      return chainText({ tag: "Bitcoin", value: kind.value })
+    case "Evm":
+      return "EVM"
   }
 }
 

@@ -4,12 +4,28 @@ import { useState, type ReactNode } from "react"
 import { useWallet } from "./canister.ts"
 import { CopyButton } from "./copy.tsx"
 import { failureText, shortText } from "./describe.ts"
-import type { Account, Balance, Chain, Member } from "./generated/wallet.ts"
-import { ChevronIcon, PlusIcon, RefreshIcon } from "./icons.tsx"
+import type {
+  Account,
+  AccountKind,
+  Balance,
+  BitcoinNetwork,
+  Chain,
+  Member,
+} from "./generated/wallet.ts"
+import { ChevronIcon, CrossIcon, PlusIcon, RefreshIcon } from "./icons.tsx"
 import { agoText } from "./time.ts"
-import { amountParts, chainKey, useToken, type Token } from "./tokens.ts"
+import {
+  amountParts,
+  chainKey,
+  chainText,
+  ICP_ONLY,
+  kindText,
+  useToken,
+  type Token,
+} from "./tokens.ts"
 
-type BalanceRead = UseQueryResult<Balance>
+/** The read of what one account holds of one asset. */
+export type BalanceRead = { account: Account; asset: Chain; read: UseQueryResult<Balance> }
 
 /** An amount to show large: grouped digits, a quieter fraction, the symbol. */
 export function Amount({ amount, token }: { amount: bigint; token: Token }) {
@@ -24,17 +40,15 @@ export function Amount({ amount, token }: { amount: bigint; token: Token }) {
 }
 
 /**
- * What the wallet holds, a total per token over its accounts, once every
- * balance of that token is read.
+ * What the wallet holds, a total per asset over its accounts, once every
+ * balance of that asset is read.
  */
 export function Holdings({
   accounts,
   balances,
-  owner,
 }: {
   accounts: UseQueryResult<Account[]>
   balances: BalanceRead[]
-  owner: boolean
 }) {
   if (accounts.isError) return <p className="error">{failureText(accounts.error)}</p>
   if (accounts.data === undefined) {
@@ -44,26 +58,19 @@ export function Holdings({
       </div>
     )
   }
-  if (accounts.data.length === 0) {
-    return (
-      <p className="holdings-note">
-        No accounts yet.{owner ? " Add one below to receive ICP, ICRC-1 tokens or Bitcoin." : ""}
-      </p>
-    )
-  }
-  const groups = new Map<string, { chain: Chain; reads: Array<BalanceRead | undefined> }>()
-  accounts.data.forEach((account, index) => {
-    const key = chainKey(account.chain)
-    const group = groups.get(key) ?? { chain: account.chain, reads: [] }
-    group.reads.push(balances[index])
+  const groups = new Map<string, { asset: Chain; reads: Array<UseQueryResult<Balance>> }>()
+  for (const { asset, read } of balances) {
+    const key = chainKey(asset)
+    const group = groups.get(key) ?? { asset, reads: [] }
+    group.reads.push(read)
     groups.set(key, group)
-  })
+  }
   const count = accounts.data.length
   return (
     <>
       <div className="holdings">
         {[...groups].map(([key, group]) => (
-          <Holding key={key} chain={group.chain} reads={group.reads} />
+          <Holding key={key} asset={group.asset} reads={group.reads} />
         ))}
       </div>
       <p className="holdings-note">
@@ -73,10 +80,10 @@ export function Holdings({
   )
 }
 
-function Holding({ chain, reads }: { chain: Chain; reads: Array<BalanceRead | undefined> }) {
-  const { token, error } = useToken(chain)
-  const amounts = reads.map((read) => read?.data?.amount)
-  if (error !== undefined || reads.some((read) => read?.isError)) {
+function Holding({ asset, reads }: { asset: Chain; reads: Array<UseQueryResult<Balance>> }) {
+  const { token, error } = useToken(asset)
+  const amounts = reads.map((read) => read.data?.amount)
+  if (error !== undefined || reads.some((read) => read.isError)) {
     return (
       <p className="holding">
         <span className="amount">
@@ -98,27 +105,31 @@ function Holding({ chain, reads }: { chain: Chain; reads: Array<BalanceRead | un
 }
 
 /**
- * The wallet's accounts with their balances, for every member, and the form
- * that adds one, for owners.
+ * The wallet's accounts with their balances and the tokens they show, for
+ * every member; owners also track tokens and add accounts here. Every wallet
+ * starts with one account of each kind, so adding one is the last thing on
+ * the card.
  */
 export function Accounts({
   wallet: id,
   me,
-  local,
+  network,
   accounts,
+  assets,
   balances,
   now,
 }: {
   wallet: Principal
   me: Member
-  local: boolean
+  network: BitcoinNetwork
   accounts: UseQueryResult<Account[]>
+  assets: UseQueryResult<Chain[]>
   balances: BalanceRead[]
   now: bigint
 }) {
   const owner = me.role.tag === "Owner"
   const [adding, setAdding] = useState(false)
-  const reading = balances.some((balance) => balance.isFetching)
+  const reading = balances.some(({ read }) => read.isFetching)
   return (
     <section className="card">
       <div className="card-head">
@@ -130,26 +141,14 @@ export function Accounts({
               type="button"
               className="ghost small"
               disabled={reading}
-              onClick={() => balances.forEach((balance) => void balance.refetch())}
+              onClick={() => balances.forEach(({ read }) => void read.refetch())}
             >
               <RefreshIcon />
               {reading ? "Reading…" : "Refresh"}
             </button>
           )}
-          {owner && (
-            <button
-              type="button"
-              className="small"
-              aria-expanded={adding}
-              onClick={() => setAdding(!adding)}
-            >
-              <PlusIcon />
-              Add account
-            </button>
-          )}
         </div>
       </div>
-      {adding && <AddAccount wallet={id} local={local} onDone={() => setAdding(false)} />}
       {accounts.isError ? (
         <p className="error">{failureText(accounts.error)}</p>
       ) : accounts.data === undefined ? (
@@ -159,50 +158,68 @@ export function Accounts({
             <span className="skeleton wide" />
           </li>
         </ul>
-      ) : accounts.data.length === 0 ? (
-        <p className="quiet">This wallet has no accounts yet.</p>
       ) : (
         <ul className="accounts">
-          {accounts.data.map((account, index) => (
-            <AccountItem key={account.id} account={account} balance={balances[index]} now={now} />
+          {accounts.data.map((account) => (
+            <AccountItem
+              key={account.id}
+              account={account}
+              reads={balances.filter((balance) => balance.account.id === account.id)}
+              now={now}
+            />
           ))}
         </ul>
       )}
+      <Tokens wallet={id} assets={assets} owner={owner} />
+      {owner &&
+        (adding ? (
+          <AddAccount wallet={id} network={network} onDone={() => setAdding(false)} />
+        ) : (
+          <p className="accounts-more">
+            <button type="button" className="ghost small" onClick={() => setAdding(true)}>
+              <PlusIcon />
+              Add another account
+            </button>
+          </p>
+        ))}
     </section>
   )
 }
 
 /**
- * One account: its balance, which the wallet asks its ledger or the Bitcoin
- * canister for, and, opened, the whole address that receives funds.
+ * One account: the balance of its first asset, which the wallet asks a
+ * ledger or the Bitcoin canister for, and, opened, its other tokens and the
+ * whole address that receives funds.
  */
 function AccountItem({
   account,
-  balance,
+  reads,
   now,
 }: {
   account: Account
-  balance: BalanceRead | undefined
+  reads: BalanceRead[]
   now: bigint
 }) {
-  const token = useToken(account.chain)
-  const failure = balance?.isError ? balance.error : token.error
+  const [first, ...more] = reads
+  const token = useToken(first?.asset)
+  const failure = first?.read.isError ? first.read.error : token.error
   let shown: ReactNode
   if (failure !== undefined && failure !== null) {
     shown = <span className="error">Not read</span>
-  } else if (balance?.data === undefined || token.token === undefined) {
+  } else if (first?.read.data === undefined || token.token === undefined) {
     shown = <span className="skeleton" />
   } else {
-    shown = <Amount amount={balance.data.amount} token={token.token} />
+    shown = <Amount amount={first.read.data.amount} token={token.token} />
   }
+  const fetching = reads.some(({ read }) => read.isFetching)
   return (
     <li className="account">
       <details>
         <summary>
-          <TokenAvatar chain={account.chain} token={token.token} />
+          <KindAvatar kind={account.kind} />
           <span className="account-name">
             <strong>{account.label}</strong>
-            <span>{chainName(account.chain, token.token)}</span>
+            <span>{kindText(account.kind)}</span>
           </span>
           <span className="account-balance">{shown}</span>
           <ChevronIcon />
@@ -211,24 +228,44 @@ function AccountItem({
           {failure !== undefined && failure !== null && (
             <p className="error">{failureText(failure)}</p>
           )}
-          <p className="field-label">Receives at</p>
+          {more.length > 0 && (
+            <ul className="holds">
+              {more.map(({ asset, read }) => (
+                <HeldAsset key={chainKey(asset)} asset={asset} read={read} />
+              ))}
+            </ul>
+          )}
+          <p className="field-label">{receivesText(account.kind)}</p>
           <p className="address-box">
             <code>{account.address}</code>
             <CopyButton text={account.address} label="Copy the address" />
           </p>
+          {account.icp_account_id !== null && (
+            <>
+              <p className="field-label">Its ICP account identifier, for exchanges</p>
+              <p className="address-box">
+                <code>{account.icp_account_id}</code>
+                <CopyButton text={account.icp_account_id} label="Copy the account identifier" />
+              </p>
+            </>
+          )}
           <div className="account-foot">
             <span className="quiet">
-              {balance?.data ? `Balance read ${agoText(balance.data.as_of_ns, now)}` : ""}
+              {first?.read.data ? `Balance read ${agoText(first.read.data.as_of_ns, now)}` : ""}
             </span>
-            {balance && (
+            {reads.length > 0 && (
               <button
                 type="button"
                 className="ghost small"
-                disabled={balance.isFetching}
-                onClick={() => void balance.refetch()}
+                disabled={fetching}
+                onClick={() => reads.forEach(({ read }) => void read.refetch())}
               >
                 <RefreshIcon />
-                {balance.isFetching ? "Reading…" : "Refresh the balance"}
+                {fetching
+                  ? "Reading…"
+                  : reads.length > 1
+                    ? "Refresh the balances"
+                    : "Refresh the balance"}
               </button>
             )}
           </div>
@@ -238,22 +275,35 @@ function AccountItem({
   )
 }
 
-/** A chain in a few words, for under an account's label. */
-function chainName(chain: Chain, token: Token | undefined): string {
-  switch (chain.tag) {
-    case "Icp":
-      return "Internet Computer"
-    case "Icrc":
-      return `${token?.symbol ?? "ICRC-1"} · ledger ${shortText(chain.value)}`
+/** Another token an account holds, on a line of its own. */
+function HeldAsset({ asset, read }: { asset: Chain; read: UseQueryResult<Balance> }) {
+  const { token, error } = useToken(asset)
+  let shown: ReactNode
+  if (error !== undefined || read.isError) shown = <span className="error">Not read</span>
+  else if (token === undefined || read.data === undefined) shown = <span className="skeleton" />
+  else shown = <Amount amount={read.data.amount} token={token} />
+  return (
+    <li className="held">
+      <span className="quiet">{token?.symbol ?? chainText(asset)}</span>
+      {shown}
+    </li>
+  )
+}
+
+/** What an account receives, over its address. */
+function receivesText(kind: AccountKind): string {
+  switch (kind.tag) {
+    case "InternetComputer":
+      return "Receives ICP and ICRC-1 tokens at"
     case "Bitcoin":
-      return chain.value.tag === "Mainnet" ? "Bitcoin" : `Bitcoin ${chain.value.tag.toLowerCase()}`
+      return "Receives bitcoin at"
     case "Evm":
-      return `EVM chain ${chain.value}`
+      return "Receives at"
   }
 }
 
-function TokenAvatar({ chain, token }: { chain: Chain; token: Token | undefined }) {
-  const text = chain.tag === "Bitcoin" ? "BTC" : (token?.symbol.slice(0, 4) ?? "")
+function KindAvatar({ kind }: { kind: AccountKind }) {
+  const text = kind.tag === "InternetComputer" ? "ICP" : kind.tag === "Bitcoin" ? "BTC" : "EVM"
   return (
     <span className="avatar token" aria-hidden="true">
       {text}
@@ -261,89 +311,195 @@ function TokenAvatar({ chain, token }: { chain: Chain; token: Token | undefined 
   )
 }
 
-type Kind = "Icp" | "Icrc" | "Bitcoin"
-
-const KINDS: readonly Kind[] = ["Icp", "Icrc", "Bitcoin"]
-
 /**
- * The chain an owner picked, or undefined while an ICRC-1 ledger's id is not
- * a canister id. Bitcoin is mainnet's, or regtest on icp-cli's network.
+ * The tokens the Internet Computer accounts show: ICP, and the ICRC-1
+ * ledgers owners track. Tracking moves nothing, so an owner changes it at
+ * once; the wallet asks a ledger whether it is one before tracking it.
  */
-function chainOf(kind: Kind, ledger: string, local: boolean): Chain | undefined {
-  switch (kind) {
-    case "Icp":
-      return { tag: "Icp" }
-    case "Icrc":
-      return isPrincipal(ledger) ? { tag: "Icrc", value: principal(ledger) } : undefined
-    case "Bitcoin":
-      return { tag: "Bitcoin", value: { tag: local ? "Regtest" : "Mainnet" } }
-  }
+function Tokens({
+  wallet: id,
+  assets,
+  owner,
+}: {
+  wallet: Principal
+  assets: UseQueryResult<Chain[]>
+  owner: boolean
+}) {
+  const { client, wallet } = useWallet(id)
+  const track = useMutation(
+    client.mutationOptions(wallet, "track_asset", {
+      invalidates: [
+        [wallet, "assets"],
+        [wallet, "audit_log"],
+      ],
+    }),
+  )
+  const untrack = useMutation(
+    client.mutationOptions(wallet, "untrack_asset", {
+      invalidates: [
+        [wallet, "assets"],
+        [wallet, "audit_log"],
+      ],
+    }),
+  )
+  const [adding, setAdding] = useState(false)
+  const [ledger, setLedger] = useState("")
+  const typed = ledger.trim()
+  const valid = isPrincipal(typed)
+  if (assets.isError) return <p className="error">{failureText(assets.error)}</p>
+  return (
+    <div className="tokens">
+      <p className="field-label">Tokens the Internet Computer accounts show</p>
+      <div className="chips">
+        {(assets.data ?? ICP_ONLY).map((asset) => (
+          <TokenChip
+            key={chainKey(asset)}
+            asset={asset}
+            busy={untrack.isPending}
+            onUntrack={owner && asset.tag === "Icrc" ? () => untrack.mutate(asset) : undefined}
+          />
+        ))}
+        {owner && !adding && (
+          <button type="button" className="ghost small" onClick={() => setAdding(true)}>
+            <PlusIcon />
+            Track a token
+          </button>
+        )}
+      </div>
+      {untrack.isError && <p className="error">{failureText(untrack.error)}</p>}
+      {adding && (
+        <form
+          className="form panel"
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (!valid) return
+            track.mutate(
+              { tag: "Icrc", value: principal(typed) },
+              {
+                onSuccess: () => {
+                  setAdding(false)
+                  setLedger("")
+                },
+              },
+            )
+          }}
+        >
+          <label>
+            ICRC-1 ledger canister id
+            <input
+              value={ledger}
+              onChange={(event) => setLedger(event.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            {typed !== "" && !valid && <span className="error">That is not a canister id.</span>}
+          </label>
+          <div className="buttons">
+            <button type="submit" className="primary" disabled={!valid || track.isPending}>
+              {track.isPending ? "Tracking…" : "Track the token"}
+            </button>
+            <button
+              type="button"
+              className="ghost"
+              disabled={track.isPending}
+              onClick={() => setAdding(false)}
+            >
+              Cancel
+            </button>
+          </div>
+          {track.isError && <p className="error">{failureText(track.error)}</p>}
+        </form>
+      )}
+    </div>
+  )
 }
 
-/** Adds an account; it moves nothing, so it needs no approval. */
+function TokenChip({
+  asset,
+  busy,
+  onUntrack,
+}: {
+  asset: Chain
+  busy: boolean
+  onUntrack: (() => void) | undefined
+}) {
+  const { token } = useToken(asset)
+  const name = token?.symbol ?? (asset.tag === "Icrc" ? shortText(asset.value) : chainText(asset))
+  return (
+    <span className="chip">
+      {name}
+      {onUntrack && (
+        <button
+          type="button"
+          className="chip-remove"
+          aria-label={`Stop tracking ${name}`}
+          title={`Stop tracking ${name}`}
+          disabled={busy}
+          onClick={onUntrack}
+        >
+          <CrossIcon />
+        </button>
+      )}
+    </span>
+  )
+}
+
+type Kind = AccountKind["tag"]
+
+/**
+ * Adds another account of a kind, with an address of its own; it moves
+ * nothing, so it needs no approval. Bitcoin accounts are of the wallet's
+ * network.
+ */
 function AddAccount({
   wallet: id,
-  local,
+  network,
   onDone,
 }: {
   wallet: Principal
-  local: boolean
+  network: BitcoinNetwork
   onDone: () => void
 }) {
   const { client, wallet } = useWallet(id)
   const add = useMutation(
-    client.mutationOptions(wallet, "add_account", { invalidates: [[wallet, "accounts"]] }),
+    client.mutationOptions(wallet, "add_account", {
+      invalidates: [
+        [wallet, "accounts"],
+        [wallet, "audit_log"],
+      ],
+    }),
   )
-  const [kind, setKind] = useState<Kind>("Icp")
-  const [ledger, setLedger] = useState("")
+  const kinds: AccountKind[] = [{ tag: "InternetComputer" }, { tag: "Bitcoin", value: network }]
+  const [kind, setKind] = useState<Kind>("InternetComputer")
   const [label, setLabel] = useState("")
-  const chain = chainOf(kind, ledger.trim(), local)
-  const names: Record<Kind, string> = {
-    Icp: "ICP",
-    Icrc: "ICRC-1 token",
-    Bitcoin: local ? "Bitcoin regtest" : "Bitcoin",
-  }
+  const chosen = kinds.find((candidate) => candidate.tag === kind) ?? kinds[0]
   return (
     <form
       className="form panel"
       onSubmit={(event) => {
         event.preventDefault()
-        if (chain === undefined || !label.trim()) return
-        add.mutate({ chain, label: label.trim() }, { onSuccess: onDone })
+        if (chosen === undefined || !label.trim()) return
+        add.mutate({ kind: chosen, label: label.trim() }, { onSuccess: onDone })
       }}
     >
-      <h3>Add an account</h3>
+      <h3>Add another account</h3>
       <fieldset className="choice">
-        <legend>Chain</legend>
+        <legend>Kind</legend>
         <div className="segmented">
-          {KINDS.map((k) => (
-            <label key={k}>
+          {kinds.map((candidate) => (
+            <label key={candidate.tag}>
               <input
                 type="radio"
-                name="chain"
-                value={k}
-                checked={kind === k}
-                onChange={() => setKind(k)}
+                name="kind"
+                value={candidate.tag}
+                checked={kind === candidate.tag}
+                onChange={() => setKind(candidate.tag)}
               />
-              <span>{names[k]}</span>
+              <span>{kindText(candidate)}</span>
             </label>
           ))}
         </div>
       </fieldset>
-      {kind === "Icrc" && (
-        <label>
-          Ledger canister id
-          <input
-            value={ledger}
-            onChange={(event) => setLedger(event.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-          />
-          {ledger.trim() !== "" && chain === undefined && (
-            <span className="error">That is not a canister id.</span>
-          )}
-        </label>
-      )}
       <label>
         Label
         <input
@@ -354,11 +510,7 @@ function AddAccount({
         />
       </label>
       <div className="buttons">
-        <button
-          type="submit"
-          className="primary"
-          disabled={chain === undefined || !label.trim() || add.isPending}
-        >
+        <button type="submit" className="primary" disabled={!label.trim() || add.isPending}>
           {add.isPending ? "Adding…" : "Add the account"}
         </button>
         <button type="button" className="ghost" disabled={add.isPending} onClick={onDone}>

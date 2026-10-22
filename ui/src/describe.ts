@@ -311,6 +311,10 @@ export function auditText(event: AuditEvent, accounts: readonly Account[] | unde
       const account = accounts?.find((candidate) => candidate.id === event.value)
       return account ? `added the account “${account.label}”` : `added account ${event.value}`
     }
+    case "AssetTracked":
+      return `tracked the ${chainText(event.value)}`
+    case "AssetUntracked":
+      return `stopped tracking the ${chainText(event.value)}`
     case "Proposed":
       return `proposed action ${event.value}`
     case "Approved":

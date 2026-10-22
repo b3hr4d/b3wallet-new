@@ -1,16 +1,21 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import type { MetadataValue } from "../src/generated/icrc1.ts"
+import type { Account, Action, Chain } from "../src/generated/wallet.ts"
 import {
   amountParts,
   amountText,
+  assetsOf,
   bitcoinToken,
   chainKey,
   chainText,
   cyclesText,
+  defaultAsset,
+  kindText,
   ledgerOf,
   readAmount,
   tokenOf,
+  transferAsset,
 } from "../src/tokens.ts"
 
 test("a typed amount is exactly its base units", () => {
@@ -112,4 +117,37 @@ test("accounts of one chain share a key, and other chains have others", () => {
     chainKey({ tag: "Bitcoin", value: { tag: "Regtest" } }),
   ]
   assert.equal(new Set(keys).size, keys.length)
+})
+
+test("an account shows the assets of its kind, its default first", () => {
+  const ledger = "mxzaz-hqaaa-aaaar-qaada-cai" as never
+  const token: Chain = { tag: "Icrc", value: ledger }
+  const tracked: Chain[] = [{ tag: "Icp" }, token]
+  const ic: Account = {
+    id: 1,
+    kind: { tag: "InternetComputer" },
+    label: "Main",
+    address: "efadq-gl777-77774-aaaba-cai",
+    icp_account_id: null,
+    index: 0,
+    holder: { tag: "Wallet" },
+  }
+  const btc: Account = { ...ic, id: 2, kind: { tag: "Bitcoin", value: { tag: "Regtest" } } }
+  assert.deepEqual(assetsOf(ic, tracked), tracked)
+  assert.deepEqual(assetsOf(btc, tracked), [{ tag: "Bitcoin", value: { tag: "Regtest" } }])
+  assert.deepEqual(defaultAsset(ic.kind), { tag: "Icp" })
+  assert.deepEqual(defaultAsset(btc.kind), { tag: "Bitcoin", value: { tag: "Regtest" } })
+  assert.equal(kindText(ic.kind), "Internet Computer")
+  assert.equal(kindText(btc.kind), "Bitcoin regtest")
+
+  // A transfer sends the asset it names, or its account's default.
+  const send = (asset: Chain | null): Action => ({
+    tag: "Transfer",
+    value: { from: 1, asset, to: "x", amount: 1n, fee: null, memo: null },
+  })
+  assert.deepEqual(transferAsset(send(token), ic), token)
+  assert.deepEqual(transferAsset(send(null), ic), { tag: "Icp" })
+  assert.deepEqual(transferAsset(send(null), btc), { tag: "Bitcoin", value: { tag: "Regtest" } })
+  assert.equal(transferAsset(send(null), undefined), undefined)
+  assert.equal(transferAsset({ tag: "RemoveMember", value: ledger }, ic), undefined)
 })

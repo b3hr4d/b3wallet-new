@@ -2,11 +2,13 @@
 // and propose transfers. None approves, runs or rejects anything, and the
 // wallet would refuse a proposer that tried: every transfer the agent
 // proposes waits for an owner or an approver on the wallet's Approvals page.
+import { isPrincipal, principal } from "@candid-core/schema"
 import { formatUnits, isReactorError, parseUnits, type Client } from "@ic-reactor/core"
 import { actor as ledgerActor, type Actor as Ledger } from "./generated/icrc1.ts"
 import {
   actor as walletActor,
   type Account,
+  type AccountKind,
   type Action,
   type Actor as Wallet,
   type AuditEvent,
@@ -51,6 +53,47 @@ export function chainText(chain: Chain): string {
   }
 }
 
+/** An account's kind, in a few words. */
+export function kindText(kind: AccountKind): string {
+  switch (kind.tag) {
+    case "InternetComputer":
+      return "Internet Computer: ICP and the tracked ICRC-1 tokens"
+    case "Bitcoin":
+      return chainText({ tag: "Bitcoin", value: kind.value })
+    case "Evm":
+      return "EVM"
+  }
+}
+
+/** What an account of `kind` sends and reads when no asset is named. */
+function defaultAsset(kind: AccountKind): Chain | undefined {
+  switch (kind.tag) {
+    case "InternetComputer":
+      return { tag: "Icp" }
+    case "Bitcoin":
+      return { tag: "Bitcoin", value: kind.value }
+    case "Evm":
+      return undefined
+  }
+}
+
+/**
+ * The asset a tool argument names for `account`: ICP, an ICRC-1 ledger by
+ * its canister id, or when absent the account's own default.
+ */
+export function assetArg(named: string | undefined, account: Account): Chain {
+  if (named === undefined || named === "") {
+    const asset = defaultAsset(account.kind)
+    if (asset === undefined) {
+      throw new InvalidArguments(`this server cannot use a ${kindText(account.kind)} account`)
+    }
+    return asset
+  }
+  if (named.toUpperCase() === "ICP") return { tag: "Icp" }
+  if (isPrincipal(named)) return { tag: "Icrc", value: principal(named) }
+  throw new InvalidArguments(`asset: “${named}” is neither ICP nor a ledger's canister id`)
+}
+
 /** Why a call failed, for the model: the wallet's own error when it refused. */
 export function failureText(error: unknown): string {
   if (isReactorError(error) && error.kind === "canister_err") {
@@ -73,6 +116,10 @@ export function eventText(event: AuditEvent): string {
       return "asked to join"
     case "AccountAdded":
       return `added account ${event.value}`
+    case "AssetTracked":
+      return `tracked the ${chainText(event.value)}`
+    case "AssetUntracked":
+      return `stopped tracking the ${chainText(event.value)}`
     case "Proposed":
     case "Approved":
     case "Rejected":
@@ -117,6 +164,13 @@ export function walletTools(client: Client, config: Config): Tool[] {
         throw error instanceof InvalidArguments ? error : new Error(failureText(error))
       }),
   }))
+}
+
+/** The `asset` argument of the tools that read or send one. */
+const ASSET = {
+  type: "string" as const,
+  description:
+    "From an Internet Computer account: “ICP”, or a tracked ICRC-1 token's ledger canister id from wallet_accounts. Leave it out for ICP, or for a Bitcoin account's bitcoin.",
 }
 
 function tools(client: Client, config: Config): Tool[] {
@@ -170,9 +224,10 @@ function tools(client: Client, config: Config): Tool[] {
   const describe = async (action: Action, accounts: readonly Account[]): Promise<string> => {
     switch (action.tag) {
       case "Transfer": {
-        const { from, to, amount, fee, memo } = action.value
+        const { from, asset, to, amount, fee, memo } = action.value
         const account = accounts.find((account) => account.id === from)
-        const token = account && (await tokenOf(account.chain).catch(() => undefined))
+        const sent = asset ?? (account && defaultAsset(account.kind))
+        const token = sent && (await tokenOf(sent).catch(() => undefined))
         const source = account ? `account ${from} (“${account.label}”)` : `account ${from}`
         const extras = [
           fee === null ? "" : `, fee ${amountText(fee, token)}`,
@@ -271,20 +326,32 @@ function tools(client: Client, config: Config): Tool[] {
       name: "wallet_accounts",
       title: "The wallet's accounts",
       description:
-        "The wallet's accounts: each one's id, label, chain, address and token. Transfers name the account they send from by its id.",
+        "The wallet's accounts: each one's id, label, kind, address and the assets it holds. An Internet Computer account holds ICP and every ICRC-1 token the owners track, each named by its ledger's canister id; a Bitcoin account holds bitcoin. Transfers name the account they send from by its id, and the asset unless it is ICP or the account's bitcoin.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       readOnly: true,
       run: async () => {
-        const accounts = await wallet.accounts()
+        const [accounts, tracked] = await Promise.all([wallet.accounts(), wallet.assets()])
+        const assetView = async (asset: Chain) => ({
+          asset: asset.tag === "Icrc" ? asset.value : asset.tag === "Icp" ? "ICP" : null,
+          name: chainText(asset),
+          token: (await tokenOf(asset).catch(() => undefined)) ?? null,
+        })
         return json(
           await Promise.all(
-            accounts.map(async (account) => ({
-              id: account.id,
-              label: account.label,
-              chain: chainText(account.chain),
-              address: account.address,
-              token: (await tokenOf(account.chain).catch(() => undefined)) ?? null,
-            })),
+            accounts.map(async (account) => {
+              const held =
+                account.kind.tag === "InternetComputer"
+                  ? tracked
+                  : [defaultAsset(account.kind)].filter((asset) => asset !== undefined)
+              return {
+                id: account.id,
+                label: account.label,
+                kind: kindText(account.kind),
+                address: account.address,
+                icp_account_id: account.icp_account_id,
+                assets: await Promise.all(held.map(assetView)),
+              }
+            }),
           ),
         )
       },
@@ -292,7 +359,8 @@ function tools(client: Client, config: Config): Tool[] {
     {
       name: "wallet_balance",
       title: "An account's balance",
-      description: "What one of the wallet's accounts holds now, as its chain reports it.",
+      description:
+        "What one of the wallet's accounts holds of an asset now, as its ledger or the Bitcoin network reports it.",
       inputSchema: {
         type: "object",
         properties: {
@@ -302,6 +370,7 @@ function tools(client: Client, config: Config): Tool[] {
             minimum: 0,
             maximum: 2 ** 32 - 1,
           },
+          asset: ASSET,
         },
         required: ["account"],
         additionalProperties: false,
@@ -309,13 +378,15 @@ function tools(client: Client, config: Config): Tool[] {
       readOnly: true,
       run: async (args) => {
         const account = await accountOf(integer(args, "account") ?? 0)
+        const asset = assetArg(text(args, "asset"), account)
         const [balance, token] = await Promise.all([
-          wallet.balance(account.id),
-          tokenOf(account.chain),
+          wallet.balance(account.id, asset),
+          tokenOf(asset),
         ])
         return json({
           account: account.id,
           label: account.label,
+          asset: chainText(balance.asset),
           amount: amountText(balance.amount, token),
           base_units: balance.amount,
           as_of: dateOf(balance.as_of_ns),
@@ -387,6 +458,7 @@ function tools(client: Client, config: Config): Tool[] {
             minimum: 0,
             maximum: 2 ** 32 - 1,
           },
+          asset: ASSET,
           to: {
             type: "string",
             description:
@@ -408,11 +480,10 @@ function tools(client: Client, config: Config): Tool[] {
       readOnly: false,
       run: async (args) => {
         const account = await accountOf(integer(args, "from") ?? 0)
-        const token = await tokenOf(account.chain)
+        const asset = assetArg(text(args, "asset"), account)
+        const token = await tokenOf(asset)
         if (token === undefined) {
-          throw new InvalidArguments(
-            `this server cannot send from a ${chainText(account.chain)} account`,
-          )
+          throw new InvalidArguments(`this server cannot send the ${chainText(asset)}`)
         }
         const to = text(args, "to") ?? ""
         if (!to) throw new InvalidArguments("to is empty")
@@ -434,7 +505,7 @@ function tools(client: Client, config: Config): Tool[] {
         }
         const pending = await wallet.propose({
           tag: "Transfer",
-          value: { from: account.id, to, amount, fee: null, memo },
+          value: { from: account.id, asset, to, amount, fee: null, memo },
         })
         return json({
           ...(await pendingView(pending, [account])),

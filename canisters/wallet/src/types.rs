@@ -14,6 +14,16 @@ pub struct InitArgs {
     pub release_signers: Vec<ByteBuf>,
     pub release_threshold: u8,
     pub factory: Option<Principal>,
+    /// The Bitcoin network of the wallet's default Bitcoin account, and of
+    /// its threshold keys. None is mainnet.
+    pub bitcoin_network: Option<BitcoinNetwork>,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct UpgradeArgs {
+    /// Sets the network of a wallet installed before it had one; an upgrade
+    /// never changes a network it has.
+    pub bitcoin_network: Option<BitcoinNetwork>,
 }
 
 #[derive(CandidType, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,19 +50,34 @@ pub struct ClaimArgs {
     pub signature: ByteBuf,
 }
 
-#[derive(CandidType, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(CandidType, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BitcoinNetwork {
     Mainnet,
     Testnet,
     Regtest,
 }
 
-#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+/// An asset, named by where it lives: the ICP ledger, another ICRC-1
+/// ledger, a Bitcoin network, or an EVM chain's native token.
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Chain {
     Icp,
     Icrc(Principal),
     Bitcoin(BitcoinNetwork),
     Evm(u64),
+}
+
+/// What an account is, which says what it holds.
+#[derive(CandidType, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccountKind {
+    /// An ICRC-1 subaccount of the wallet's principal: ICP and every tracked
+    /// ICRC-1 token.
+    InternetComputer,
+    /// The P2WPKH address of a threshold ECDSA key: bitcoin of its network.
+    Bitcoin(BitcoinNetwork),
+    /// The address of a threshold ECDSA key: the native token of every
+    /// tracked EVM chain.
+    Evm,
 }
 
 pub type AccountId = u32;
@@ -67,22 +92,25 @@ pub enum AccountHolder {
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Account {
     pub id: AccountId,
-    pub chain: Chain,
+    pub kind: AccountKind,
     pub label: String,
     pub index: u32,
     pub holder: AccountHolder,
     pub address: String,
+    /// An Internet Computer account's ICP account identifier, in hex.
+    pub icp_account_id: Option<String>,
 }
 
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct AddAccountArgs {
-    pub chain: Chain,
+    pub kind: AccountKind,
     pub label: String,
 }
 
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Balance {
     pub account: AccountId,
+    pub asset: Chain,
     pub amount: Nat,
     pub as_of_ns: u64,
 }
@@ -104,6 +132,9 @@ pub struct Budget {
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct TransferRequest {
     pub from: AccountId,
+    /// What it sends. Absent only from transfers proposed before accounts
+    /// had kinds; `propose` stores it.
+    pub asset: Option<Chain>,
     pub to: String,
     pub amount: Nat,
     pub fee: Option<Nat>,
@@ -209,6 +240,8 @@ pub enum AuditEvent {
     Claimed,
     JoinRequested(Principal),
     AccountAdded(AccountId),
+    AssetTracked(Chain),
+    AssetUntracked(Chain),
     Proposed(ActionId),
     Approved(ActionId),
     Rejected(ActionId),
@@ -297,7 +330,7 @@ pub enum WalletError {
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum WalletArg {
     Init(InitArgs),
-    Upgrade,
+    Upgrade(Option<UpgradeArgs>),
 }
 
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -329,6 +362,7 @@ pub struct Status {
     pub cycles: Nat,
     pub upgrade: UpgradeState,
     pub release_channel: Principal,
+    pub bitcoin_network: BitcoinNetwork,
 }
 
 /// Canister ids are opaque principals, whose last byte is 0x01.
@@ -376,6 +410,7 @@ mod tests {
             release_signers: vec![key(2), key(3)],
             release_threshold: 2,
             factory: None,
+            bitcoin_network: None,
         }
     }
 

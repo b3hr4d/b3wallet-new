@@ -1,14 +1,23 @@
 //! Bitcoin accounts and transactions: an account's address, what `propose`
-//! checks in a Bitcoin transfer, which outputs a transfer spends, and the
-//! transaction it signs. Pure: `signer` and `bitcoin_canister` make the calls
-//! and `actions` records how they ended.
+//! checks in a Bitcoin transfer, which outputs a transfer spends, the
+//! transaction it signs, and what becomes of that transaction once sent.
+//! Pure: `keys` and `bitcoin_canister` make the calls and `actions` records
+//! how they ended.
 //!
 //! An account's coins are held by the P2WPKH address of its threshold ECDSA
 //! key. A transfer spends the account's confirmed outputs, those 100 blocks
-//! old first and then the largest first, pays the recipient in its first output and the change back to the account
-//! in its second. Its id covers neither signature, so signing the same
-//! transaction again cannot make a second one.
+//! old first and then the largest first, pays the recipient in its first
+//! output and the change back to the account in its second. Its id covers
+//! no signature, so signing the same transaction again cannot make a second
+//! one.
+//!
+//! A transaction the Bitcoin canister took may still never confirm: a node
+//! can drop it from its mempool. Only that transaction may spend its inputs,
+//! so the wallet keeps them reserved and sends it again, less often each
+//! time, until the account's outputs show them spent and that stays so for
+//! `SETTLE_CONFIRMATIONS` blocks.
 
+use crate::policy::{DAY_NS, HOUR_NS};
 use crate::{BitcoinNetwork, TransferRequest, WalletError};
 use bitcoin::consensus::encode;
 use bitcoin::hashes::Hash;
@@ -20,6 +29,7 @@ use bitcoin::{
     Transaction, TxIn, TxOut, Txid, Witness, absolute::LockTime,
 };
 use candid::Nat;
+use std::collections::BTreeSet;
 use std::str::FromStr;
 
 /// All the satoshis there will ever be.
@@ -380,6 +390,116 @@ pub fn signed(
     Ok(tx)
 }
 
+/// What a transaction pays the account whose script is `own`: its change,
+/// and the amount too when it pays the account itself.
+pub fn paid_to(tx: &Transaction, own: &Script) -> u64 {
+    tx.output
+        .iter()
+        .filter(|output| output.script_pubkey.as_script() == own)
+        .map(|output| output.value.to_sat())
+        .sum()
+}
+
+/// An account's outputs, as the Bitcoin canister lists them at its tip.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Utxos {
+    pub coins: Vec<Coin>,
+    pub tip_height: u32,
+    /// Whether every page was read. Only a complete list shows an output
+    /// spent: one on a page not read is not listed either.
+    pub complete: bool,
+}
+
+/// Blocks after which a transaction's inputs, once spent, count as spent for
+/// good: the wallet then stops watching the transaction and forgets its
+/// inputs.
+pub const SETTLE_CONFIRMATIONS: u32 = 6;
+/// How long after a send the wallet first sends a transaction again while
+/// its inputs are unspent; each later wait doubles, up to `MAX_RESEND_NS`.
+pub const FIRST_RESEND_NS: u64 = HOUR_NS;
+pub const MAX_RESEND_NS: u64 = DAY_NS;
+
+/// A transaction the Bitcoin canister may have taken, as the wallet watches
+/// it until it settles.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Watched {
+    /// The outpoints it spends, as `outpoint_key` writes them.
+    pub inputs: Vec<[u8; 36]>,
+    /// What it pays back to the account.
+    pub change: u64,
+    /// How many times it was handed to the Bitcoin canister.
+    pub sends: u32,
+    pub last_sent_ns: u64,
+    /// The tip height when the wallet first found its inputs spent, and
+    /// `None` while they are not.
+    pub spent_at_height: Option<u32>,
+}
+
+/// What the wallet does next with a watched transaction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Next {
+    /// Nothing yet.
+    Wait,
+    /// Its inputs are still unspent and its next send is due: send it again.
+    Resend,
+    /// Its inputs have been spent for `SETTLE_CONFIRMATIONS` blocks: stop
+    /// watching it and release them.
+    Settled,
+}
+
+/// The wait before the send after `sends` of them.
+pub fn resend_wait(sends: u32) -> u64 {
+    let doublings = sends.saturating_sub(1).min(16);
+    FIRST_RESEND_NS
+        .saturating_mul(1 << doublings)
+        .min(MAX_RESEND_NS)
+}
+
+impl Watched {
+    /// Whether the account still holds an output this transaction spends,
+    /// given the outputs it holds now, `present`. Only this transaction may
+    /// spend them, so they are unspent until it confirms.
+    pub fn unspent(&self, present: &BTreeSet<[u8; 36]>) -> bool {
+        self.inputs.iter().any(|input| present.contains(input))
+    }
+
+    /// Updates what the wallet knows from the outputs the account holds at
+    /// `tip`, and says what to do next at `now`. A reorganization that
+    /// brings the inputs back makes them unspent again.
+    pub fn observe(&mut self, present: &BTreeSet<[u8; 36]>, tip: u32, now: u64) -> Next {
+        if self.unspent(present) {
+            self.spent_at_height = None;
+            let due = self.last_sent_ns.saturating_add(resend_wait(self.sends));
+            return if now >= due { Next::Resend } else { Next::Wait };
+        }
+        let spent_at = *self.spent_at_height.get_or_insert(tip);
+        if tip.saturating_sub(spent_at) + 1 >= SETTLE_CONFIRMATIONS {
+            Next::Settled
+        } else {
+            Next::Wait
+        }
+    }
+}
+
+/// What an account holds once the network confirms the wallet's watched
+/// transactions: its outputs, less those the transactions spend, plus the
+/// change of each transaction whose inputs are still unspent. Change shows
+/// among the outputs only once its transaction confirms, and then the
+/// inputs are gone.
+pub fn available(coins: &[Coin], watched: &[Watched]) -> u64 {
+    let present: BTreeSet<[u8; 36]> = coins.iter().map(Coin::key).collect();
+    let mut leaving = BTreeSet::new();
+    let mut change = 0u64;
+    for tx in watched.iter().filter(|tx| tx.unspent(&present)) {
+        leaving.extend(tx.inputs.iter().copied());
+        change = change.saturating_add(tx.change);
+    }
+    coins
+        .iter()
+        .filter(|coin| !leaving.contains(&coin.key()))
+        .fold(change, |sum, coin| sum.saturating_add(coin.value))
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -408,6 +528,7 @@ pub(crate) mod tests {
     fn request(to: &str, amount: u64) -> TransferRequest {
         TransferRequest {
             from: 1,
+            asset: Some(crate::Chain::Bitcoin(REGTEST)),
             to: to.to_string(),
             amount: Nat::from(amount),
             fee: None,
@@ -714,5 +835,69 @@ pub(crate) mod tests {
         other[0] += 1;
         let wrong = sighashes(&tx, &other, &change).unwrap();
         assert!(super::signed(tx, &hashes, &sign_all(&wrong, 1, false), &public(1)).is_err());
+    }
+
+    fn watched(inputs: &[u8], change: u64) -> Watched {
+        Watched {
+            inputs: inputs.iter().map(|seed| coin(*seed, 1_000).key()).collect(),
+            change,
+            sends: 1,
+            last_sent_ns: 0,
+            spent_at_height: None,
+        }
+    }
+
+    fn present(seeds: &[u8]) -> BTreeSet<[u8; 36]> {
+        seeds.iter().map(|seed| coin(*seed, 1_000).key()).collect()
+    }
+
+    #[test]
+    fn an_unconfirmed_transaction_is_sent_again_less_often_each_time() {
+        assert_eq!(resend_wait(1), HOUR_NS);
+        assert_eq!(resend_wait(2), 2 * HOUR_NS);
+        assert_eq!(resend_wait(3), 4 * HOUR_NS);
+        assert_eq!(resend_wait(6), DAY_NS);
+        assert_eq!(resend_wait(u32::MAX), DAY_NS);
+        assert_eq!(resend_wait(0), HOUR_NS);
+
+        let mut tx = watched(&[1, 2], 500);
+        let unspent = present(&[1, 2, 3]);
+        assert_eq!(tx.observe(&unspent, 200, HOUR_NS - 1), Next::Wait);
+        assert_eq!(tx.observe(&unspent, 200, HOUR_NS), Next::Resend);
+        tx.sends = 2;
+        tx.last_sent_ns = HOUR_NS;
+        assert_eq!(tx.observe(&unspent, 200, 3 * HOUR_NS - 1), Next::Wait);
+        assert_eq!(tx.observe(&unspent, 200, 3 * HOUR_NS), Next::Resend);
+        // One input left is enough: only this transaction spends it.
+        assert_eq!(tx.observe(&present(&[2]), 200, 0), Next::Wait);
+        assert_eq!(tx.spent_at_height, None);
+    }
+
+    #[test]
+    fn a_transaction_settles_once_its_inputs_stay_spent_for_six_blocks() {
+        let mut tx = watched(&[1, 2], 500);
+        let spent = present(&[3]);
+        assert_eq!(tx.observe(&spent, 100, 0), Next::Wait);
+        assert_eq!(tx.spent_at_height, Some(100));
+        assert_eq!(tx.observe(&spent, 104, 0), Next::Wait);
+        // A reorganization brings an input back: it counts again from the
+        // block that spends it next.
+        assert_eq!(tx.observe(&present(&[1]), 104, 0), Next::Wait);
+        assert_eq!(tx.spent_at_height, None);
+        assert_eq!(tx.observe(&spent, 105, 0), Next::Wait);
+        assert_eq!(tx.observe(&spent, 109, 0), Next::Wait);
+        assert_eq!(tx.observe(&spent, 110, 0), Next::Settled);
+        assert_eq!(tx.spent_at_height, Some(105));
+    }
+
+    #[test]
+    fn the_available_amount_leaves_out_what_sent_transactions_spend_and_adds_their_change() {
+        let coins = vec![coin(1, 10_000), coin(2, 20_000), coin(3, 40_000)];
+        assert_eq!(available(&coins, &[]), 70_000);
+        // Sent from outputs 1 and 2, with 4,000 of change, not confirmed.
+        assert_eq!(available(&coins, &[watched(&[1, 2], 4_000)]), 44_000);
+        // Confirmed: its inputs are gone, and its change is an output.
+        let after = vec![coin(3, 40_000), coin(9, 4_000)];
+        assert_eq!(available(&after, &[watched(&[1, 2], 4_000)]), 44_000);
     }
 }

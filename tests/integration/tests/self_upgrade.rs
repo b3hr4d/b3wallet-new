@@ -154,6 +154,7 @@ fn net_with_cycles(channel_signers: [u8; 3], self_owned: bool, cycles: u128) -> 
         release_signers: vec![public_key(1), public_key(2), public_key(3)],
         release_threshold: 2,
         factory: None,
+        bitcoin_network: None,
     };
     pic.install_canister(
         wallet,
@@ -261,6 +262,17 @@ impl Net {
             .stored_chunks(self.wallet, Some(self.wallet))
             .unwrap()
             .len()
+    }
+
+    /// Whether the new version's timer clears the chunk store within a few
+    /// rounds of the install: how many the install takes to commit depends
+    /// on the module's size and its `post_upgrade`.
+    fn clears_the_chunk_store(&self) -> bool {
+        (0..10).any(|_| {
+            let cleared = self.stored_chunks() == 0;
+            self.pic.tick();
+            cleared
+        })
     }
 
     fn release_available(&self) -> Result<Option<ReleaseManifest>, WalletError> {
@@ -446,7 +458,10 @@ fn the_wallet_upgrades_itself_to_the_next_release_and_the_one_after() {
                 (None, AuditEvent::UpgradeInstalled(version.to_string())),
             ]
         );
-        assert_eq!(net.stored_chunks(), 0, "the timer clears the chunk store");
+        assert!(
+            net.clears_the_chunk_store(),
+            "the timer clears the chunk store"
+        );
         assert_eq!(net.release_available(), Ok(None));
         running = wasm;
     }

@@ -6,14 +6,16 @@
 //! Stored values are Candid. A release may add a field to a stored record only
 //! as an `opt` field, so the values an earlier release wrote still decode.
 
-use crate::accounts::StoredAccount;
+use crate::accounts::{self, StoredAccount};
 use crate::actions::StoredPending;
+use crate::assets;
 use crate::btc;
 use crate::governance::Governance;
 use crate::policy::default_policy;
 use crate::upgrade::StoredUpgrade;
 use crate::{
-    AccountId, ActionId, ActionState, AuditEntry, AuditEvent, Chain, InitArgs, Member, Policy, Role,
+    AccountId, AccountKind, Action, ActionId, ActionState, AuditEntry, AuditEvent, BitcoinNetwork,
+    Chain, InitArgs, Member, Outcome, Policy, Role,
 };
 use candid::{CandidType, Nat, Principal, decode_one, encode_one};
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager, VirtualMemory};
@@ -24,6 +26,7 @@ use serde::de::DeserializeOwned;
 use serde_bytes::ByteBuf;
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;
 
@@ -39,6 +42,8 @@ const UPGRADE_MEMORY: MemoryId = MemoryId::new(9);
 const OPEN_MEMORY: MemoryId = MemoryId::new(10);
 const TRANSFER_CLOCK_MEMORY: MemoryId = MemoryId::new(11);
 const RESERVED_MEMORY: MemoryId = MemoryId::new(12);
+const TRACKED_MEMORY: MemoryId = MemoryId::new(13);
+const UNSETTLED_MEMORY: MemoryId = MemoryId::new(14);
 
 /// What the wallet was installed with.
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -49,6 +54,9 @@ pub struct Config {
     pub release_signers: Vec<ByteBuf>,
     pub release_threshold: u8,
     pub factory: Option<Principal>,
+    /// The network of the default Bitcoin account and its keys. Absent only
+    /// from wallets installed before it was set; `migrate` sets it.
+    pub bitcoin_network: Option<BitcoinNetwork>,
 }
 
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -65,6 +73,12 @@ pub struct StoredMember {
     pub added_at_ns: u64,
     /// `None` for the member who claimed the wallet.
     pub added_by: Option<Principal>,
+}
+
+/// The assets the accounts show, ICP first.
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct Tracked {
+    pub assets: Vec<Chain>,
 }
 
 /// An audit log entry as stored; its sequence number is its place in the log.
@@ -116,6 +130,7 @@ impl From<InitArgs> for Config {
             release_signers: args.release_signers,
             release_threshold: args.release_threshold,
             factory: args.factory,
+            bitcoin_network: Some(args.bitcoin_network.unwrap_or(BitcoinNetwork::Mainnet)),
         }
     }
 }
@@ -148,7 +163,8 @@ candid_storable!(
     StoredMember,
     StoredPending,
     StoredTransfer,
-    StoredUpgrade
+    StoredUpgrade,
+    Tracked
 );
 
 fn to_candid<T: CandidType>(value: &T) -> Vec<u8> {
@@ -206,6 +222,14 @@ thread_local! {
     /// have been sent: the Bitcoin canister lists them until it confirms.
     static RESERVED: RefCell<StableBTreeMap<[u8; 36], ActionId, Memory>> =
         RefCell::new(StableBTreeMap::init(memory(RESERVED_MEMORY)));
+
+    static TRACKED: RefCell<StableCell<Option<Tracked>, Memory>> =
+        RefCell::new(StableCell::init(memory(TRACKED_MEMORY), None));
+
+    /// The actions the wallet still settles on its own: see
+    /// `StoredPending::needs_settling`.
+    static UNSETTLED: RefCell<StableBTreeMap<ActionId, (), Memory>> =
+        RefCell::new(StableBTreeMap::init(memory(UNSETTLED_MEMORY)));
 }
 
 fn memory(id: MemoryId) -> Memory {
@@ -230,6 +254,24 @@ pub fn policy() -> Policy {
 
 pub fn config() -> Option<Config> {
     CONFIG.with_borrow(|cell| cell.get().clone())
+}
+
+/// The network of the wallet's default Bitcoin account.
+pub fn bitcoin_network() -> BitcoinNetwork {
+    config()
+        .and_then(|config| config.bitcoin_network)
+        .unwrap_or(BitcoinNetwork::Mainnet)
+}
+
+/// The tracked assets, ICP first.
+pub fn tracked() -> Vec<Chain> {
+    TRACKED
+        .with_borrow(|cell| cell.get().clone().map(|tracked| tracked.assets))
+        .unwrap_or_else(assets::initial)
+}
+
+pub fn set_tracked(assets: Vec<Chain>) {
+    TRACKED.with_borrow_mut(|cell| cell.set(Some(Tracked { assets })));
 }
 
 pub fn upgrade() -> StoredUpgrade {
@@ -311,7 +353,18 @@ pub fn account(id: AccountId) -> Option<StoredAccount> {
     ACCOUNTS.with_borrow(|accounts| accounts.get(&id))
 }
 
-/// Every account, in id order. A wallet has at most `MAX_ACCOUNTS`.
+/// The listed account `id` names: itself, or for an account merged into
+/// another, the one it became.
+pub fn listed_account(id: AccountId) -> Option<(AccountId, StoredAccount)> {
+    let account = account(id)?;
+    match account.merged_into {
+        Some(survivor) => self::account(survivor).map(|account| (survivor, account)),
+        None => Some((id, account)),
+    }
+}
+
+/// Every account, merged ones included, in id order. A wallet lists at most
+/// `MAX_ACCOUNTS`, and merged ones are only those an earlier release had.
 pub fn accounts() -> Vec<(AccountId, StoredAccount)> {
     ACCOUNTS.with_borrow(|accounts| accounts.iter().map(|entry| entry.into_pair()).collect())
 }
@@ -394,21 +447,36 @@ pub fn action(id: ActionId) -> Option<StoredPending> {
 }
 
 /// Stores an action. One that closed without its Bitcoin transaction ever
-/// being sent releases the outputs that transaction would have spent.
+/// being sent releases the outputs that transaction would have spent, as
+/// does one whose transaction settled. An action the wallet still settles
+/// on its own is listed for the timer, and one it no longer does is not.
 pub fn set_action(id: ActionId, pending: StoredPending) {
     let closed = !matches!(pending.state, ActionState::Waiting | ActionState::Ready);
-    if closed
-        && !pending.may_have_sent()
-        && let Some(tx) = pending.bitcoin_tx()
+    if let Some(tx) = pending.bitcoin_tx()
+        && ((closed && !pending.may_have_sent()) || tx.is_settled())
     {
         // A stored transaction always decodes: the wallet encoded it.
         let unsigned = btc::from_bytes(&tx.unsigned).expect("a stored transaction decodes");
         release(&btc::spent_keys(&unsigned), id);
     }
+    let settling = pending.needs_settling();
     PENDING.with_borrow_mut(|actions| actions.insert(id, pending));
     if closed {
         OPEN.with_borrow_mut(|open| open.remove(&id));
     }
+    UNSETTLED.with_borrow_mut(|unsettled| {
+        if settling {
+            unsettled.insert(id, ());
+        } else {
+            unsettled.remove(&id);
+        }
+    });
+}
+
+/// The ids of the actions the wallet still settles on its own, oldest
+/// first.
+pub fn unsettled() -> Vec<ActionId> {
+    UNSETTLED.with_borrow(|unsettled| unsettled.keys().collect())
 }
 
 /// The actions open at `now`, oldest first.
@@ -475,29 +543,138 @@ pub fn complete_claim(owner: Principal, member: StoredMember) {
 }
 
 /// Fills in what an earlier release did not store, so its wallets can
-/// upgrade. Wallets from before step 5 have no policy and get the default
-/// one, which is the policy a new wallet starts with. A trap later in the
-/// upgrade rolls this back with the rest.
-pub fn migrate() {
+/// upgrade. A trap later in the upgrade rolls this back with the rest.
+///
+/// - Wallets from before step 5 have no policy and get the default one,
+///   which is the policy a new wallet starts with.
+/// - Accounts stored before kinds get theirs (see `accounts::migrate`), and
+///   the transfers proposed from them the asset they send and the account
+///   they now name. The ICRC-1 ledgers of the old accounts become tracked.
+/// - A wallet with no Bitcoin network takes `network`, else the network of
+///   its first Bitcoin account, else mainnet.
+/// - Bitcoin transactions that may have been sent before the wallet
+///   watched them are watched.
+pub fn migrate(network: Option<BitcoinNetwork>) -> Result<(), String> {
     if POLICY.with_borrow(|cell| cell.get().is_none()) {
         set_policy(default_policy());
     }
+    let migration = accounts::migrate(&accounts())?;
+    ACCOUNTS.with_borrow_mut(|stored| {
+        for (id, account) in &migration.accounts {
+            stored.insert(*id, account.clone());
+        }
+    });
+    let mut config = config().ok_or("stable memory holds no configuration")?;
+    if config.bitcoin_network.is_none() {
+        let first = accounts()
+            .into_iter()
+            .find_map(|(_, account)| match account.kind {
+                Some(AccountKind::Bitcoin(network)) => Some(network),
+                _ => None,
+            });
+        config.bitcoin_network = Some(network.or(first).unwrap_or(BitcoinNetwork::Mainnet));
+        set_config(config);
+    }
+    if TRACKED.with_borrow(|cell| cell.get().is_none()) {
+        let mut tracked = assets::initial();
+        tracked.extend(migration.ledgers.iter().cloned());
+        set_tracked(tracked);
+    }
+    if !migration.held.is_empty() {
+        migrate_transfers(&migration.held);
+    }
+    let reserved: BTreeSet<ActionId> = RESERVED.with_borrow(|reserved| reserved.values().collect());
+    for id in reserved {
+        if let Some(pending) = action(id)
+            && pending.needs_settling()
+        {
+            UNSETTLED.with_borrow_mut(|unsettled| unsettled.insert(id, ()));
+        }
+    }
+    Ok(())
 }
 
-/// Decodes every stored value. `post_upgrade` calls it, so a release that
-/// cannot read the state fails its upgrade instead of a later call.
+/// Names in every transfer what it sends, by what its account held, and
+/// the account it was sent from as the one that account became.
+fn migrate_transfers(held: &BTreeMap<AccountId, Chain>) {
+    let survivor = |id: AccountId| {
+        account(id)
+            .and_then(|account| account.merged_into)
+            .unwrap_or(id)
+    };
+    let ids: Vec<ActionId> = PENDING.with_borrow(|actions| actions.keys().collect());
+    for id in ids {
+        let mut pending = action(id).expect("a listed id names a stored action");
+        let Action::Transfer(request) = &mut pending.action else {
+            continue;
+        };
+        if request.asset.is_some() {
+            continue;
+        }
+        request.asset = held.get(&request.from).cloned();
+        request.from = survivor(request.from);
+        if let ActionState::Executed(Outcome::Sent(receipt)) = &mut pending.state {
+            receipt.account = survivor(receipt.account);
+        }
+        PENDING.with_borrow_mut(|actions| actions.insert(id, pending));
+    }
+    let seqs: Vec<u64> = HISTORY.with_borrow(|history| history.keys().collect());
+    for seq in seqs {
+        HISTORY.with_borrow_mut(|history| {
+            let mut transfer = history.get(&seq).expect("a listed transfer is stored");
+            let account = survivor(transfer.account);
+            if account != transfer.account {
+                transfer.account = account;
+                history.insert(seq, transfer);
+            }
+        });
+    }
+}
+
+/// Decodes every stored value and checks what holds them together.
+/// `post_upgrade` calls it, so a release that cannot read the state fails
+/// its upgrade instead of a later call.
 pub fn check() -> Result<(), String> {
-    if config().is_none() {
+    let Some(config) = config() else {
         return Err("stable memory holds no configuration".to_string());
+    };
+    if config.bitcoin_network.is_none() {
+        return Err("the configuration has no Bitcoin network".to_string());
     }
     if POLICY.with_borrow(|cell| cell.get().is_none()) {
         return Err("stable memory holds no policy".to_string());
     }
     MEMBERS.with_borrow(|members| members.values().for_each(drop));
-    ACCOUNTS.with_borrow(|accounts| accounts.values().for_each(drop));
     PENDING.with_borrow(|actions| actions.values().for_each(drop));
     HISTORY.with_borrow(|history| history.values().for_each(drop));
     AUDIT.with_borrow(|log| log.iter().for_each(drop));
+    for (id, account) in accounts() {
+        let Some(kind) = account.kind else {
+            return Err(format!("account {id} has no kind"));
+        };
+        if let Some(survivor) = account.merged_into
+            && !listed_account(survivor).is_some_and(|(at, into)| {
+                at == survivor && into.kind == Some(kind) && into.index == account.index
+            })
+        {
+            return Err(format!(
+                "account {id} leads to account {survivor}, which is not its listed twin"
+            ));
+        }
+    }
+    let tracked = TRACKED
+        .with_borrow(|cell| cell.get().clone())
+        .ok_or("stable memory holds no tracked assets")?
+        .assets;
+    if tracked.first() != Some(&Chain::Icp) {
+        return Err("ICP is not the first tracked asset".to_string());
+    }
+    for asset in &tracked[1..] {
+        if !matches!(asset, Chain::Icrc(_)) {
+            return Err(format!("{asset:?} is tracked"));
+        }
+        assets::check(asset)?;
+    }
     let upgrade = upgrade();
     if let Some(id) = upgrade.action
         && action(id).is_none()
@@ -515,6 +692,11 @@ pub fn check() -> Result<(), String> {
     }
     if let Some(id) = OPEN.with_borrow(|open| open.keys().find(|id| action(*id).is_none())) {
         return Err(format!("open action {id} is not stored"));
+    }
+    if let Some(id) =
+        UNSETTLED.with_borrow(|unsettled| unsettled.keys().find(|id| action(*id).is_none()))
+    {
+        return Err(format!("unsettled action {id} is not stored"));
     }
     Ok(())
 }
@@ -536,6 +718,7 @@ mod tests {
             release_signers: vec![ByteBuf::from(vec![2; 32])],
             release_threshold: 1,
             factory: None,
+            bitcoin_network: Some(crate::BitcoinNetwork::Regtest),
         }
     }
 
@@ -603,21 +786,190 @@ mod tests {
     #[test]
     fn the_migration_adds_the_default_policy_and_keeps_a_stored_one() {
         set_config(config_value());
-        migrate();
+        migrate(None).unwrap();
         assert_eq!(policy(), default_policy());
         assert_eq!(check(), Ok(()));
 
         let mut stricter = default_policy();
         stricter.rules[0].timelock_ns = 1;
         set_policy(stricter.clone());
-        migrate();
+        migrate(None).unwrap();
         assert_eq!(policy(), stricter);
+    }
+
+    fn ledger(seed: u8) -> Principal {
+        Principal::from_slice(&[0, 0, 0, 0, 0, 0, 9, seed, 1, 1])
+    }
+
+    /// An account as a release before kinds stored it.
+    fn legacy_account(chain: Chain, index: u32) -> StoredAccount {
+        StoredAccount {
+            kind: None,
+            chain: Some(chain),
+            ..StoredAccount::new(
+                AccountKind::InternetComputer,
+                "old".to_string(),
+                index,
+                None,
+                Some(Principal::self_authenticating([3; 32])),
+                0,
+            )
+        }
+    }
+
+    fn transfer_from(from: AccountId) -> StoredPending {
+        let mut pending = action_at(5);
+        pending.action = Action::Transfer(crate::TransferRequest {
+            from,
+            asset: None,
+            to: "someone".to_string(),
+            amount: Nat::from(5u8),
+            fee: None,
+            memo: None,
+        });
+        pending
+    }
+
+    #[test]
+    fn the_migration_gives_old_accounts_kinds_and_old_transfers_their_asset() {
+        let mut config = config_value();
+        config.bitcoin_network = None;
+        set_config(config);
+        let icp = add_account(legacy_account(Chain::Icp, 0));
+        let token = add_account(legacy_account(Chain::Icrc(ledger(1)), 0));
+        let bitcoin = add_account(legacy_account(Chain::Bitcoin(BitcoinNetwork::Testnet), 0));
+        let other = add_account(legacy_account(Chain::Icrc(ledger(2)), 0));
+        let second = add_account(legacy_account(Chain::Icrc(ledger(1)), 1));
+        let open = add_action(transfer_from(token));
+        let mut done = transfer_from(other);
+        done.state = ActionState::Executed(Outcome::Sent(crate::TxReceipt {
+            account: other,
+            chain: Chain::Icrc(ledger(2)),
+            tx_id: "7".to_string(),
+            at_ns: 5,
+        }));
+        let done = add_action(done);
+        add_transfer(StoredTransfer {
+            account: other,
+            ..sent(Chain::Icrc(ledger(2)), 5, None, 5)
+        });
+
+        migrate(None).unwrap();
+        assert_eq!(check(), Ok(()));
+        assert_eq!(bitcoin_network(), BitcoinNetwork::Testnet);
+        assert_eq!(
+            tracked(),
+            [Chain::Icp, Chain::Icrc(ledger(1)), Chain::Icrc(ledger(2))]
+        );
+        let kinds: Vec<(AccountId, Option<AccountKind>, Option<AccountId>)> = accounts()
+            .into_iter()
+            .map(|(id, account)| (id, account.kind, account.merged_into))
+            .collect();
+        let ic = Some(AccountKind::InternetComputer);
+        assert_eq!(
+            kinds,
+            [
+                (icp, ic, None),
+                (token, ic, Some(icp)),
+                (
+                    bitcoin,
+                    Some(AccountKind::Bitcoin(BitcoinNetwork::Testnet)),
+                    None
+                ),
+                (other, ic, Some(icp)),
+                (second, ic, None),
+            ]
+        );
+        assert_eq!(listed_account(token).map(|(id, _)| id), Some(icp));
+        let Action::Transfer(request) = action(open).unwrap().action else {
+            panic!("a transfer");
+        };
+        assert_eq!(
+            (request.from, request.asset),
+            (icp, Some(Chain::Icrc(ledger(1))))
+        );
+        let migrated = action(done).unwrap();
+        let ActionState::Executed(Outcome::Sent(receipt)) = migrated.state else {
+            panic!("executed");
+        };
+        assert_eq!(receipt.account, icp);
+        assert_eq!(
+            HISTORY.with_borrow(|history| history.get(&0).unwrap().account),
+            icp
+        );
+
+        // A second run changes nothing.
+        let before = (accounts(), action(open), tracked());
+        migrate(Some(BitcoinNetwork::Regtest)).unwrap();
+        assert_eq!((accounts(), action(open), tracked()), before);
+        assert_eq!(bitcoin_network(), BitcoinNetwork::Testnet);
+    }
+
+    #[test]
+    fn the_upgrade_argument_sets_the_network_of_a_wallet_without_one() {
+        let mut config = config_value();
+        config.bitcoin_network = None;
+        set_config(config);
+        add_account(legacy_account(Chain::Bitcoin(BitcoinNetwork::Testnet), 0));
+        migrate(Some(BitcoinNetwork::Regtest)).unwrap();
+        assert_eq!(bitcoin_network(), BitcoinNetwork::Regtest);
+    }
+
+    #[test]
+    fn a_wallet_without_a_network_or_bitcoin_account_is_on_mainnet() {
+        let mut config = config_value();
+        config.bitcoin_network = None;
+        set_config(config);
+        migrate(None).unwrap();
+        assert_eq!(bitcoin_network(), BitcoinNetwork::Mainnet);
+        assert_eq!(check(), Ok(()));
+    }
+
+    #[test]
+    fn the_migration_watches_transactions_sent_before_the_wallet_watched_them() {
+        set_config(config_value());
+        let (mut sent, keys) = bitcoin_transfer(&[1]);
+        sent.bitcoin_sending(1);
+        sent.end_bitcoin_send(
+            Ok(()),
+            1,
+            Chain::Bitcoin(BitcoinNetwork::Regtest),
+            "t".to_string(),
+            1,
+        )
+        .unwrap();
+        let id = add_action(sent.clone());
+        PENDING.with_borrow_mut(|actions| actions.insert(id, sent));
+        reserve(&keys, id);
+        assert!(unsettled().is_empty());
+        migrate(None).unwrap();
+        assert_eq!(unsettled(), [id]);
+        assert_eq!(check(), Ok(()));
+    }
+
+    #[test]
+    fn check_fails_when_a_merged_account_leads_nowhere() {
+        set_config(config_value());
+        set_policy(default_policy());
+        set_tracked(assets::initial());
+        let mut merged = StoredAccount::new(
+            AccountKind::InternetComputer,
+            "x".to_string(),
+            0,
+            None,
+            None,
+            0,
+        );
+        merged.merged_into = Some(7);
+        add_account(merged);
+        assert!(check().unwrap_err().contains("leads to account 7"));
     }
 
     #[test]
     fn check_passes_once_configured_and_reads_the_members() {
         set_config(config_value());
         set_policy(default_policy());
+        set_tracked(assets::initial());
         insert_member(Principal::self_authenticating([3; 32]), stored_member());
         add_action(action_at(5));
         assert_eq!(check(), Ok(()));
@@ -708,6 +1060,7 @@ mod tests {
     fn check_fails_when_an_open_id_has_no_action() {
         set_config(config_value());
         set_policy(default_policy());
+        set_tracked(assets::initial());
         OPEN.with_borrow_mut(|open| open.insert(3, ()));
         assert_eq!(check(), Err("open action 3 is not stored".to_string()));
     }
@@ -807,13 +1160,11 @@ mod tests {
         let mut pending = action_at(1);
         pending.state = ActionState::Ready;
         pending.begin_bitcoin(1, 1).unwrap();
-        pending.bitcoin_built(crate::actions::BitcoinTx {
-            unsigned: ByteBuf::from(btc::to_bytes(&tx)),
-            values: coins.iter().map(|coin| coin.value).collect(),
-            fee: 1_000,
-            signed: None,
-            sent: false,
-        });
+        pending.bitcoin_built(crate::actions::BitcoinTx::new(
+            btc::to_bytes(&tx),
+            coins.iter().map(|coin| coin.value).collect(),
+            1_000,
+        ));
         (pending, coins.iter().map(btc::Coin::key).collect())
     }
 
@@ -829,7 +1180,7 @@ mod tests {
         let (_, other_keys) = bitcoin_transfer(&[2]);
         assert_eq!(other_keys[0], unsent_keys[1]);
 
-        sent.bitcoin_sending();
+        sent.bitcoin_sending(1);
         sent.finish(Err("stopped".to_string()));
         set_action(sent_id, sent);
         assert!(sent_keys.iter().all(is_reserved));
@@ -839,5 +1190,45 @@ mod tests {
         set_action(unsent_id, unsent);
         assert!(!is_reserved(&unsent_keys[0]));
         assert!(is_reserved(&unsent_keys[1]), "action 99 holds it now");
+    }
+
+    #[test]
+    fn a_sent_transaction_is_watched_until_it_settles_and_then_releases_its_outputs() {
+        let (mut pending, keys) = bitcoin_transfer(&[4, 5]);
+        let id = add_action(pending.clone());
+        reserve(&keys, id);
+        set_action(id, pending.clone());
+        assert!(unsettled().is_empty(), "built, not sent");
+
+        pending.bitcoin_sending(1);
+        set_action(id, pending.clone());
+        assert_eq!(unsettled(), [id], "it may have been sent");
+        let bitcoin = Chain::Bitcoin(crate::BitcoinNetwork::Regtest);
+        pending
+            .end_bitcoin_send(Ok(()), 1, bitcoin.clone(), "t".to_string(), 2)
+            .unwrap();
+        set_action(id, pending.clone());
+        assert_eq!(unsettled(), [id]);
+        assert!(keys.iter().all(is_reserved));
+
+        assert!(!pending.bitcoin_settled(1, bitcoin, "t".to_string(), 3));
+        set_action(id, pending);
+        assert!(unsettled().is_empty());
+        assert!(!keys.iter().any(is_reserved));
+    }
+
+    #[test]
+    fn a_ledger_call_that_may_have_run_is_settled_while_the_transfer_is_open() {
+        let mut pending = transfer_from(1);
+        pending.state = ActionState::Ready;
+        let id = add_action(pending.clone());
+        pending.begin_transfer(10, || 10);
+        set_action(id, pending.clone());
+        pending.lose_transfer_call();
+        set_action(id, pending.clone());
+        assert_eq!(unsettled(), [id]);
+        pending.finish(Err("too old".to_string()));
+        set_action(id, pending);
+        assert!(unsettled().is_empty());
     }
 }

@@ -100,7 +100,9 @@ function look(event: AuditEvent): [string, ReactNode] {
     case "Proposed":
     case "JoinRequested":
     case "AccountAdded":
+    case "AssetTracked":
       return ["accent", <PlusIcon key="icon" />]
+    case "AssetUntracked":
     case "ExtensionCall":
       return ["", <DotIcon key="icon" />]
   }

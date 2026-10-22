@@ -12,8 +12,8 @@
 //! still running at the deadline means the install failed, and the upgrade
 //! ends `Failed`.
 
+use crate::icrc::STALE_CALL_NS;
 use crate::policy::HOUR_NS;
-use crate::transfers::STALE_CALL_NS;
 use crate::{ActionId, UpgradeState, WalletError};
 use candid::CandidType;
 use release::{ReleaseManifest, Signers};

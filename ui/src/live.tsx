@@ -48,23 +48,15 @@ export function Live({
       }
     >
       {account && createPortal(<Account />, account)}
-      <Wallet page={page} wallet={here.wallet} local={here.local} />
+      <Wallet page={page} wallet={here.wallet} />
     </ReactorProvider>
   )
 }
 
-function Wallet({
-  page,
-  wallet,
-  local,
-}: {
-  page: Exclude<Page, "missing">
-  wallet: Principal
-  local: boolean
-}) {
+function Wallet({ page, wallet }: { page: Exclude<Page, "missing">; wallet: Principal }) {
   switch (page) {
     case "home":
-      return <Home wallet={wallet} local={local} />
+      return <Home wallet={wallet} />
     case "send":
       return <Send wallet={wallet} />
     case "approvals":

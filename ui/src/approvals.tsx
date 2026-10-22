@@ -19,7 +19,7 @@ import { CheckIcon } from "./icons.tsx"
 import { AsMember, Reading } from "./member.tsx"
 import { useNowNs } from "./now.ts"
 import { dateOf } from "./time.ts"
-import { useToken } from "./tokens.ts"
+import { transferAsset, useToken } from "./tokens.ts"
 
 /**
  * The approvals page: every open action, with what each member may do about
@@ -136,7 +136,7 @@ function OpenAction({
 }) {
   const { action, state } = pending
   const from = sourceOf(action, accounts)
-  const { token } = useToken(from?.chain)
+  const { token } = useToken(transferAsset(action, from))
   const join = isJoinRequest(pending)
   const details = actionDetails(action)
   const owner = me.role.tag === "Owner"

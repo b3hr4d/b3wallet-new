@@ -3,13 +3,26 @@
 
 type BitcoinNetwork = variant { Mainnet; Testnet; Regtest };
 
+// An asset, named by where it lives.
 type Chain = variant {
   Icp;
   // ICRC-1 ledger canister id.
   Icrc : principal;
   Bitcoin : BitcoinNetwork;
-  // EIP-155 chain id.
+  // The native token of the EVM chain with this EIP-155 chain id.
   Evm : nat64;
+};
+
+// What an account is, which says what it holds.
+type AccountKind = variant {
+  // An ICRC-1 subaccount of the wallet's principal: ICP and every tracked
+  // ICRC-1 token.
+  InternetComputer;
+  // The P2WPKH address of a threshold ECDSA key: bitcoin of its network.
+  Bitcoin : BitcoinNetwork;
+  // The address of a threshold ECDSA key: the native token of every tracked
+  // EVM chain.
+  Evm;
 };
 
 // What an owner can grant an extension. Nothing here lets an extension touch
