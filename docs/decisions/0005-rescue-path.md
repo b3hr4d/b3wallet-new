@@ -1,6 +1,7 @@
 # 0005: No rescue path for a release that breaks upgrades
 
-Status: accepted, 2026-10-21. Behrad chose option A.
+Status: accepted, 2026-10-21. Behrad chose option A. Superseded by
+[decision 0009](0009-recovery-controller.md) once it is accepted.
 
 **Decision: a wallet has no rescue path. It stays its own only controller,
 and upgrade tests are the gate.**

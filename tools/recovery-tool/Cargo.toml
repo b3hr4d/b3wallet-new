@@ -1,0 +1,20 @@
+[package]
+name = "recovery-tool"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+candid.workspace = true
+candid_parser.workspace = true
+# Reads recovery keys in PKCS#8 PEM and wipes them from memory when dropped.
+ed25519-dalek = { workspace = true, features = ["pem", "zeroize"] }
+recovery = { path = "../../crates/recovery" }
+release = { path = "../../crates/release" }
+release-tool = { path = "../release-tool" }
+serde.workspace = true
+serde_bytes.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+pocket-ic.workspace = true

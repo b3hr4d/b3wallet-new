@@ -1,0 +1,259 @@
+// Recovery controller: the only controller of one wallet, with no
+// controller itself. It changes the wallet's code or hands the wallet to
+// another controller only on operations that the owners' Ed25519 recovery
+// keys signed, after their threshold and delay. Decision 0009, 2026-10-22.
+//
+// Every key signs bytes, not Candid: an operation's digest is SHA-256 over
+// the encoding in docs/recovery.md, and an approval signs
+// "b3wallet-controller/approve", a NUL byte and that digest.
+
+import "common.did";
+
+// A recovery key: an Ed25519 public key the owner holds outside the wallet.
+// The label is public, like the whole policy.
+type Authority = record {
+  public_key : blob;
+  label : text;
+};
+
+type Policy = record {
+  // 1 to 10 keys.
+  authorities : vec Authority;
+  // 1 <= normal <= sovereign <= keys, and sovereign <= keys - 1 with two
+  // or more keys.
+  normal_threshold : nat8;
+  sovereign_threshold : nat8;
+  // At least 24 hours and 72 hours, the sovereign one at least the normal
+  // one, neither over 30 days.
+  normal_delay_ns : nat64;
+  sovereign_delay_ns : nat64;
+  // Ed25519 keys whose releases take the release route. May be empty, with
+  // a threshold of 0: then every install takes the sovereign route.
+  release_signers : vec blob;
+  release_threshold : nat8;
+};
+
+// A key's signature over "b3wallet-controller/enroll", a NUL byte, and the
+// controller id, the wallet id and the key, each length-prefixed.
+type Proof = record {
+  public_key : blob;
+  signature : blob;
+};
+
+// A key's signature over an operation's approve or cancel message.
+type Signed = record {
+  public_key : blob;
+  signature : blob;
+};
+
+type InstallMode = variant {
+  Upgrade : record { skip_pre_upgrade : bool };
+  // Erases the wallet's state; only on the sovereign route.
+  Reinstall;
+};
+
+type InstallCode = record {
+  mode : InstallMode;
+  wasm_sha256 : blob;
+  // One SHA-256 per chunk of at most 1 MiB, in install order; 1 to 100.
+  chunk_hashes : vec blob;
+  // At most 64 KiB.
+  arg : blob;
+  // A release the policy's release signers signed for this module: the
+  // release route. Only with an upgrade that runs pre_upgrade.
+  release : opt ReleaseManifest;
+};
+
+type OperationKind = variant {
+  InstallCode : InstallCode;
+  // Replaces the whole policy; proofs holds a proof for each new key.
+  SetPolicy : record { policy : Policy; proofs : vec Proof };
+  // Hands the wallet to a controller that runs module_hash, has no
+  // controller, and serves this wallet with the policy policy_sha256 names.
+  ReplaceController : record {
+    controller : principal;
+    module_hash : blob;
+    policy_sha256 : blob;
+  };
+};
+
+// What keys approve. Every field is in the digest.
+type Operation = record {
+  controller : principal;
+  wallet : principal;
+  policy_version : nat64;
+  // The controller's next nonce when it is proposed; also its id.
+  nonce : nat64;
+  // Within 60 days of the proposal.
+  expires_at_ns : nat64;
+  kind : OperationKind;
+};
+
+type Route = variant { Release; Sovereign };
+
+type ControllerInit = record {
+  wallet : principal;
+  policy : Policy;
+  // One for every key of the policy.
+  proofs : vec Proof;
+};
+
+// Installed once, never upgraded.
+type ControllerArg = variant { Init : ControllerInit };
+
+type ExecutionStep = variant {
+  Checking;
+  Stopping;
+  // A reinstall uninstalls the wallet's code instead of stopping it.
+  Uninstalling;
+  // The controller gives the wallet the cycles it lacks for the install.
+  ToppingUp;
+  Staging;
+  Installing;
+  Starting;
+  HandingOver;
+};
+
+// The controller's subnet, and its settings and cycles as the IC's
+// canister_status gives them. A wallet is handed only to a controller on
+// its own subnet with no controller, a freezing threshold of 30 to 365
+// days, no allocations, a reserved cycles limit of at least 5T and a Wasm
+// memory limit of none or at least 1 GiB.
+type Health = record {
+  subnet : principal;
+  controllers : vec principal;
+  freezing_threshold : nat;
+  reserved_cycles_limit : nat;
+  wasm_memory_limit : nat;
+  memory_allocation : nat;
+  compute_allocation : nat;
+  cycles : nat;
+  idle_cycles_burned_per_day : nat;
+};
+
+type Execution = record {
+  // None while the controller only starts the wallet again.
+  operation : opt nat64;
+  step : ExecutionStep;
+  // When the step began.
+  since_ns : nat64;
+};
+
+type ControllerState = record {
+  wallet : principal;
+  policy : Policy;
+  // 1 at install; each executed SetPolicy adds one.
+  policy_version : nat64;
+  policy_sha256 : blob;
+  next_nonce : nat64;
+  // The controller the wallet was handed to; this one then acts no more.
+  replaced_by : opt principal;
+  execution : opt Execution;
+  // The controller stopped the wallet and has not started it again.
+  wallet_stopped : bool;
+  cycles : nat;
+};
+
+type OperationStatus = variant {
+  Approving;
+  Waiting : record { ready_at_ns : nat64 };
+  Ready;
+  Executed : record { at_ns : nat64 };
+  Cancelled : record { by : blob; at_ns : nat64 };
+  Expired;
+  // The policy changed, or the wallet was handed over, before it ran.
+  Stale;
+};
+
+type OperationView = record {
+  id : nat64;
+  operation : Operation;
+  digest : blob;
+  route : Route;
+  threshold : nat8;
+  delay_ns : nat64;
+  // The keys whose approvals count, in the order they came.
+  approvals : vec blob;
+  proposed_by : blob;
+  proposed_at_ns : nat64;
+  // When the threshold was met and the delay started.
+  approved_at_ns : opt nat64;
+  // The chunks of an open InstallCode the controller does not hold yet.
+  missing_chunks : vec nat32;
+  status : OperationStatus;
+  // How many executions started; a failed one leaves it open.
+  attempts : nat32;
+  last_error : opt text;
+};
+
+// Newest first: up to limit, at most 10, before `before`, or from the
+// newest.
+type OperationsRequest = record {
+  before : opt nat64;
+  limit : nat8;
+};
+
+type UploadChunk = record {
+  operation : nat64;
+  index : nat32;
+  chunk : blob;
+};
+
+type ControllerError = variant {
+  // The caller is no recovery key, or the call is not allowed now.
+  Forbidden : text;
+  InvalidArgument : text;
+  NotFound : text;
+  // A signature that does not verify, or a key the policy does not hold.
+  BadSignature : text;
+  // The operation ran, was cancelled, expired or went stale.
+  Closed : OperationStatus;
+  QuorumNotMet : record { approvals : nat8; threshold : nat8 };
+  TimelockActive : record { ready_at_ns : nat64 };
+  ChunksMissing : vec nat32;
+  // `canister` can spend `available` cycles above its freezing reserve and
+  // the execution needs `needed`. Anyone can top it up.
+  InsufficientCycles : record {
+    canister : principal;
+    available : nat;
+    needed : nat;
+  };
+  ExecutionInProgress : record { operation : opt nat64 };
+  // A step failed; the wallet runs again and the operation stays open.
+  ExecutionFailed : text;
+  // The wallet was handed to this controller.
+  Replaced : principal;
+};
+
+type OperationResult = variant { Ok : OperationView; Err : ControllerError };
+type UploadResult = variant { Ok : vec nat32; Err : ControllerError };
+type StartResult = variant { Ok; Err : ControllerError };
+
+service : (ControllerArg) -> {
+  // A message from outside the IC is taken only from a recovery key, for
+  // every method: the controller pays for each message it takes. Anyone may
+  // read these three with a query call, which is not a message, and any
+  // canister may call them.
+  state : () -> (ControllerState) query;
+  operation : (nat64) -> (opt OperationView) query;
+  operations : (OperationsRequest) -> (vec OperationView) query;
+  // Any canister, and any recovery key: an update, since it asks the IC.
+  health : () -> (Health);
+
+  // Recovery keys only: the caller must be a key's self-authenticating
+  // principal. Calls from anyone else, the wallet included, are refused
+  // before their arguments are read.
+  //
+  // Proposes an operation with zero or more approvals.
+  propose : (Operation, vec Signed) -> (OperationResult);
+  approve : (nat64, vec Signed) -> (OperationResult);
+  // Any key cancels an open operation, except a SetPolicy that removes it.
+  cancel : (nat64, Signed) -> (OperationResult);
+  // Returns the chunks still missing.
+  upload_chunk : (UploadChunk) -> (UploadResult);
+  // Runs an operation whose threshold is met and whose delay passed.
+  execute : (nat64) -> (OperationResult);
+  // Starts the wallet if an execution that stopped it ended without
+  // starting it; the controller's timer also does this.
+  start_wallet : () -> (StartResult);
+};

@@ -16,6 +16,7 @@ import { Reading, useMe } from "./member.tsx"
 import { useNowNs } from "./now.ts"
 import { HomeOutline } from "./outline.tsx"
 import { Members, Rules } from "./people.tsx"
+import { Recovery } from "./recovery.tsx"
 import { Release } from "./release.tsx"
 import { SignIn } from "./session.tsx"
 import { dateOf } from "./time.ts"
@@ -139,6 +140,7 @@ function Dashboard({
         <div className="stack">
           <Members me={me} members={members} />
           <Rules wallet={id} members={members.data} />
+          <Recovery wallet={id} me={me} />
         </div>
       </div>
     </div>

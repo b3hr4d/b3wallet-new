@@ -42,6 +42,7 @@ use policy::{DAY_NS, Spend};
 use release::ReleaseManifest;
 use serde_bytes::ByteBuf;
 use storage::{StoredAuditEntry, StoredMember, StoredTransfer};
+use transfers::CallFailure;
 
 #[ic_cdk::init]
 fn init(arg: WalletArg) {
@@ -322,6 +323,14 @@ fn propose(action: Action) -> Result<Pending, WalletError> {
             upgrade::check_action(version, wasm_sha256)?;
             None
         }
+        Action::HandOverControl {
+            controller,
+            controller_module_hash,
+            controller_policy_sha256,
+        } => {
+            check_hand_over(controller, controller_module_hash, controller_policy_sha256)?;
+            None
+        }
         _ => {
             governance.check(&action, caller, now)?;
             None
@@ -456,6 +465,21 @@ async fn execute(id: ActionId) -> Result<Pending, WalletError> {
     } = pending.action.clone()
     {
         return execute_upgrade(id, pending, version, wasm_sha256, now).await;
+    }
+    if let Action::HandOverControl {
+        controller,
+        controller_module_hash,
+        controller_policy_sha256,
+    } = pending.action.clone()
+    {
+        return execute_hand_over(
+            id,
+            pending,
+            controller,
+            controller_module_hash,
+            controller_policy_sha256,
+        )
+        .await;
     }
     if let Action::Transfer(request) = pending.action.clone() {
         // Accounts are never deleted, so the account it was proposed from is
@@ -1087,6 +1111,175 @@ async fn upgrade_steps(
     storage::set_action(id, pending);
     schedule_timer(now);
     Ok(())
+}
+
+/// Checks the form of a `HandOverControl`: the controller is another
+/// canister, and both hashes are SHA-256 hashes.
+fn check_hand_over(
+    controller: &Principal,
+    module_hash: &[u8],
+    policy_sha256: &[u8],
+) -> Result<(), WalletError> {
+    if !recovery::is_canister_id(controller) || *controller == ic_cdk::api::canister_self() {
+        return Err(WalletError::InvalidArgument(
+            "the controller must be another canister".to_string(),
+        ));
+    }
+    if module_hash.len() != 32 || policy_sha256.len() != 32 {
+        return Err(WalletError::InvalidArgument(
+            "controller_module_hash and controller_policy_sha256 must be 32 bytes".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+thread_local! {
+    /// Whether a `HandOverControl` execution waits for an answer. On the
+    /// heap: no install goes out while it waits, since its calls count as
+    /// in flight.
+    static HANDING_OVER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Marks a `HandOverControl` execution in flight until it returns, or until
+/// code after one of its calls traps: ic-cdk then drops the call's future,
+/// and with it this guard, and keeps what the guard writes.
+struct HandingOver;
+
+impl HandingOver {
+    fn start() -> Result<HandingOver, WalletError> {
+        if HANDING_OVER.get() {
+            return Err(WalletError::Forbidden(
+                "a HandOverControl action is executing; try again once it returns".to_string(),
+            ));
+        }
+        HANDING_OVER.set(true);
+        Ok(HandingOver)
+    }
+}
+
+impl Drop for HandingOver {
+    fn drop(&mut self) {
+        HANDING_OVER.set(false);
+    }
+}
+
+/// Hands the wallet to a recovery controller (decision 0009). A check that
+/// fails ends the action `Failed`; a call that fails leaves it ready, and
+/// an execution after a hand-over whose answer was lost finds the wallet
+/// already handed over and ends it `Executed`.
+async fn execute_hand_over(
+    id: ActionId,
+    pending: StoredPending,
+    controller: Principal,
+    module_hash: ByteBuf,
+    policy_sha256: ByteBuf,
+) -> Result<Pending, WalletError> {
+    let caller = ic_cdk::api::msg_caller();
+    let in_flight = HandingOver::start()?;
+    storage::set_action(id, pending);
+    let result = hand_over_steps(id, controller, &module_hash, &policy_sha256).await;
+    drop(in_flight);
+
+    let now = ic_cdk::api::time();
+    let mut pending = stored_action(id)?;
+    match result {
+        // The wallet belongs to the controller now, whatever happened to the
+        // action meanwhile.
+        Ok(()) => pending.finish(Ok(Outcome::Done)),
+        Err(Step::Fails(reason)) if pending.is_open(now) => pending.finish(Err(reason)),
+        Err(Step::Fails(reason)) => return Err(WalletError::Forbidden(reason)),
+        Err(Step::Stops(error)) => return Err(error),
+    }
+    storage::set_action(id, pending.clone());
+    audit(caller, AuditEvent::Executed(id), now);
+    Ok(pending.view(id, now))
+}
+
+/// Re-reads `HandOverControl` action `id` after a call, and goes on only if
+/// it may still run.
+fn resume_hand_over(id: ActionId) -> Result<(), Step> {
+    let mut pending = stored_action(id)?;
+    if let Err(error) = pending.check_executable(id, ic_cdk::api::time()) {
+        storage::set_action(id, pending);
+        return Err(Step::Stops(error));
+    }
+    Ok(())
+}
+
+/// The checks of a `HandOverControl`, then its one change: the controller
+/// must run the approved module, have been installed once and fresh with no
+/// controller left, serve this wallet with the approved policy and have run
+/// nothing yet, and run on this wallet's subnet with settings that cannot
+/// strand the wallet.
+async fn hand_over_steps(
+    id: ActionId,
+    controller: Principal,
+    module_hash: &[u8],
+    policy_sha256: &[u8],
+) -> Result<(), Step> {
+    let itself = ic_cdk::api::canister_self();
+    let wallet = management::info(itself, 0).await.map_err(chain_error)?;
+    resume_hand_over(id)?;
+    if wallet.controllers == [controller] {
+        return Ok(());
+    }
+    if !wallet.controllers.contains(&itself) {
+        return Err(Step::Stops(WalletError::Forbidden(
+            "the wallet is not its own controller, so it cannot hand itself over".to_string(),
+        )));
+    }
+    let info = management::info(controller, recovery::history::MAX_CHANGES)
+        .await
+        .map_err(chain_error)?;
+    resume_hand_over(id)?;
+    recovery::history::check_fresh_controller(&info, module_hash)
+        .map_err(|reason| Step::Fails(format!("controller {controller}: {reason}")))?;
+    let state: recovery::controller::ControllerState =
+        calls::call_without_args(controller, format!("controller {controller}"), "state")
+            .await
+            .map_err(|failure| chain_error(calls::reason(failure)))?;
+    resume_hand_over(id)?;
+    if state.wallet != itself {
+        return Err(Step::Fails(format!(
+            "controller {controller} serves wallet {}, not this one",
+            state.wallet
+        )));
+    }
+    if state.policy_sha256.as_slice() != policy_sha256 {
+        return Err(Step::Fails(format!(
+            "controller {controller} holds another policy than the approved one"
+        )));
+    }
+    if let Some(next) = state.replaced_by {
+        return Err(Step::Fails(format!(
+            "controller {controller} handed this wallet to {next} already"
+        )));
+    }
+    if state.policy_version != 1 || state.next_nonce != 1 {
+        return Err(Step::Fails(format!(
+            "controller {controller} has changed its policy or taken operations already; hand \
+             the wallet only to a controller as its install left it"
+        )));
+    }
+    // Nobody can change a controller's settings once it has no controller,
+    // and a controller on another subnet adds one the wallet depends on.
+    let health: recovery::controller::Health =
+        calls::call_without_args(controller, format!("controller {controller}"), "health")
+            .await
+            .map_err(|failure| chain_error(calls::reason(failure)))?;
+    resume_hand_over(id)?;
+    health
+        .check(ic_cdk::api::subnet_self())
+        .map_err(|reason| Step::Fails(format!("controller {controller}: {reason}")))?;
+    // One call sets exactly one controller, which drops the wallet itself.
+    management::set_controllers(vec![controller])
+        .await
+        .map_err(|failure| match failure {
+            CallFailure::NotRun(reason) => chain_error(reason),
+            CallFailure::Unknown(reason) => chain_error(format!(
+                "{reason}; the hand-over may have run: execute the action again to find out"
+            )),
+        })
 }
 
 /// Stops an upgrade unless the wallet can spend `needed` cycles above what it

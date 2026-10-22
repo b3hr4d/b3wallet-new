@@ -134,6 +134,14 @@ pub enum Action {
         version: String,
         wasm_sha256: ByteBuf,
     },
+    /// Makes `controller`, a recovery controller (decision 0009), the
+    /// wallet's only controller, under the `SetPolicy` rule. After it the
+    /// wallet cannot change its own code or controllers again.
+    HandOverControl {
+        controller: Principal,
+        controller_module_hash: ByteBuf,
+        controller_policy_sha256: ByteBuf,
+    },
 }
 
 #[derive(CandidType, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -255,7 +263,9 @@ impl Action {
             Action::ChangeRole { .. } => ActionKind::ChangeRole,
             Action::InstallExtension { .. } => ActionKind::InstallExtension,
             Action::UninstallExtension(_) => ActionKind::UninstallExtension,
-            Action::SetPolicy(_) => ActionKind::SetPolicy,
+            // Giving up control is approved like the policy, by the
+            // strongest rule.
+            Action::SetPolicy(_) | Action::HandOverControl { .. } => ActionKind::SetPolicy,
             Action::Upgrade { .. } => ActionKind::Upgrade,
         }
     }
