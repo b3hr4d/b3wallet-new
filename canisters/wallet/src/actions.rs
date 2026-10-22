@@ -154,10 +154,11 @@ impl BitcoinTx {
         self.settled == Some(true)
     }
 
-    /// The watch over this transaction, which spends `inputs` and pays
-    /// `change` back to its account.
-    pub fn watched(&self, inputs: Vec<[u8; 36]>, change: u64) -> btc::Watched {
+    /// The watch over this transaction, `txid`, which spends `inputs` and
+    /// pays `change` back to its account.
+    pub fn watched(&self, txid: [u8; 32], inputs: Vec<[u8; 36]>, change: u64) -> btc::Watched {
         btc::Watched {
+            txid,
             inputs,
             change,
             sends: self.sends.unwrap_or(1),
@@ -1394,7 +1395,7 @@ mod tests {
         pending.bitcoin_resent(T0 + HOUR_NS);
         let tx = pending.bitcoin_tx().unwrap();
         assert_eq!((tx.sends, tx.last_sent_ns), (Some(2), Some(T0 + HOUR_NS)));
-        let watched = tx.watched(vec![[1; 36]], 7);
+        let watched = tx.watched([2; 32], vec![[1; 36]], 7);
         assert_eq!(
             (watched.sends, watched.last_sent_ns, watched.change),
             (2, T0 + HOUR_NS, 7)

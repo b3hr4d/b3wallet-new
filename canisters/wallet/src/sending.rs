@@ -27,7 +27,7 @@ use crate::{
 };
 use candid::{Nat, Principal};
 use std::cell::Cell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 /// How often the timer settles while a transfer needs it.
 pub const SETTLE_EVERY_NS: u64 = 10 * 60 * 1_000_000_000;
@@ -603,12 +603,7 @@ fn observe(
     let Some(mut watch) = watched(&pending, account) else {
         return Next::Wait;
     };
-    let present: BTreeSet<[u8; 36]> = utxos.coins.iter().map(btc::Coin::key).collect();
-    // An input missing from an incomplete list may be on a page not read.
-    if !utxos.complete && !watch.unspent(&present) {
-        return Next::Wait;
-    }
-    let next = watch.observe(&present, utxos.tip_height, now);
+    let next = watch.observe(utxos, now);
     if next == Next::Settled {
         let tx = pending
             .bitcoin_tx()
@@ -652,7 +647,11 @@ fn watched(pending: &StoredPending, account: &StoredAccount) -> Option<btc::Watc
     let own = account.bitcoin_address().ok()?.script_pubkey();
     // A stored transaction always decodes: the wallet encoded it.
     let unsigned = btc::from_bytes(&tx.unsigned).ok()?;
-    Some(tx.watched(btc::spent_keys(&unsigned), btc::paid_to(&unsigned, &own)))
+    Some(tx.watched(
+        btc::txid_bytes(&unsigned),
+        btc::spent_keys(&unsigned),
+        btc::paid_to(&unsigned, &own),
+    ))
 }
 
 /// Sends the transaction of action `id` again. A transfer still open is

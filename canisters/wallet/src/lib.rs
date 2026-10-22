@@ -69,11 +69,11 @@ fn post_upgrade(arg: WalletArg) {
         ic_cdk::trap("an upgrade needs WalletArg::Upgrade");
     };
     let network = args.and_then(|args| args.bitcoin_network);
-    if let Some(has) = storage::config().and_then(|config| config.bitcoin_network)
-        && network.is_some_and(|asked| asked != has)
+    if let Some(fixed) = storage::fixed_bitcoin_network()
+        && network.is_some_and(|asked| asked != fixed)
     {
         ic_cdk::trap(format!(
-            "the wallet's Bitcoin network is {has:?}, and an upgrade cannot change it"
+            "the wallet's Bitcoin network is {fixed:?}, and its Bitcoin accounts keep it"
         ));
     }
     if let Err(reason) = storage::migrate(network).and_then(|()| storage::check()) {

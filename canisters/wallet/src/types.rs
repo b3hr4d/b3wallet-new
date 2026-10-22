@@ -21,8 +21,8 @@ pub struct InitArgs {
 
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct UpgradeArgs {
-    /// Sets the network of a wallet installed before it had one; an upgrade
-    /// never changes a network it has.
+    /// Sets the network of a wallet that has no Bitcoin account yet; once it
+    /// has one, an upgrade never changes it.
     pub bitcoin_network: Option<BitcoinNetwork>,
 }
 

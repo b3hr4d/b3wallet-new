@@ -24,7 +24,8 @@ use wallet::{
     Account, AccountHolder, AccountKind, Action, ActionId, ActionKind, ActionState, AddAccountArgs,
     AuditEntry, AuditEvent, AuditRequest, Balance, BitcoinNetwork, Chain, ClaimArgs, DailyLimit,
     InitArgs, Member, NOT_A_MEMBER, NOT_A_PROPOSER, NOT_AN_APPROVER, NOT_AN_OWNER, NOT_CLAIMED,
-    Outcome, Pending, Policy, Role, Status, TransferRequest, UpgradeState, WalletArg, WalletError,
+    Outcome, Pending, Policy, Role, Status, TransferRequest, UpgradeArgs, UpgradeState, WalletArg,
+    WalletError,
 };
 
 const DAY_NS: u64 = 24 * 60 * 60 * 1_000_000_000;
@@ -1928,6 +1929,12 @@ fn a_wallet_starts_with_an_internet_computer_account_and_counts_indices_per_kind
         .collect();
     assert_eq!(added, [(Some(owner), AuditEvent::AccountAdded(2))]);
     assert_eq!(status(&pic, id).bitcoin_network, BitcoinNetwork::Mainnet);
+    // With no Bitcoin account yet, an upgrade may set another network.
+    let testnet = WalletArg::Upgrade(Some(UpgradeArgs {
+        bitcoin_network: Some(BitcoinNetwork::Testnet),
+    }));
+    upgrade(&pic, id, &testnet).unwrap();
+    assert_eq!(status(&pic, id).bitcoin_network, BitcoinNetwork::Testnet);
 }
 
 #[test]
@@ -2947,6 +2954,15 @@ fn a_bitcoin_account_receives_at_its_keys_address_and_sends_once() {
     assert_eq!(net.balance(savings.id), BTC);
     assert_eq!(net.balance(main.id), change);
 
+    // Its Bitcoin accounts keep the network: an upgrade cannot change it.
+    let mainnet = WalletArg::Upgrade(Some(UpgradeArgs {
+        bitcoin_network: Some(BitcoinNetwork::Mainnet),
+    }));
+    let refused = upgrade(&net.pic, net.wallet, &mainnet).unwrap_err();
+    assert!(
+        refused.contains("its Bitcoin accounts keep it"),
+        "{refused}"
+    );
     // The keys are the same after an upgrade: the savings account spends.
     upgrade(&net.pic, net.wallet, &WalletArg::Upgrade(None)).unwrap();
     assert_eq!(

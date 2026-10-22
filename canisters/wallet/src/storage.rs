@@ -263,6 +263,26 @@ pub fn bitcoin_network() -> BitcoinNetwork {
         .unwrap_or(BitcoinNetwork::Mainnet)
 }
 
+/// The wallet's Bitcoin network once it has a Bitcoin account, which an
+/// upgrade can no longer change. Until then an upgrade may set it, so a
+/// wallet that took the wrong one gets its default Bitcoin account on the
+/// right one. Reads accounts stored before kinds too.
+pub fn fixed_bitcoin_network() -> Option<BitcoinNetwork> {
+    let first =
+        accounts()
+            .into_iter()
+            .find_map(|(_, account)| match (account.kind, account.chain) {
+                (Some(AccountKind::Bitcoin(network)), _)
+                | (None, Some(Chain::Bitcoin(network))) => Some(network),
+                _ => None,
+            })?;
+    Some(
+        config()
+            .and_then(|config| config.bitcoin_network)
+            .unwrap_or(first),
+    )
+}
+
 /// The tracked assets, ICP first.
 pub fn tracked() -> Vec<Chain> {
     TRACKED
@@ -550,10 +570,11 @@ pub fn complete_claim(owner: Principal, member: StoredMember) {
 /// - Accounts stored before kinds get theirs (see `accounts::migrate`), and
 ///   the transfers proposed from them the asset they send and the account
 ///   they now name. The ICRC-1 ledgers of the old accounts become tracked.
-/// - A wallet with no Bitcoin network takes `network`, else the network of
-///   its first Bitcoin account, else mainnet.
-/// - Bitcoin transactions that may have been sent before the wallet
-///   watched them are watched.
+/// - A wallet with a Bitcoin account keeps its Bitcoin network, or takes
+///   that of its first Bitcoin account; one without takes `network`, else
+///   keeps its own, else mainnet.
+/// - Transfers that may have run unseen, and Bitcoin transactions that may
+///   have been sent, are settled from now on.
 pub fn migrate(network: Option<BitcoinNetwork>) -> Result<(), String> {
     if POLICY.with_borrow(|cell| cell.get().is_none()) {
         set_policy(default_policy());
@@ -565,14 +586,13 @@ pub fn migrate(network: Option<BitcoinNetwork>) -> Result<(), String> {
         }
     });
     let mut config = config().ok_or("stable memory holds no configuration")?;
-    if config.bitcoin_network.is_none() {
-        let first = accounts()
-            .into_iter()
-            .find_map(|(_, account)| match account.kind {
-                Some(AccountKind::Bitcoin(network)) => Some(network),
-                _ => None,
-            });
-        config.bitcoin_network = Some(network.or(first).unwrap_or(BitcoinNetwork::Mainnet));
+    // `post_upgrade` refuses a `network` other than a fixed one.
+    let chosen = fixed_bitcoin_network()
+        .or(network)
+        .or(config.bitcoin_network)
+        .unwrap_or(BitcoinNetwork::Mainnet);
+    if config.bitcoin_network != Some(chosen) {
+        config.bitcoin_network = Some(chosen);
         set_config(config);
     }
     if TRACKED.with_borrow(|cell| cell.get().is_none()) {
@@ -583,8 +603,11 @@ pub fn migrate(network: Option<BitcoinNetwork>) -> Result<(), String> {
     if !migration.held.is_empty() {
         migrate_transfers(&migration.held);
     }
-    let reserved: BTreeSet<ActionId> = RESERVED.with_borrow(|reserved| reserved.values().collect());
-    for id in reserved {
+    // A transfer that needs settling is open, or its transaction reserves
+    // outputs.
+    let mut candidates: BTreeSet<ActionId> = OPEN.with_borrow(|open| open.keys().collect());
+    candidates.extend(RESERVED.with_borrow(|reserved| reserved.values().collect::<Vec<_>>()));
+    for id in candidates {
         if let Some(pending) = action(id)
             && pending.needs_settling()
         {
@@ -854,6 +877,8 @@ mod tests {
             ..sent(Chain::Icrc(ledger(2)), 5, None, 5)
         });
 
+        // An account stored before kinds fixes the network too.
+        assert_eq!(fixed_bitcoin_network(), Some(BitcoinNetwork::Testnet));
         migrate(None).unwrap();
         assert_eq!(check(), Ok(()));
         assert_eq!(bitcoin_network(), BitcoinNetwork::Testnet);
@@ -910,7 +935,7 @@ mod tests {
         let mut config = config_value();
         config.bitcoin_network = None;
         set_config(config);
-        add_account(legacy_account(Chain::Bitcoin(BitcoinNetwork::Testnet), 0));
+        add_account(legacy_account(Chain::Icp, 0));
         migrate(Some(BitcoinNetwork::Regtest)).unwrap();
         assert_eq!(bitcoin_network(), BitcoinNetwork::Regtest);
     }
@@ -1147,6 +1172,7 @@ mod tests {
                 txid: [*seed; 32],
                 vout: u32::from(*seed),
                 value: 10_000,
+                height: 1,
                 mature: true,
             })
             .collect();
@@ -1230,5 +1256,53 @@ mod tests {
         pending.finish(Err("too old".to_string()));
         set_action(id, pending);
         assert!(unsettled().is_empty());
+    }
+
+    #[test]
+    fn the_migration_settles_what_an_older_release_left_unknown() {
+        set_config(config_value());
+        // A ledger call and a Bitcoin send that may have run, as a release
+        // that did not settle them on its own stored them.
+        let mut ledger = transfer_from(1);
+        ledger.state = ActionState::Ready;
+        let ledger_id = add_action(ledger.clone());
+        ledger.begin_transfer(10, || 10);
+        ledger.lose_transfer_call();
+        set_action(ledger_id, ledger);
+        let (mut bitcoin, keys) = bitcoin_transfer(&[6]);
+        let bitcoin_id = add_action(bitcoin.clone());
+        reserve(&keys, bitcoin_id);
+        bitcoin.bitcoin_sending(1);
+        set_action(bitcoin_id, bitcoin);
+        for id in unsettled() {
+            UNSETTLED.with_borrow_mut(|unsettled| unsettled.remove(&id));
+        }
+
+        migrate(None).unwrap();
+        let mut settling = unsettled();
+        settling.sort();
+        assert_eq!(settling, [ledger_id, bitcoin_id]);
+    }
+
+    #[test]
+    fn an_upgrade_sets_the_bitcoin_network_until_the_wallet_has_a_bitcoin_account() {
+        set_config(config_value());
+        assert_eq!(fixed_bitcoin_network(), None);
+        migrate(Some(BitcoinNetwork::Testnet)).unwrap();
+        assert_eq!(bitcoin_network(), BitcoinNetwork::Testnet);
+        // Without a network, it keeps its own.
+        migrate(None).unwrap();
+        assert_eq!(bitcoin_network(), BitcoinNetwork::Testnet);
+        add_account(StoredAccount::new(
+            AccountKind::Bitcoin(BitcoinNetwork::Testnet),
+            "Main".to_string(),
+            0,
+            None,
+            None,
+            0,
+        ));
+        assert_eq!(fixed_bitcoin_network(), Some(BitcoinNetwork::Testnet));
+        migrate(None).unwrap();
+        assert_eq!(bitcoin_network(), BitcoinNetwork::Testnet);
     }
 }

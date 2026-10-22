@@ -24,9 +24,9 @@ type InitArgs = record {
 };
 
 type UpgradeArgs = record {
-  // Sets the network of a wallet that has none; an upgrade never changes it.
-  // Without one, a wallet takes the network of its first Bitcoin account,
-  // or mainnet.
+  // Sets the network of a wallet that has no Bitcoin account yet; once it
+  // has one, an upgrade never changes it. Without one, a wallet keeps its
+  // network, or takes that of its first Bitcoin account, or mainnet.
   bitcoin_network : opt BitcoinNetwork;
 };
 

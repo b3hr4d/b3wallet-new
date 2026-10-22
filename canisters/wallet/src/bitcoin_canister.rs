@@ -69,6 +69,7 @@ pub async fn coins(network: BitcoinNetwork, address: String) -> Result<Utxos, St
             txid: utxo.outpoint.txid.into(),
             vout: utxo.outpoint.vout,
             value: utxo.value,
+            height: utxo.height,
             mature: btc::mature(utxo.height, tip_height),
         }));
         match page.next_page {
