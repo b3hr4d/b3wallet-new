@@ -5,6 +5,7 @@ import {
   amountText,
   bitcoinToken,
   chainText,
+  cyclesText,
   ledgerOf,
   readAmount,
   tokenOf,
@@ -71,4 +72,12 @@ test("chains name their ledger and their token", () => {
   assert.equal(chainText({ tag: "Icrc", value: ledger }), `ICRC-1 token of ledger ${ledger}`)
   assert.deepEqual(bitcoinToken({ tag: "Mainnet" }), { symbol: "BTC", decimals: 8, fee: null })
   assert.equal(bitcoinToken({ tag: "Testnet" }).symbol, "testnet BTC")
+})
+
+test("cycles read in trillions, rounded to a hundredth either way", () => {
+  assert.equal(cyclesText(290_850_696_536n, "down"), "0.29T cycles")
+  assert.equal(cyclesText(290_850_696_536n, "up"), "0.3T cycles")
+  assert.equal(cyclesText(320_000_000_000n, "up"), "0.32T cycles")
+  assert.equal(cyclesText(1_500_000_000_000n, "down"), "1.5T cycles")
+  assert.equal(cyclesText(4_000_000_000n, "down"), "0T cycles")
 })

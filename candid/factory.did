@@ -27,7 +27,7 @@ type CreateWalletArgs = record {
   claim_expires_at_ns : nat64;
   // None installs the channel's latest release.
   version : opt text;
-  // At least 1T. The cycles ledger takes them, and its fee, out of the
+  // At least 5T. The cycles ledger takes them, and its fee, out of the
   // caller's account (from_subaccount, 32 bytes) with create_canister_from,
   // under the allowance the caller gave the factory for both. They become
   // the new wallet's balance, less the IC's fees to create and install it.

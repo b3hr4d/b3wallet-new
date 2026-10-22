@@ -13,7 +13,7 @@ import type {
   WalletError,
 } from "./generated/wallet.ts"
 import { dateOf, durationText } from "./time.ts"
-import { amountText, chainAmountText, chainText, type Token } from "./tokens.ts"
+import { amountText, chainAmountText, chainText, cyclesText, type Token } from "./tokens.ts"
 
 /** What a refusal of the wallet means, in a sentence. */
 export function walletErrorText(error: WalletError): string {
@@ -30,8 +30,10 @@ export function walletErrorText(error: WalletError): string {
       return "You are not a member of this wallet."
     case "UpgradeInProgress":
       return "The wallet is installing a new version. Try again in a few minutes."
-    case "InsufficientCycles":
-      return "The wallet is low on cycles."
+    case "InsufficientCycles": {
+      const { available, needed } = error.value
+      return `The wallet has ${cyclesText(available, "down")} to spend, and this needs ${cyclesText(needed, "up")}. Send it cycles, then try again.`
+    }
     case "QuorumNotMet":
       return `This needs ${error.value.quorum} approvals and has ${error.value.approvals}.`
     case "TimelockActive":

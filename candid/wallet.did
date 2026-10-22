@@ -346,7 +346,8 @@ type WalletError = variant {
   UpgradeInProgress;
   ReleaseRejected : text;
   ChainError : text;
-  InsufficientCycles;
+  // Cycles the wallet can spend above what it keeps to stay running.
+  InsufficientCycles : record { available : nat; needed : nat };
 };
 
 type MemberResult = variant { Ok : Member; Err : WalletError };

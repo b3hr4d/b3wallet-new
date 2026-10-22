@@ -314,26 +314,36 @@ instructions an update may use.
    quorum the timelock starts; the page shows a banner and any owner can
    reject.
 4. After the timelock, `execute` checks the manifest again as in step 2, and
-   that the wallet is its own controller, which the install needs. It then
-   fetches each chunk, checks its hash, and calls `upload_chunk` on the
-   wallet's own chunk store. A failed call stops the execution and keeps the
-   chunks staged so far, and executing again goes on from there. A release that
-   fails a check ends the action `Failed`.
-5. Once every chunk is staged, and no call of the wallet waits for its answer,
-   the wallet saves `Installing` with the expected hash and a deadline an hour
-   away, then sends `install_chunked_code` to itself one-way in the same
-   message. An awaited call would trap on the reply, and the reply to any call
-   still in flight would reach the new version's code. So while it is
-   `Installing` the wallet calls nobody, and refuses to execute actions and the
-   methods that call out.
+   that the wallet is its own controller, which the install needs. It checks
+   that it can spend what staging and installing cost, above what it keeps to
+   stay running: the IC holds back what the install's instruction limit would
+   cost, about 0.3T cycles on a 13-node subnet, and refuses an install the
+   canister cannot pay for. If it cannot, the execution stops with
+   `InsufficientCycles`, which says how many cycles the wallet can spend and
+   needs, and the action stays ready for after a top-up. It then fetches each
+   chunk, checks its hash, and calls `upload_chunk` on the wallet's own chunk
+   store. A failed call stops the execution and keeps the chunks staged so far,
+   and executing again goes on from there. A release that fails a check ends
+   the action `Failed`.
+5. Once every chunk is staged, no call of the wallet waits for its answer, and
+   the wallet can still pay for the install, it saves `Installing` with the
+   expected hash and a deadline an hour away, then sends `install_chunked_code`
+   to itself one-way in the same message. An awaited call would trap on the
+   reply, and the reply to any call still in flight would reach the new
+   version's code. So while it is `Installing` the wallet makes no call but
+   the install, and refuses to execute actions and the methods that call out.
 6. The new version's `post_upgrade` marks the upgrade done and ends its action
    `Executed`; a timer then clears the chunk store. If the install failed, the
    new version's `post_upgrade` trapped or the IC refused it, and the old code
-   is still running. At the deadline the old version's timer, or the next
-   `execute`, marks the upgrade and its action `Failed` and clears the chunk
-   store. An install that landed after its deadline would run with the upgrade
-   marked `Failed`; the module hash `canister_info` reports tells which
-   version runs.
+   is still running. The IC refuses an install for a few seconds after another
+   one on the same canister, and the one-way call never hears it, so the old
+   version's timer sends the install again 1, 3, 7, 15 and 31 minutes after the
+   first send; if the first had only not run yet, the new version installs
+   again and finds the upgrade done. At the deadline the old version's timer,
+   or the next `execute`, marks the upgrade and its action `Failed` and clears
+   the chunk store. An install that landed after its deadline would run with
+   the upgrade marked `Failed`; the module hash `canister_info` reports tells
+   which version runs.
 
 ### Serve a page
 
@@ -456,7 +466,7 @@ exists in canister memory, but whoever can install code can move every fund.
 | A compromised release channel or publisher | The channel publishes only a manifest two signers signed, with chunks that match it; wallets check both again themselves | It can withhold releases |
 | A malicious or compromised factory | It installs only a release two of the three signer keys signed, pins those keys in the wallet, and leaves each wallet its own only controller; a wallet's module hash and controllers are public in the IC's certified state | A factory whose controllers change its code can create wallets that run other code or that it still controls, and nothing checks a new wallet's module hash and controllers before the claim yet. Wallets already handed over are out of its reach |
 | Strangers calling the factory | `create_wallet` checks its arguments and the release before the creator pays; the creator pays the wallet's cycles | Each call costs the factory cycles: a refused one a channel read and the signature checks, and each wallet about 8.5B for the factory's calls, which the creator does not pay |
-| An upgrade that bricks the wallet | One-way install keeps the old code when `post_upgrade` traps, and the wallet marks the upgrade `Failed` an hour later; `tested_from` refuses untested paths; every release is tested over the last two versions | No rescue if a release breaks its own upgrade method ([decision 0005](decisions/0005-rescue-path.md)) |
+| An upgrade that bricks the wallet | One-way install keeps the old code when `post_upgrade` traps, the wallet sends an install the IC refused again, and marks the upgrade `Failed` an hour later; an upgrade the wallet cannot pay for stops before it stages; `tested_from` refuses untested paths; every release is tested over the last two versions | No rescue if a release breaks its own upgrade method ([decision 0005](decisions/0005-rescue-path.md)) |
 | One owner's device or anchor stolen | Quorum and timelock above the daily limit; any owner can reject; removing an owner needs the others | Losses up to the daily limit |
 | Claim link intercepted | Private key only in the fragment; one use; expiry; the signature names the caller | Whoever opens the link first owns the wallet |
 | Injected script or phishing on the wallet's page | Every byte certified; no third-party scripts; CSP `script-src 'self'`, `frame-src 'none'`, `frame-ancestors 'none'`; the UI is prerendered at build and ships inside the signed release, with no per-user data in HTML | Look-alike domains; the browser trusts the HTTP gateway to verify the page |

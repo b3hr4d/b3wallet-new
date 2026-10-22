@@ -8,6 +8,7 @@ import {
   joinRequestText,
   sourceOf,
   stateText,
+  walletErrorText,
 } from "../src/describe.ts"
 import type { Account, Action, Pending } from "../src/generated/wallet.ts"
 import { dateOf, durationText } from "../src/time.ts"
@@ -204,4 +205,14 @@ test("an action shows what it sets beyond its sentence", () => {
   assert.deepEqual(actionDetails(memo), ["Memo: 0a0b."])
   assert.deepEqual(actionDetails(transfer.action), [])
   assert.deepEqual(actionDetails({ tag: "RemoveMember", value: owner }), [])
+})
+
+test("a wallet too short of cycles says what it has and what it needs", () => {
+  assert.equal(
+    walletErrorText({
+      tag: "InsufficientCycles",
+      value: { available: 290_850_696_536n, needed: 340_000_000_001n },
+    }),
+    "The wallet has 0.29T cycles to spend, and this needs 0.35T cycles. Send it cycles, then try again.",
+  )
 })
