@@ -44,7 +44,18 @@ const btc: Account = {
   holder: { tag: "Wallet" },
 }
 
+const evm: Account = {
+  id: 3,
+  kind: { tag: "Evm" },
+  label: "Main",
+  address: "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+  icp_account_id: null,
+  index: 0,
+  holder: { tag: "Wallet" },
+}
+
 const token: Chain = { tag: "Icrc", value: TOKEN_LEDGER as Pending["proposed_by"] }
+const base: Chain = { tag: "Evm", value: 8_453n }
 
 /**
  * A wallet that keeps what is proposed and refuses what the real one refuses
@@ -110,8 +121,11 @@ function setUp(options: { member?: boolean } = {}) {
         ),
       }
     }),
-    accounts: record("accounts", () => ({ tag: "Ok", value: [icp, btc] })),
-    assets: record("assets", () => ({ tag: "Ok", value: [{ tag: "Icp" }, token] })),
+    accounts: record("accounts", () => ({ tag: "Ok", value: [icp, btc, evm] })),
+    assets: record("assets", () => ({
+      tag: "Ok",
+      value: [{ tag: "Icp" }, { tag: "Evm", value: 1n }, token, base],
+    })),
     balance: record("balance", (id, asset) => ({
       tag: "Ok",
       value: {
@@ -274,6 +288,30 @@ test("a transfer is proposed in base units of the account's token, and waits", a
     value: { from: 1, asset: token, to: FRIEND, amount: 50_000_000n, fee: null, memo: null },
   })
   assert.equal(sent.what, `Send 0.5 ckBTC from account 1 (“main”) to ${FRIEND}`)
+
+  // An EVM transfer names its chain, by name or chain id, in 18 decimals.
+  for (const chain of ["base", "8453"]) {
+    const onBase = JSON.parse(
+      await run("wallet_propose_transfer", {
+        from: 3,
+        asset: chain,
+        to: evm.address,
+        amount: "0.25",
+      }),
+    )
+    assert.equal(onBase.what, `Send 0.25 ETH on Base from account 3 (“Main”) to ${evm.address}`)
+  }
+  assert.deepEqual(proposals[2], {
+    tag: "Transfer",
+    value: {
+      from: 3,
+      asset: base,
+      to: evm.address,
+      amount: 250_000_000_000_000_000n,
+      fee: null,
+      memo: null,
+    },
+  })
   client.dispose()
 })
 
@@ -291,8 +329,8 @@ test("an amount the token cannot hold is refused before anything is proposed", a
     )
   }
   await assert.rejects(
-    run("wallet_propose_transfer", { from: 3, to: FRIEND, amount: "1" }),
-    /the wallet has no account 3/,
+    run("wallet_propose_transfer", { from: 4, to: FRIEND, amount: "1" }),
+    /the wallet has no account 4/,
   )
   await assert.rejects(
     run("wallet_propose_transfer", { from: 1, to: FRIEND, amount: "1", memo: "x".repeat(33) }),
@@ -305,6 +343,21 @@ test("an amount the token cannot hold is refused before anything is proposed", a
   await assert.rejects(
     run("wallet_propose_transfer", { from: 1, asset: "BTC", to: FRIEND, amount: "1" }),
     /asset: “BTC” is neither ICP nor a ledger's canister id/,
+  )
+  for (const asset of [undefined, "BNB", "56"]) {
+    await assert.rejects(
+      run("wallet_propose_transfer", { from: 3, asset, to: evm.address, amount: "1" }),
+      /asset: an EVM account needs its chain, one of Ethereum, Sepolia/,
+    )
+  }
+  await assert.rejects(
+    run("wallet_propose_transfer", {
+      from: 3,
+      asset: "Ethereum",
+      to: evm.address,
+      amount: "0.0000000000000000001",
+    }),
+    /amount: /,
   )
   assert.deepEqual(proposals, [])
   client.dispose()
@@ -360,6 +413,17 @@ test("reads come back in the token's units", async () => {
         },
       ],
     },
+    {
+      id: 3,
+      label: "Main",
+      kind: "EVM: the native token of each tracked EVM chain, at one address",
+      address: evm.address,
+      icp_account_id: null,
+      assets: [
+        { asset: "Ethereum", name: "Ethereum", token: { symbol: "ETH", decimals: 18 } },
+        { asset: "Base", name: "Base", token: { symbol: "ETH on Base", decimals: 18 } },
+      ],
+    },
   ])
   const balance = JSON.parse(await run("wallet_balance", { account: 1 }))
   assert.equal(balance.amount, "10.5 ICP")
@@ -369,6 +433,9 @@ test("reads come back in the token's units", async () => {
   assert.equal(tokens.asset, `ICRC-1 token of ledger ${TOKEN_LEDGER}`)
   const bitcoin = JSON.parse(await run("wallet_balance", { account: 2 }))
   assert.equal(bitcoin.amount, "10.5 regtest BTC")
+  const ether = JSON.parse(await run("wallet_balance", { account: 3, asset: "Base" }))
+  assert.equal(ether.amount, "0.00000000105 ETH on Base")
+  assert.equal(ether.asset, "Base")
   assert.deepEqual(JSON.parse(await run("wallet_activity", { limit: 3 })), [
     {
       seq: "4",

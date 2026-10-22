@@ -5,9 +5,10 @@
 //! The path of account `n` of a kind, held by the wallet, is
 //! `wallet / kind / n`: the bytes `wallet`, the kind's name, and `n` as 4
 //! big-endian bytes. A Bitcoin account's kind names its network, so each
-//! network has keys of its own. The key itself is the subnet's: `key_1` for
-//! mainnet, `test_key_1` for testnet, and `dfx_test_key` on a local network
-//! and in PocketIC, where regtest runs.
+//! network has keys of its own; an EVM account's key is its address on every
+//! EVM chain. The key itself is the subnet's, by the wallet's Bitcoin
+//! network: `key_1` for mainnet, `test_key_1` for testnet, and
+//! `dfx_test_key` on a local network and in PocketIC, where regtest runs.
 
 use crate::BitcoinNetwork;
 use crate::calls::{self, call};
@@ -96,6 +97,15 @@ pub fn bitcoin(network: BitcoinNetwork, index: u32) -> KeyPath {
     }
 }
 
+/// The key of EVM account `index`, under the subnet key of a wallet on
+/// `network`.
+pub fn evm(network: BitcoinNetwork, index: u32) -> KeyPath {
+    KeyPath {
+        key: key_name(network),
+        path: path(b"evm", index),
+    }
+}
+
 impl KeyPath {
     fn key_id(&self) -> EcdsaKeyId {
         EcdsaKeyId {
@@ -171,6 +181,10 @@ mod tests {
             bitcoin(BitcoinNetwork::Mainnet, 0),
             bitcoin(BitcoinNetwork::Mainnet, 1)
         );
+        assert_eq!(
+            parts(&evm(BitcoinNetwork::Regtest, 7)),
+            [&b"wallet"[..], b"evm", &[0, 0, 0, 7]]
+        );
     }
 
     #[test]
@@ -178,5 +192,7 @@ mod tests {
         assert_eq!(bitcoin(BitcoinNetwork::Mainnet, 0).key, "key_1");
         assert_eq!(bitcoin(BitcoinNetwork::Testnet, 0).key, "test_key_1");
         assert_eq!(bitcoin(BitcoinNetwork::Regtest, 0).key, "dfx_test_key");
+        assert_eq!(evm(BitcoinNetwork::Mainnet, 0).key, "key_1");
+        assert_eq!(evm(BitcoinNetwork::Testnet, 0).key, "test_key_1");
     }
 }

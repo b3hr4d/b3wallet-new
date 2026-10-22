@@ -22,13 +22,13 @@
 //! An upgrade whose install was sent stays open until the new version or
 //! the install's deadline ends it, and cannot be rejected meanwhile.
 
-use crate::btc;
 use crate::calls::CallFailure;
 use crate::icrc::{DEDUP_WINDOW_NS, Reply, STALE_CALL_NS};
 use crate::policy::{DAY_NS, HOUR_NS, Terms};
 use crate::{
     AccountId, Action, ActionId, ActionState, Chain, Outcome, Pending, TxReceipt, WalletError,
 };
+use crate::{btc, evm};
 use candid::{CandidType, Nat, Principal};
 use serde::Deserialize;
 use serde_bytes::ByteBuf;
@@ -69,10 +69,13 @@ pub struct StoredPending {
     pub transfer: Option<TransferAttempt>,
     /// A Bitcoin transfer's transaction and its executions, once `execute`
     /// started one. Absent from actions stored before step 9.
-    pub bitcoin: Option<BitcoinAttempt>,
+    pub bitcoin: Option<Attempt<BitcoinTx>>,
     /// Whether an upgrade's install was sent. Absent from actions stored
     /// before step 11.
     pub upgrade_sent: Option<bool>,
+    /// An EVM transfer's transaction and its executions, once `execute`
+    /// started one. Absent from actions stored before step 17.
+    pub evm: Option<Attempt<EvmTx>>,
 }
 
 /// What the wallet knows of a transfer's calls to the ledger.
@@ -88,9 +91,10 @@ pub struct TransferAttempt {
     pub unknown: bool,
 }
 
-/// What the wallet knows of a Bitcoin transfer.
+/// What the wallet knows of a transfer that sends one transaction, built
+/// once: a Bitcoin or an EVM transfer.
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
-pub struct BitcoinAttempt {
+pub struct Attempt<T> {
     /// The executions started so far; the latest owns the transfer.
     pub executions: u64,
     /// When the execution in flight last went on after a call; `None` once
@@ -99,7 +103,34 @@ pub struct BitcoinAttempt {
     /// Whether the execution in flight is sending the transaction.
     pub sending: bool,
     /// The transaction, once built.
-    pub tx: Option<BitcoinTx>,
+    pub tx: Option<T>,
+}
+
+/// A transaction a transfer builds and signs. Once a send of it may have
+/// happened, it is only ever sent again as it is, so the chain runs it at
+/// most once.
+pub trait Tx: Clone {
+    /// Who a send hands it to.
+    const SENT_TO: &'static str;
+    /// Whether the next execution builds it again, with the fees of then,
+    /// while no send of it can have reached `SENT_TO`. A Bitcoin
+    /// transaction keeps the inputs it reserved instead.
+    const REBUILT_UNSENT: bool;
+    fn attempt(pending: &StoredPending) -> Option<&Attempt<Self>>;
+    fn attempt_mut(pending: &mut StoredPending) -> &mut Option<Attempt<Self>>;
+    /// Whether a send of it may have reached `SENT_TO`.
+    fn sent(&self) -> bool;
+    fn mark_sent(&mut self);
+    /// Counts a send of it at `now`.
+    fn count_send(&mut self, now: u64);
+    fn set_signed(&mut self, signed: Vec<u8>);
+    fn signed(&self) -> Option<Vec<u8>>;
+    /// The most it pays in fees, which counts toward the daily limit.
+    fn fee(&self) -> Nat;
+    /// Whether the wallet no longer watches it: the chain ran it for good,
+    /// or for good ran another in its place.
+    fn is_settled(&self) -> bool;
+    fn mark_settled(&mut self);
 }
 
 /// A Bitcoin transfer's transaction. It is built once, so every signature
@@ -129,12 +160,6 @@ pub struct BitcoinTx {
 }
 
 impl BitcoinTx {
-    /// Counts a send of it at `now`.
-    pub fn resent(&mut self, now: u64) {
-        self.sends = Some(self.sends.unwrap_or(0).saturating_add(1));
-        self.last_sent_ns = Some(now);
-    }
-
     /// A transaction just built: unsigned, and never sent.
     pub fn new(unsigned: Vec<u8>, values: Vec<u64>, fee: u64) -> Self {
         BitcoinTx {
@@ -148,10 +173,6 @@ impl BitcoinTx {
             spent_at_height: None,
             settled: None,
         }
-    }
-
-    pub fn is_settled(&self) -> bool {
-        self.settled == Some(true)
     }
 
     /// The watch over this transaction, `txid`, which spends `inputs` and
@@ -169,17 +190,219 @@ impl BitcoinTx {
     }
 }
 
-impl BitcoinAttempt {
+impl Tx for BitcoinTx {
+    const SENT_TO: &'static str = "the Bitcoin canister";
+    const REBUILT_UNSENT: bool = false;
+
+    fn attempt(pending: &StoredPending) -> Option<&Attempt<Self>> {
+        pending.bitcoin.as_ref()
+    }
+
+    fn attempt_mut(pending: &mut StoredPending) -> &mut Option<Attempt<Self>> {
+        &mut pending.bitcoin
+    }
+
+    fn sent(&self) -> bool {
+        self.sent
+    }
+
+    fn mark_sent(&mut self) {
+        self.sent = true;
+    }
+
+    fn count_send(&mut self, now: u64) {
+        self.sends = Some(self.sends.unwrap_or(0).saturating_add(1));
+        self.last_sent_ns = Some(now);
+    }
+
+    fn set_signed(&mut self, signed: Vec<u8>) {
+        self.signed = Some(ByteBuf::from(signed));
+    }
+
+    fn signed(&self) -> Option<Vec<u8>> {
+        self.signed.clone().map(ByteBuf::into_vec)
+    }
+
+    fn fee(&self) -> Nat {
+        Nat::from(self.fee)
+    }
+
+    fn is_settled(&self) -> bool {
+        self.settled == Some(true)
+    }
+
+    fn mark_settled(&mut self) {
+        self.settled = Some(true);
+    }
+}
+
+/// An EVM transfer's transaction: one EIP-1559 transfer of a chain's native
+/// token, built with its nonce. The chain runs one transaction of an account
+/// per nonce, so it runs this transfer at most once.
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct EvmTx {
+    pub chain_id: u64,
+    pub nonce: u64,
+    /// The recipient's 20 bytes.
+    pub to: ByteBuf,
+    /// In wei.
+    pub value: Nat,
+    pub gas_limit: u64,
+    pub max_fee_per_gas: Nat,
+    pub max_priority_fee_per_gas: Nat,
+    /// The most it pays beyond its gas, in wei: on an OP Stack chain, twice
+    /// what the fee oracle named for its L1 data and its operator when it
+    /// was built.
+    pub beyond_gas: Nat,
+    /// With its signature, once it verified.
+    pub signed: Option<ByteBuf>,
+    /// Whether a send of it may have reached a provider.
+    pub sent: bool,
+    /// How many times it was handed to the providers.
+    pub sends: u32,
+    pub last_sent_ns: u64,
+    /// How many times the wallet read how the chain stands with it, and
+    /// when it last did: each look comes later than the one before.
+    pub looks: u32,
+    pub last_look_ns: u64,
+    /// Whether the wallet read its receipt from a finalized block.
+    pub settled: bool,
+}
+
+impl EvmTx {
+    /// A transaction just built, which pays at most `beyond_gas` beyond
+    /// its gas: unsigned, and never sent.
+    pub fn new(tx: &evm::Transaction, beyond_gas: Nat) -> Self {
+        EvmTx {
+            chain_id: tx.chain_id,
+            nonce: tx.nonce,
+            to: ByteBuf::from(tx.to.to_vec()),
+            value: tx.value.clone(),
+            gas_limit: tx.gas_limit,
+            max_fee_per_gas: tx.max_fee_per_gas.clone(),
+            max_priority_fee_per_gas: tx.max_priority_fee_per_gas.clone(),
+            beyond_gas,
+            signed: None,
+            sent: false,
+            sends: 0,
+            last_sent_ns: 0,
+            looks: 0,
+            last_look_ns: 0,
+            settled: false,
+        }
+    }
+
+    /// Whether the wallet looks at how the chain stands with it at `now`.
+    pub fn look_due(&self, now: u64) -> bool {
+        now >= self
+            .last_look_ns
+            .saturating_add(evm::resend_wait(self.looks))
+    }
+
+    /// The transaction it signs and sends.
+    pub fn transaction(&self) -> evm::Transaction {
+        let mut to = [0; 20];
+        to.copy_from_slice(&self.to);
+        evm::Transaction {
+            chain_id: self.chain_id,
+            nonce: self.nonce,
+            max_priority_fee_per_gas: self.max_priority_fee_per_gas.clone(),
+            max_fee_per_gas: self.max_fee_per_gas.clone(),
+            gas_limit: self.gas_limit,
+            to,
+            value: self.value.clone(),
+        }
+    }
+
+    /// The most it pays in fees, in wei.
+    pub fn max_fee(&self) -> Nat {
+        self.transaction().max_fee() + self.beyond_gas.clone()
+    }
+}
+
+impl Tx for EvmTx {
+    const SENT_TO: &'static str = "an EVM provider";
+    const REBUILT_UNSENT: bool = true;
+
+    fn attempt(pending: &StoredPending) -> Option<&Attempt<Self>> {
+        pending.evm.as_ref()
+    }
+
+    fn attempt_mut(pending: &mut StoredPending) -> &mut Option<Attempt<Self>> {
+        &mut pending.evm
+    }
+
+    fn sent(&self) -> bool {
+        self.sent
+    }
+
+    fn mark_sent(&mut self) {
+        self.sent = true;
+    }
+
+    fn count_send(&mut self, now: u64) {
+        self.sends = self.sends.saturating_add(1);
+        self.last_sent_ns = now;
+    }
+
+    fn set_signed(&mut self, signed: Vec<u8>) {
+        self.signed = Some(ByteBuf::from(signed));
+    }
+
+    fn signed(&self) -> Option<Vec<u8>> {
+        self.signed.clone().map(ByteBuf::into_vec)
+    }
+
+    fn fee(&self) -> Nat {
+        self.max_fee()
+    }
+
+    fn is_settled(&self) -> bool {
+        self.settled
+    }
+
+    fn mark_settled(&mut self) {
+        self.settled = true;
+    }
+}
+
+impl<T: Tx> Attempt<T> {
+    /// Whether a send of its transaction may have happened.
+    fn may_have_sent(&self) -> bool {
+        self.sending || self.tx.as_ref().is_some_and(T::sent)
+    }
+
     /// The execution in flight will not go on; a send it started may have
-    /// reached the Bitcoin canister.
+    /// reached `T::SENT_TO`.
     fn lose(&mut self) {
         if self.sending
             && let Some(tx) = &mut self.tx
         {
-            tx.sent = true;
+            tx.mark_sent();
         }
         self.sending = false;
         self.in_flight_since_ns = None;
+    }
+}
+
+/// How a send of a transaction ended.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SendReply {
+    /// It was taken: the chain may run it.
+    Taken,
+    /// Nobody can have seen it.
+    NotRun(String),
+    /// It may have been taken.
+    Unknown(String),
+}
+
+impl From<Result<(), CallFailure>> for SendReply {
+    fn from(result: Result<(), CallFailure>) -> Self {
+        match result {
+            Ok(()) => SendReply::Taken,
+            Err(CallFailure::NotRun(reason)) => SendReply::NotRun(reason),
+            Err(CallFailure::Unknown(reason)) => SendReply::Unknown(reason),
+        }
     }
 }
 
@@ -209,6 +432,7 @@ impl StoredPending {
             transfer: None,
             bitcoin: None,
             upgrade_sent: None,
+            evm: None,
         };
         pending.release_at_quorum(now);
         pending
@@ -227,10 +451,10 @@ impl StoredPending {
 
     /// The expiry, or for a transfer whose latest call may have run, the end
     /// of the window in which the ledger finds it, if that is later. A
-    /// Bitcoin transfer stays open while an execution is in flight, and for
-    /// good once its transaction may have been sent.
+    /// Bitcoin or EVM transfer stays open while an execution is in flight,
+    /// and for good once its transaction may have been sent.
     fn open_until(&self) -> u64 {
-        if self.bitcoin_may_have_sent() || self.is_installing() {
+        if self.tx_may_have_sent() || self.is_installing() {
             return u64::MAX;
         }
         let ledger = match &self.transfer {
@@ -239,26 +463,33 @@ impl StoredPending {
                 .max(attempt.created_at_ns.saturating_add(DEDUP_WINDOW_NS)),
             _ => self.expires_at_ns,
         };
-        let bitcoin = self
-            .bitcoin
-            .as_ref()
-            .and_then(|attempt| attempt.in_flight_since_ns)
-            .map_or(0, |since| since.saturating_add(STALE_CALL_NS));
-        ledger.max(bitcoin)
+        let in_flight =
+            |since: Option<u64>| since.map_or(0, |since| since.saturating_add(STALE_CALL_NS));
+        let bitcoin = in_flight(
+            self.bitcoin
+                .as_ref()
+                .and_then(|attempt| attempt.in_flight_since_ns),
+        );
+        let evm = in_flight(
+            self.evm
+                .as_ref()
+                .and_then(|attempt| attempt.in_flight_since_ns),
+        );
+        ledger.max(bitcoin).max(evm)
     }
 
     /// Whether a ledger call of this transfer may have run unseen, or its
-    /// Bitcoin transaction may have been sent.
+    /// transaction may have been sent.
     pub fn may_have_sent(&self) -> bool {
         self.transfer
             .as_ref()
             .is_some_and(|attempt| attempt.unknown || attempt.in_flight_since_ns.is_some())
-            || self.bitcoin_may_have_sent()
+            || self.tx_may_have_sent()
     }
 
     /// Whether the wallet still settles this action on its own: a ledger
     /// call that may have run unseen, which it retries while the ledger can
-    /// find it, or a Bitcoin transaction that may have been sent and has not
+    /// find it, or a transaction that may have been sent and has not
     /// settled, which it watches.
     pub fn needs_settling(&self) -> bool {
         let open = matches!(self.state, ActionState::Waiting | ActionState::Ready);
@@ -267,32 +498,43 @@ impl StoredPending {
                 .transfer
                 .as_ref()
                 .is_some_and(|attempt| attempt.unknown || attempt.in_flight_since_ns.is_some());
-        let bitcoin =
-            self.bitcoin_may_have_sent() && self.bitcoin_tx().is_some_and(|tx| !tx.is_settled());
-        ledger || bitcoin
+        ledger || self.watches::<BitcoinTx>() || self.watches::<EvmTx>()
     }
 
-    /// Records that the inputs of this transfer's transaction stayed spent
-    /// for `btc::SETTLE_CONFIRMATIONS` blocks. Only that transaction spends
-    /// them, so the network confirmed it: a transfer still open ends
-    /// `Executed`, and any execution in flight stops. Returns whether it
-    /// ended now, when its transfer is to be recorded.
-    pub fn bitcoin_settled(
+    /// Whether this transfer's transaction of type `T` may have been sent
+    /// and has not settled.
+    pub fn watches<T: Tx>(&self) -> bool {
+        T::attempt(self).is_some_and(|attempt| {
+            attempt.may_have_sent() && attempt.tx.as_ref().is_some_and(|tx| !tx.is_settled())
+        })
+    }
+
+    fn tx_may_have_sent(&self) -> bool {
+        self.bitcoin.as_ref().is_some_and(Attempt::may_have_sent)
+            || self.evm.as_ref().is_some_and(Attempt::may_have_sent)
+    }
+
+    /// Records that the chain ran this transfer's transaction for good: a
+    /// transfer still open ends `Executed`, and any execution in flight
+    /// stops. Returns whether it ended now, when its transfer is to be
+    /// recorded.
+    pub fn settled<T: Tx>(
         &mut self,
         account: AccountId,
         chain: Chain,
         tx_id: String,
         now: u64,
     ) -> bool {
-        let Some(attempt) = &mut self.bitcoin else {
+        let open = matches!(self.state, ActionState::Waiting | ActionState::Ready);
+        let Some(attempt) = T::attempt_mut(self) else {
             return false;
         };
         let Some(tx) = &mut attempt.tx else {
             return false;
         };
-        tx.sent = true;
-        tx.settled = Some(true);
-        if !matches!(self.state, ActionState::Waiting | ActionState::Ready) {
+        tx.mark_sent();
+        tx.mark_settled();
+        if !open {
             return false;
         }
         attempt.executions += 1;
@@ -307,6 +549,29 @@ impl StoredPending {
         true
     }
 
+    /// Records that the chain settled this transfer without running its
+    /// transaction as sent, for `reason`: it reverted. The transfer ends
+    /// `Failed`, even one recorded `Executed` when a provider took it.
+    /// Returns whether it was recorded so.
+    pub fn settled_failed<T: Tx>(&mut self, reason: String) -> bool {
+        let executed = matches!(self.state, ActionState::Executed(_));
+        let Some(attempt) = T::attempt_mut(self) else {
+            return false;
+        };
+        let Some(tx) = &mut attempt.tx else {
+            return false;
+        };
+        tx.mark_sent();
+        tx.mark_settled();
+        attempt.executions += 1;
+        attempt.in_flight_since_ns = None;
+        attempt.sending = false;
+        if executed || matches!(self.state, ActionState::Waiting | ActionState::Ready) {
+            self.state = ActionState::Failed(reason);
+        }
+        executed
+    }
+
     /// Stores what the wallet saw of this transfer's transaction on the
     /// network.
     pub fn bitcoin_observed(&mut self, watched: &btc::Watched) {
@@ -319,21 +584,23 @@ impl StoredPending {
         }
     }
 
-    /// Counts a send of this executed transfer's transaction at `now`.
-    pub fn bitcoin_resent(&mut self, now: u64) {
-        if let Some(tx) = self
-            .bitcoin
-            .as_mut()
-            .and_then(|attempt| attempt.tx.as_mut())
-        {
-            tx.resent(now);
+    /// Counts a look at how the chain stands with this transfer's EVM
+    /// transaction, at `now`.
+    pub fn evm_looked(&mut self, now: u64) {
+        if let Some(tx) = self.evm.as_mut().and_then(|attempt| attempt.tx.as_mut()) {
+            tx.looks = tx.looks.saturating_add(1);
+            tx.last_look_ns = now;
         }
     }
 
-    fn bitcoin_may_have_sent(&self) -> bool {
-        self.bitcoin
-            .as_ref()
-            .is_some_and(|attempt| attempt.sending || attempt.tx.as_ref().is_some_and(|tx| tx.sent))
+    /// Counts a send of this executed transfer's transaction at `now`.
+    pub fn resent<T: Tx>(&mut self, now: u64) {
+        if let Some(tx) = T::attempt_mut(self)
+            .as_mut()
+            .and_then(|attempt| attempt.tx.as_mut())
+        {
+            tx.count_send(now);
+        }
     }
 
     /// Whether this upgrade's install was sent and has not ended.
@@ -347,11 +614,19 @@ impl StoredPending {
         self.upgrade_sent = Some(true);
     }
 
+    /// The transaction of type `T`, once built.
+    pub fn tx<T: Tx>(&self) -> Option<&T> {
+        T::attempt(self).and_then(|attempt| attempt.tx.as_ref())
+    }
+
     /// The Bitcoin transaction, once built.
     pub fn bitcoin_tx(&self) -> Option<&BitcoinTx> {
-        self.bitcoin
-            .as_ref()
-            .and_then(|attempt| attempt.tx.as_ref())
+        self.tx()
+    }
+
+    /// The EVM transaction, once built.
+    pub fn evm_tx(&self) -> Option<&EvmTx> {
+        self.tx()
     }
 
     fn release_at_quorum(&mut self, now: u64) {
@@ -415,8 +690,10 @@ impl StoredPending {
             return Err(WalletError::UpgradeInProgress);
         }
         if self.may_have_sent() {
-            let reason = if self.bitcoin_may_have_sent() {
+            let reason = if self.bitcoin.as_ref().is_some_and(Attempt::may_have_sent) {
                 "may have reached the Bitcoin canister; execute it again to send the same transaction"
+            } else if self.evm.as_ref().is_some_and(Attempt::may_have_sent) {
+                "may have reached an EVM provider; execute it again to send the same transaction"
             } else {
                 "may have reached the ledger; execute it again to find out"
             };
@@ -498,12 +775,12 @@ impl StoredPending {
         }
     }
 
-    /// Records that Bitcoin execution `execution` will not go on: the
-    /// callback of one of its calls trapped. A transaction it was sending
-    /// may have been sent.
-    pub fn lose_bitcoin_call(&mut self, execution: u64) {
-        if self.owns_bitcoin(execution)
-            && let Some(attempt) = &mut self.bitcoin
+    /// Records that execution `execution` of a transfer that sends a
+    /// transaction will not go on: the callback of one of its calls
+    /// trapped. A transaction it was sending may have been sent.
+    pub fn lose_send_call<T: Tx>(&mut self, execution: u64) {
+        if self.owns_send::<T>(execution)
+            && let Some(attempt) = T::attempt_mut(self)
         {
             attempt.lose();
         }
@@ -570,12 +847,13 @@ impl StoredPending {
         }
     }
 
-    /// Starts an execution of this Bitcoin transfer and returns its number.
-    /// Refuses while another is in flight. One still marked in flight after
-    /// `STALE_CALL_NS` never returned to the wallet's code, since each of its
-    /// calls answers within 300 seconds.
-    pub fn begin_bitcoin(&mut self, id: ActionId, now: u64) -> Result<u64, WalletError> {
-        let attempt = self.bitcoin.get_or_insert(BitcoinAttempt {
+    /// Starts an execution of this transfer, which sends a transaction of
+    /// type `T`, and returns its number. Refuses while another is in flight.
+    /// One still marked in flight after `STALE_CALL_NS` never returned to
+    /// the wallet's code, since each of its calls answers within 300
+    /// seconds.
+    pub fn begin_send<T: Tx>(&mut self, id: ActionId, now: u64) -> Result<u64, WalletError> {
+        let attempt = T::attempt_mut(self).get_or_insert(Attempt {
             executions: 0,
             in_flight_since_ns: None,
             sending: false,
@@ -594,91 +872,112 @@ impl StoredPending {
         Ok(attempt.executions)
     }
 
-    /// Whether Bitcoin execution `execution` is the one in flight.
-    pub fn owns_bitcoin(&self, execution: u64) -> bool {
-        self.bitcoin.as_ref().is_some_and(|attempt| {
+    /// Whether an execution of this transfer, which sends a transaction of
+    /// type `T`, is in flight at `now`: one in flight longer than
+    /// `STALE_CALL_NS` never returned to the wallet's code.
+    pub fn executing<T: Tx>(&self, now: u64) -> bool {
+        T::attempt(self)
+            .and_then(|attempt| attempt.in_flight_since_ns)
+            .is_some_and(|since| now < since.saturating_add(STALE_CALL_NS))
+    }
+
+    /// Forgets the transaction of type `T` when no send of it can have
+    /// reached `T::SENT_TO`, and returns whether it did.
+    pub fn unbuild_unsent<T: Tx>(&mut self) -> bool {
+        match T::attempt_mut(self) {
+            Some(attempt) if attempt.tx.is_some() && !attempt.may_have_sent() => {
+                attempt.tx = None;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether execution `execution` is the one in flight.
+    pub fn owns_send<T: Tx>(&self, execution: u64) -> bool {
+        T::attempt(self).is_some_and(|attempt| {
             attempt.executions == execution && attempt.in_flight_since_ns.is_some()
         })
     }
 
     /// Goes on with execution `execution` after a call, at `now`: refuses
     /// when the action closed meanwhile or a later execution took over.
-    pub fn resume_bitcoin(
+    pub fn resume_send<T: Tx>(
         &mut self,
         id: ActionId,
         execution: u64,
         now: u64,
     ) -> Result<(), WalletError> {
         self.check_open(id, now)?;
-        if !self.owns_bitcoin(execution) {
+        if !self.owns_send::<T>(execution) {
             return Err(WalletError::InvalidArgument(format!(
                 "another execution of action {id} took over"
             )));
         }
-        if let Some(attempt) = &mut self.bitcoin {
+        if let Some(attempt) = T::attempt_mut(self) {
             attempt.in_flight_since_ns = Some(now);
         }
         Ok(())
     }
 
-    /// Stores the transaction execution built.
-    pub fn bitcoin_built(&mut self, tx: BitcoinTx) {
-        if let Some(attempt) = &mut self.bitcoin {
+    /// Stores the transaction the execution in flight built.
+    pub fn built<T: Tx>(&mut self, tx: T) {
+        if let Some(attempt) = T::attempt_mut(self) {
             attempt.tx = Some(tx);
         }
     }
 
     /// Stores the signed transaction.
-    pub fn bitcoin_signed(&mut self, signed: Vec<u8>) {
-        if let Some(tx) = self
-            .bitcoin
+    pub fn signed<T: Tx>(&mut self, signed: Vec<u8>) {
+        if let Some(tx) = T::attempt_mut(self)
             .as_mut()
             .and_then(|attempt| attempt.tx.as_mut())
         {
-            tx.signed = Some(ByteBuf::from(signed));
+            tx.set_signed(signed);
         }
     }
 
     /// Marks the execution in flight as sending the transaction at `now`.
-    pub fn bitcoin_sending(&mut self, now: u64) {
-        if let Some(attempt) = &mut self.bitcoin {
+    pub fn sending<T: Tx>(&mut self, now: u64) {
+        if let Some(attempt) = T::attempt_mut(self) {
             attempt.sending = true;
             if let Some(tx) = &mut attempt.tx {
-                tx.resent(now);
+                tx.count_send(now);
             }
         }
     }
 
     /// Records that the execution in flight returned without sending.
-    pub fn end_bitcoin_call(&mut self) {
-        if let Some(attempt) = &mut self.bitcoin {
+    pub fn end_send_call<T: Tx>(&mut self) {
+        if let Some(attempt) = T::attempt_mut(self) {
             attempt.in_flight_since_ns = None;
         }
     }
 
-    /// Records how sending the transaction `bitcoin_sending` started ended,
-    /// from `account` on `chain`. The Bitcoin canister taking it ends the
-    /// action `Executed`; otherwise it stays ready, and the error says why.
-    pub fn end_bitcoin_send(
+    /// Records how sending the transaction `sending` started ended, from
+    /// `account` on `chain`. A transaction taken ends the action
+    /// `Executed`; otherwise it stays ready, and the error says why.
+    pub fn end_send<T: Tx>(
         &mut self,
-        result: Result<(), CallFailure>,
+        reply: SendReply,
         account: AccountId,
         chain: Chain,
         tx_id: String,
         now: u64,
     ) -> Result<(), WalletError> {
-        let Some(attempt) = &mut self.bitcoin else {
+        let Some(attempt) = T::attempt_mut(self) else {
             return Err(WalletError::InvalidArgument(
-                "no Bitcoin transaction was sent".to_string(),
+                "no transaction was sent".to_string(),
             ));
         };
         attempt.in_flight_since_ns = None;
         attempt.sending = false;
-        let sent_before = attempt.tx.as_ref().is_some_and(|tx| tx.sent);
-        let error = match result {
-            Ok(()) => {
+        let sent_before = attempt.tx.as_ref().is_some_and(T::sent);
+        let to = T::SENT_TO;
+        let error = match reply {
+            SendReply::Taken => {
                 if let Some(tx) = &mut attempt.tx {
-                    tx.sent = true;
+                    tx.mark_sent();
                 }
                 self.state = ActionState::Executed(Outcome::Sent(TxReceipt {
                     account,
@@ -688,19 +987,17 @@ impl StoredPending {
                 }));
                 return Ok(());
             }
-            Err(CallFailure::NotRun(reason)) if sent_before => {
-                format!(
-                    "{reason}; an earlier send may have reached the Bitcoin canister, so execute it again"
-                )
+            SendReply::NotRun(reason) if sent_before => {
+                format!("{reason}; an earlier send may have reached {to}, so execute it again")
             }
-            Err(CallFailure::NotRun(reason)) => reason,
-            Err(CallFailure::Unknown(reason)) => {
+            SendReply::NotRun(reason) => reason,
+            SendReply::Unknown(reason) => {
                 if let Some(tx) = &mut attempt.tx {
-                    tx.sent = true;
+                    tx.mark_sent();
                 }
                 format!(
-                    "{reason}; the Bitcoin canister may have taken the transaction, so execute \
-                     it again to send the same one"
+                    "{reason}; {to} may have taken the transaction, so execute it again to send \
+                     the same one"
                 )
             }
         };
@@ -1346,54 +1643,59 @@ mod tests {
         result: Result<(), CallFailure>,
     ) -> Result<(), WalletError> {
         let chain = Chain::Bitcoin(crate::BitcoinNetwork::Regtest);
-        pending.end_bitcoin_send(result, 1, chain, "txid".to_string(), T0)
+        pending.end_send::<BitcoinTx>(result.into(), 1, chain, "txid".to_string(), T0)
     }
 
     #[test]
     fn one_bitcoin_execution_at_a_time_and_a_stale_one_is_taken_over() {
         let mut pending = transfer();
-        let first = pending.begin_bitcoin(ID, T0).unwrap();
+        let first = pending.begin_send::<BitcoinTx>(ID, T0).unwrap();
         assert!(matches!(
-            pending.begin_bitcoin(ID, T0 + STALE_CALL_NS - 1),
+            pending.begin_send::<BitcoinTx>(ID, T0 + STALE_CALL_NS - 1),
             Err(WalletError::InvalidArgument(reason)) if reason.contains("in flight")
         ));
         // Each step after a call keeps the execution alive.
-        assert_eq!(pending.resume_bitcoin(ID, first, T0 + HOUR_NS - 1), Ok(()));
-        assert!(pending.begin_bitcoin(ID, T0 + HOUR_NS).is_err());
+        assert_eq!(
+            pending.resume_send::<BitcoinTx>(ID, first, T0 + HOUR_NS - 1),
+            Ok(())
+        );
+        assert!(pending.begin_send::<BitcoinTx>(ID, T0 + HOUR_NS).is_err());
 
-        let second = pending.begin_bitcoin(ID, T0 + 2 * HOUR_NS).unwrap();
+        let second = pending
+            .begin_send::<BitcoinTx>(ID, T0 + 2 * HOUR_NS)
+            .unwrap();
         assert_ne!(first, second);
         assert!(matches!(
-            pending.resume_bitcoin(ID, first, T0 + 2 * HOUR_NS),
+            pending.resume_send::<BitcoinTx>(ID, first, T0 + 2 * HOUR_NS),
             Err(WalletError::InvalidArgument(reason)) if reason.contains("took over")
         ));
         // A trap in the first execution's callback changes nothing now.
-        pending.bitcoin_sending(T0);
+        pending.sending::<BitcoinTx>(T0);
         let before = pending.clone();
-        pending.lose_bitcoin_call(first);
+        pending.lose_send_call::<BitcoinTx>(first);
         assert_eq!(pending, before);
-        pending.lose_bitcoin_call(second);
-        assert!(!pending.owns_bitcoin(second));
+        pending.lose_send_call::<BitcoinTx>(second);
+        assert!(!pending.owns_send::<BitcoinTx>(second));
     }
 
     #[test]
     fn every_send_is_counted_and_the_transaction_is_watched_until_it_settles() {
         let mut pending = transfer();
         assert!(!pending.needs_settling());
-        let execution = pending.begin_bitcoin(ID, T0).unwrap();
-        pending.bitcoin_built(built(500));
-        pending.bitcoin_signed(vec![9]);
+        let execution = pending.begin_send::<BitcoinTx>(ID, T0).unwrap();
+        pending.built(built(500));
+        pending.signed::<BitcoinTx>(vec![9]);
         assert!(!pending.needs_settling(), "built and signed, not sent");
-        pending.bitcoin_sending(T0 + 1);
+        pending.sending::<BitcoinTx>(T0 + 1);
         assert!(pending.needs_settling());
         assert_eq!(end_send(&mut pending, Ok(())), Ok(()));
         assert!(!pending.is_open(T0));
-        assert!(!pending.owns_bitcoin(execution));
+        assert!(!pending.owns_send::<BitcoinTx>(execution));
         let tx = pending.bitcoin_tx().unwrap();
         assert_eq!((tx.sends, tx.last_sent_ns), (Some(1), Some(T0 + 1)));
         assert!(pending.needs_settling(), "executed, not yet settled");
 
-        pending.bitcoin_resent(T0 + HOUR_NS);
+        pending.resent::<BitcoinTx>(T0 + HOUR_NS);
         let tx = pending.bitcoin_tx().unwrap();
         assert_eq!((tx.sends, tx.last_sent_ns), (Some(2), Some(T0 + HOUR_NS)));
         let watched = tx.watched([2; 32], vec![[1; 36]], 7);
@@ -1404,7 +1706,7 @@ mod tests {
 
         let chain = Chain::Bitcoin(crate::BitcoinNetwork::Regtest);
         let receipt = pending.state.clone();
-        assert!(!pending.bitcoin_settled(1, chain, "txid".to_string(), T0 + DAY_NS));
+        assert!(!pending.settled::<BitcoinTx>(1, chain, "txid".to_string(), T0 + DAY_NS));
         assert_eq!(pending.state, receipt, "the receipt of its send stays");
         assert!(!pending.needs_settling());
     }
@@ -1412,10 +1714,10 @@ mod tests {
     #[test]
     fn a_transaction_seen_confirmed_ends_its_open_transfer_and_stops_its_execution() {
         let mut pending = transfer();
-        let execution = pending.begin_bitcoin(ID, T0).unwrap();
-        pending.bitcoin_built(built(500));
-        pending.bitcoin_signed(vec![9]);
-        pending.bitcoin_sending(T0);
+        let execution = pending.begin_send::<BitcoinTx>(ID, T0).unwrap();
+        pending.built(built(500));
+        pending.signed::<BitcoinTx>(vec![9]);
+        pending.sending::<BitcoinTx>(T0);
         // The send's answer was lost: the transfer stays open.
         assert!(
             end_send(
@@ -1426,11 +1728,11 @@ mod tests {
         );
         assert!(pending.is_open(T0 + 30 * DAY_NS));
         assert!(pending.needs_settling());
-        let again = pending.begin_bitcoin(ID, T0 + 1).unwrap();
+        let again = pending.begin_send::<BitcoinTx>(ID, T0 + 1).unwrap();
         assert_ne!(execution, again);
 
         let chain = Chain::Bitcoin(crate::BitcoinNetwork::Regtest);
-        assert!(pending.bitcoin_settled(1, chain.clone(), "txid".to_string(), T0 + 2));
+        assert!(pending.settled::<BitcoinTx>(1, chain.clone(), "txid".to_string(), T0 + 2));
         assert_eq!(
             pending.state,
             ActionState::Executed(Outcome::Sent(TxReceipt {
@@ -1441,7 +1743,7 @@ mod tests {
             }))
         );
         assert!(
-            !pending.owns_bitcoin(again),
+            !pending.owns_send::<BitcoinTx>(again),
             "the execution in flight stops"
         );
         assert!(!pending.needs_settling());
@@ -1465,15 +1767,15 @@ mod tests {
     #[test]
     fn a_built_transaction_is_kept_and_one_not_sent_can_be_rejected() {
         let mut pending = transfer();
-        let execution = pending.begin_bitcoin(ID, T0).unwrap();
-        pending.bitcoin_built(built(500));
-        pending.bitcoin_signed(vec![9]);
-        pending.end_bitcoin_call();
+        let execution = pending.begin_send::<BitcoinTx>(ID, T0).unwrap();
+        pending.built(built(500));
+        pending.signed::<BitcoinTx>(vec![9]);
+        pending.end_send_call::<BitcoinTx>();
         assert!(!pending.may_have_sent());
         assert_eq!(pending.bitcoin_tx().map(|tx| tx.fee), Some(500));
 
         // The next execution finds the same transaction.
-        let next = pending.begin_bitcoin(ID, T0 + 1).unwrap();
+        let next = pending.begin_send::<BitcoinTx>(ID, T0 + 1).unwrap();
         assert!(next > execution);
         assert_eq!(
             pending.bitcoin_tx().unwrap().signed,
@@ -1482,15 +1784,86 @@ mod tests {
         // Signing sends nothing, so it can still be rejected, and the
         // execution in flight stops at its next step.
         assert_eq!(pending.reject(ID, member(1), T0 + 1), Ok(()));
-        assert!(pending.resume_bitcoin(ID, next, T0 + 2).is_err());
+        assert!(pending.resume_send::<BitcoinTx>(ID, next, T0 + 2).is_err());
+    }
+
+    fn evm_built() -> EvmTx {
+        EvmTx::new(
+            &evm::Transaction {
+                chain_id: evm::ETHEREUM,
+                nonce: 3,
+                max_priority_fee_per_gas: Nat::from(1u8),
+                max_fee_per_gas: Nat::from(2u8),
+                gas_limit: 21_000,
+                to: [7; 20],
+                value: Nat::from(5u8),
+            },
+            Nat::from(0u8),
+        )
+    }
+
+    fn end_evm_send(pending: &mut StoredPending, reply: SendReply) -> Result<(), WalletError> {
+        let chain = Chain::Evm(evm::ETHEREUM);
+        pending.end_send::<EvmTx>(reply, 1, chain, "hash".to_string(), T0)
+    }
+
+    #[test]
+    fn an_evm_transaction_never_sent_is_built_again_and_one_maybe_sent_is_kept() {
+        let mut pending = transfer();
+        pending.begin_send::<EvmTx>(ID, T0).unwrap();
+        assert!(pending.executing::<EvmTx>(T0 + 1));
+        pending.built(evm_built());
+        pending.signed::<EvmTx>(vec![9]);
+        pending.sending::<EvmTx>(T0 + 1);
+        // The call never ran, so no provider saw it.
+        assert!(end_evm_send(&mut pending, SendReply::NotRun("down".to_string())).is_err());
+        assert!(!pending.executing::<EvmTx>(T0 + 2));
+        assert!(pending.unbuild_unsent::<EvmTx>());
+        assert_eq!(pending.evm_tx(), None);
+        assert!(!pending.unbuild_unsent::<EvmTx>());
+
+        // One a provider may have taken is kept, to be sent the same.
+        pending.begin_send::<EvmTx>(ID, T0 + 3).unwrap();
+        pending.built(evm_built());
+        pending.signed::<EvmTx>(vec![9]);
+        pending.sending::<EvmTx>(T0 + 4);
+        assert!(end_evm_send(&mut pending, SendReply::Unknown("lost".to_string())).is_err());
+        assert!(!pending.unbuild_unsent::<EvmTx>());
+        assert_eq!(
+            pending.evm_tx().unwrap().signed,
+            Some(ByteBuf::from(vec![9]))
+        );
+
+        // An execution in flight for `STALE_CALL_NS` never returned.
+        pending.begin_send::<EvmTx>(ID, T0 + 5).unwrap();
+        assert!(pending.executing::<EvmTx>(T0 + 5 + STALE_CALL_NS - 1));
+        assert!(!pending.executing::<EvmTx>(T0 + 5 + STALE_CALL_NS));
+    }
+
+    #[test]
+    fn the_wallet_looks_at_an_evm_transaction_less_often_each_time() {
+        let mut pending = transfer();
+        pending.begin_send::<EvmTx>(ID, T0).unwrap();
+        pending.built(evm_built());
+        assert!(pending.evm_tx().unwrap().look_due(T0));
+        pending.evm_looked(T0);
+        let tx = pending.evm_tx().unwrap();
+        assert_eq!((tx.looks, tx.last_look_ns), (1, T0));
+        let first = evm::FIRST_RESEND_NS;
+        assert!(!tx.look_due(T0 + first - 1));
+        assert!(tx.look_due(T0 + first));
+        pending.evm_looked(T0 + first);
+        let tx = pending.evm_tx().unwrap();
+        assert!(!tx.look_due(T0 + 3 * first - 1));
+        assert!(tx.look_due(T0 + 3 * first));
     }
 
     #[test]
     fn a_transaction_that_may_have_been_sent_keeps_its_transfer_open() {
         let mut pending = transfer();
-        pending.begin_bitcoin(ID, T0).unwrap();
-        pending.bitcoin_built(built(500));
-        pending.bitcoin_sending(T0);
+        pending.begin_send::<BitcoinTx>(ID, T0).unwrap();
+        pending.built(built(500));
+        pending.sending::<BitcoinTx>(T0);
         assert!(pending.may_have_sent());
         assert!(pending.reject(ID, member(1), T0).is_err());
 
@@ -1505,13 +1878,13 @@ mod tests {
         assert_eq!(pending.view(ID, never).state, ActionState::Ready);
 
         // A later send that did not run tells nothing of the earlier one.
-        pending.begin_bitcoin(ID, never).unwrap();
-        pending.bitcoin_sending(T0);
+        pending.begin_send::<BitcoinTx>(ID, never).unwrap();
+        pending.sending::<BitcoinTx>(T0);
         assert!(end_send(&mut pending, Err(CallFailure::NotRun("full".to_string()))).is_err());
         assert!(pending.may_have_sent());
 
-        pending.begin_bitcoin(ID, never).unwrap();
-        pending.bitcoin_sending(T0);
+        pending.begin_send::<BitcoinTx>(ID, never).unwrap();
+        pending.sending::<BitcoinTx>(T0);
         assert_eq!(end_send(&mut pending, Ok(())), Ok(()));
         assert!(matches!(
             &pending.state,
@@ -1522,25 +1895,25 @@ mod tests {
     #[test]
     fn a_send_that_did_not_run_and_a_trap_before_sending_leave_it_unsent() {
         let mut pending = transfer();
-        let execution = pending.begin_bitcoin(ID, T0).unwrap();
-        pending.bitcoin_built(built(500));
-        pending.bitcoin_sending(T0);
+        let execution = pending.begin_send::<BitcoinTx>(ID, T0).unwrap();
+        pending.built(built(500));
+        pending.sending::<BitcoinTx>(T0);
         assert_eq!(
             end_send(&mut pending, Err(CallFailure::NotRun("full".to_string()))),
             Err(WalletError::ChainError("full".to_string()))
         );
         assert!(!pending.may_have_sent());
-        assert!(!pending.owns_bitcoin(execution));
+        assert!(!pending.owns_send::<BitcoinTx>(execution));
 
         // A trap while signing sends nothing; one while sending may have.
-        let signing = pending.begin_bitcoin(ID, T0 + 1).unwrap();
-        pending.lose_bitcoin_call(signing);
+        let signing = pending.begin_send::<BitcoinTx>(ID, T0 + 1).unwrap();
+        pending.lose_send_call::<BitcoinTx>(signing);
         assert!(!pending.may_have_sent());
-        let sending = pending.begin_bitcoin(ID, T0 + 2).unwrap();
-        pending.bitcoin_sending(T0);
-        pending.lose_bitcoin_call(sending);
+        let sending = pending.begin_send::<BitcoinTx>(ID, T0 + 2).unwrap();
+        pending.sending::<BitcoinTx>(T0);
+        pending.lose_send_call::<BitcoinTx>(sending);
         assert!(pending.may_have_sent());
-        assert!(pending.begin_bitcoin(ID, T0 + 3).is_ok());
+        assert!(pending.begin_send::<BitcoinTx>(ID, T0 + 3).is_ok());
     }
 
     /// What the Bitcoin canister does with a send, and what the wallet hears.
@@ -1612,31 +1985,31 @@ mod tests {
                         if pending.check_executable(ID, now).is_err() {
                             continue;
                         }
-                        let Ok(execution) = pending.begin_bitcoin(ID, now) else {
+                        let Ok(execution) = pending.begin_send::<BitcoinTx>(ID, now) else {
                             continue;
                         };
                         if pending.bitcoin_tx().is_none() {
                             if !builds_ok {
-                                pending.end_bitcoin_call();
+                                pending.end_send_call::<BitcoinTx>();
                                 pending.finish(Err("too little".to_string()));
                                 continue;
                             }
                             builds += 1;
-                            pending.bitcoin_built(BitcoinTx {
+                            pending.built(BitcoinTx {
                                 unsigned: ByteBuf::from(vec![builds]),
                                 ..built(500)
                             });
                         }
                         if pending.bitcoin_tx().unwrap().signed.is_none() {
                             if !signs_ok {
-                                pending.end_bitcoin_call();
+                                pending.end_send_call::<BitcoinTx>();
                                 continue;
                             }
                             let unsigned = pending.bitcoin_tx().unwrap().unsigned.to_vec();
-                            pending.bitcoin_signed(unsigned);
+                            pending.signed::<BitcoinTx>(unsigned);
                         }
                         let tx = pending.bitcoin_tx().unwrap().signed.clone().unwrap();
-                        pending.bitcoin_sending(T0);
+                        pending.sending::<BitcoinTx>(T0);
                         if matches!(send, Send::Takes | Send::TakesUnheard | Send::TakesAndTraps) {
                             taken.push(tx);
                         }
@@ -1646,12 +2019,12 @@ mod tests {
                             Send::TakesUnheard | Send::Loses => Err(CallFailure::Unknown("timeout".to_string())),
                             Send::Full => Err(CallFailure::NotRun("full".to_string())),
                             Send::TakesAndTraps => {
-                                pending.lose_bitcoin_call(execution);
+                                pending.lose_send_call::<BitcoinTx>(execution);
                                 continue;
                             }
                             Send::Stalls => continue,
                         };
-                        let _ = pending.end_bitcoin_send(result, 1, chain, "txid".to_string(), now);
+                        let _ = pending.end_send::<BitcoinTx>(result.into(), 1, chain, "txid".to_string(), now);
                     }
                 }
                 pending.expire(now);

@@ -51,7 +51,7 @@ pub async fn call<R: CandidType + DeserializeOwned>(
     cycles: u128,
 ) -> Result<R, CallFailure> {
     let arg = candid::encode_one(arg).expect("a call argument encodes");
-    send(canister, who, method, arg, cycles).await
+    call_encoded(canister, who, method, arg, cycles).await
 }
 
 /// Calls `method` of `canister`, which takes no arguments.
@@ -61,10 +61,11 @@ pub async fn call_without_args<R: CandidType + DeserializeOwned>(
     method: &str,
 ) -> Result<R, CallFailure> {
     let args = candid::encode_args(()).expect("no arguments encode");
-    send(canister, who, method, args, 0).await
+    call_encoded(canister, who, method, args, 0).await
 }
 
-async fn send<R: CandidType + DeserializeOwned>(
+/// Calls `method` of `canister` with its arguments encoded.
+pub async fn call_encoded<R: CandidType + DeserializeOwned>(
     canister: Principal,
     who: impl Display,
     method: &str,

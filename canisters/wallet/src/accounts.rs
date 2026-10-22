@@ -7,17 +7,19 @@
 //! - A Bitcoin account `n` is the threshold ECDSA key of its derivation path
 //!   (see `keys`), whose public key is stored with the account, and the
 //!   P2WPKH address of that key.
+//! - An EVM account `n` is a key of its own the same way, and the address of
+//!   that key on every EVM chain (see `evm::address`).
 //!
 //! Pure: `storage` keeps the accounts, and the caller passes the wallet's own
 //! canister id to derive an address.
 
 use crate::assets::ICP_LEDGER;
-use crate::btc;
 use crate::governance::check_label;
 use crate::{
     Account, AccountHolder, AccountId, AccountKind, AddAccountArgs, BitcoinNetwork, Chain,
     WalletError,
 };
+use crate::{btc, evm};
 use candid::{CandidType, Principal};
 use icrc_ledger_types::icrc1::account::{Account as LedgerAccount, Subaccount};
 use serde::Deserialize;
@@ -46,7 +48,7 @@ pub struct StoredAccount {
     pub added_at_ns: u64,
     /// `None` for an account the wallet made itself.
     pub added_by: Option<Principal>,
-    /// The compressed SEC1 public key of a Bitcoin account.
+    /// The compressed SEC1 public key of a Bitcoin or EVM account.
     pub public_key: Option<ByteBuf>,
     /// The account this one became when accounts got kinds: an ICP account
     /// and an ICRC account with the same index were one subaccount. Its id
@@ -107,6 +109,17 @@ impl StoredAccount {
         btc::address(key, network).map_err(WalletError::InvalidArgument)
     }
 
+    /// The address of an EVM account.
+    pub fn evm_address(&self) -> Result<evm::Address, WalletError> {
+        let (Some(AccountKind::Evm), Some(key)) = (self.kind, &self.public_key) else {
+            return Err(WalletError::InvalidArgument(format!(
+                "a {:?} account has no EVM address",
+                self.kind
+            )));
+        };
+        evm::address(key).map_err(WalletError::InvalidArgument)
+    }
+
     /// The account as the interface shows it.
     pub fn view(&self, id: AccountId, wallet: Principal) -> Account {
         let (address, icp_account_id) = match self.kind() {
@@ -124,7 +137,13 @@ impl StoredAccount {
                     .unwrap_or_default(),
                 None,
             ),
-            AccountKind::Evm => (String::new(), None),
+            // A stored EVM account always has its key.
+            AccountKind::Evm => (
+                self.evm_address()
+                    .map(|address| evm::checksummed(&address))
+                    .unwrap_or_default(),
+                None,
+            ),
         };
         Account {
             id,
@@ -200,11 +219,6 @@ pub fn check_new<'a>(
     existing: impl IntoIterator<Item = &'a StoredAccount> + Clone,
 ) -> Result<u32, WalletError> {
     check_label(&args.label)?;
-    if args.kind == AccountKind::Evm {
-        return Err(WalletError::InvalidArgument(
-            "this release cannot hold EVM accounts yet".to_string(),
-        ));
-    }
     let listed = existing
         .clone()
         .into_iter()
@@ -219,22 +233,26 @@ pub fn check_new<'a>(
 }
 
 /// The kinds whose account 0 a wallet on `network` lacks: an Internet
-/// Computer account, and a Bitcoin account of its network.
+/// Computer account, a Bitcoin account of its network, and an EVM account.
 pub fn missing_defaults<'a>(
     network: BitcoinNetwork,
     existing: impl IntoIterator<Item = &'a StoredAccount> + Clone,
 ) -> Vec<AccountKind> {
-    [AccountKind::InternetComputer, AccountKind::Bitcoin(network)]
-        .into_iter()
-        .filter(|kind| {
-            !existing.clone().into_iter().any(|account| {
-                account.is_listed()
-                    && account.kind == Some(*kind)
-                    && account.index == 0
-                    && account.holder == AccountHolder::Wallet
-            })
+    [
+        AccountKind::InternetComputer,
+        AccountKind::Bitcoin(network),
+        AccountKind::Evm,
+    ]
+    .into_iter()
+    .filter(|kind| {
+        !existing.clone().into_iter().any(|account| {
+            account.is_listed()
+                && account.kind == Some(*kind)
+                && account.index == 0
+                && account.holder == AccountHolder::Wallet
         })
-        .collect()
+    })
+    .collect()
 }
 
 /// What `migrate` changes in the accounts stored before accounts had kinds.
@@ -304,6 +322,7 @@ mod tests {
 
     const IC: AccountKind = AccountKind::InternetComputer;
     const REGTEST: AccountKind = AccountKind::Bitcoin(BitcoinNetwork::Regtest);
+    const EVM: AccountKind = AccountKind::Evm;
 
     fn stored(kind: AccountKind, index: u32) -> StoredAccount {
         StoredAccount::new(
@@ -416,19 +435,29 @@ mod tests {
     }
 
     #[test]
-    fn refuses_evm_accounts_and_bad_labels() {
-        for args in [
-            args(AccountKind::Evm),
-            AddAccountArgs {
-                kind: IC,
-                label: " ".to_string(),
-            },
-        ] {
-            assert!(
-                matches!(check_new(&args, &[]), Err(WalletError::InvalidArgument(_))),
-                "{args:?}"
-            );
-        }
+    fn an_evm_account_shows_the_checksummed_address_of_its_key() {
+        let account = StoredAccount {
+            public_key: Some(ByteBuf::from(crate::evm::tests::public_key())),
+            ..stored(EVM, 0)
+        };
+        let view = account.view(1, wallet());
+        assert_eq!(view.address, "0x9d8A62f656a8d1615C1294fd71e9CFb3E4855A4F");
+        assert_eq!(view.icp_account_id, None);
+        assert!(stored(REGTEST, 0).evm_address().is_err());
+        assert!(account.bitcoin_address().is_err());
+        assert_eq!(check_new(&args(EVM), &[account]), Ok(1));
+    }
+
+    #[test]
+    fn refuses_bad_labels() {
+        let blank = AddAccountArgs {
+            kind: IC,
+            label: " ".to_string(),
+        };
+        assert!(matches!(
+            check_new(&blank, &[]),
+            Err(WalletError::InvalidArgument(_))
+        ));
     }
 
     #[test]
@@ -447,9 +476,9 @@ mod tests {
 
     #[test]
     fn a_wallet_lacks_the_defaults_it_has_no_account_zero_of() {
-        let all = [IC, REGTEST];
+        let all = [IC, REGTEST, EVM];
         assert_eq!(missing_defaults(BitcoinNetwork::Regtest, &[]), all);
-        let existing = [stored(IC, 1), stored(REGTEST, 0)];
+        let existing = [stored(IC, 1), stored(REGTEST, 0), stored(EVM, 0)];
         assert_eq!(missing_defaults(BitcoinNetwork::Regtest, &existing), [IC]);
         assert_eq!(
             missing_defaults(BitcoinNetwork::Mainnet, &existing),
@@ -459,12 +488,12 @@ mod tests {
         merged.merged_into = Some(9);
         assert_eq!(
             missing_defaults(BitcoinNetwork::Regtest, &[merged, stored(REGTEST, 0)]),
-            [IC]
+            [IC, EVM]
         );
         assert!(
             missing_defaults(
                 BitcoinNetwork::Regtest,
-                &[stored(IC, 0), stored(REGTEST, 0)]
+                &[stored(IC, 0), stored(REGTEST, 0), stored(EVM, 0)]
             )
             .is_empty()
         );

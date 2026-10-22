@@ -6,6 +6,7 @@ members = [
   "canisters/wallet",
   "crates/release",
   "tests/caller",
+  "tests/evm_rpc_mock",
   "tests/integration",
   "tools/release-tool",
 ]
@@ -36,13 +37,18 @@ icrc-ledger-types = "=0.2.0"
 pocket-ic = "=16.1.0"
 # Property tests only; no fork or timeout support needed.
 proptest = { version = "=1.11.0", default-features = false, features = ["std"] }
-# The curve under `bitcoin`, named only to build it with small precomputed
-# tables: the default ones add about 1 MB of gzipped Wasm.
-secp256k1 = { version = "=0.29.1", default-features = false, features = ["lowmemory"] }
+# The curve under `bitcoin`, named to build it with small precomputed tables
+# (the default ones add about 1 MB of gzipped Wasm) and with recovery, which
+# gives an EVM signature the parity of its curve point.
+secp256k1 = { version = "=0.29.1", default-features = false, features = ["lowmemory", "recovery"] }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_bytes = "=0.11.19"
+# The EVM RPC mock reads the JSON-RPC requests the wallet sends; tests only.
+serde_json = "=1.0.154"
 # Chunk and manifest hashes; already under ed25519-dalek.
 sha2 = { version = "=0.10.9", default-features = false }
+# Keccak-256 of EVM addresses and transactions; already under candid_parser.
+tiny-keccak = { version = "=2.0.2", features = ["keccak"] }
 
 [profile.release]
 codegen-units = 1

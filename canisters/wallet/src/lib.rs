@@ -16,6 +16,8 @@ mod calls;
 mod channel;
 mod claim;
 mod ed25519;
+mod evm;
+mod evm_rpc;
 mod governance;
 mod http;
 mod icrc;
@@ -55,7 +57,7 @@ fn init(arg: WalletArg) {
     }
     storage::set_config(args.into());
     storage::set_policy(policy::default_policy());
-    storage::set_tracked(assets::initial());
+    storage::set_tracked(assets::initial(storage::bitcoin_network()));
     add_defaults_now(now);
     http::certify();
     schedule_timer(now);
@@ -73,7 +75,7 @@ fn post_upgrade(arg: WalletArg) {
         && network.is_some_and(|asked| asked != fixed)
     {
         ic_cdk::trap(format!(
-            "the wallet's Bitcoin network is {fixed:?}, and its Bitcoin accounts keep it"
+            "the wallet's Bitcoin network is {fixed:?}, and its Bitcoin and EVM accounts keep it"
         ));
     }
     if let Err(reason) = storage::migrate(network).and_then(|()| storage::check()) {
@@ -163,33 +165,28 @@ fn accounts() -> Result<Vec<Account>, WalletError> {
 }
 
 /// Adds an account: the next index of its kind, held by the wallet. Adding
-/// one moves nothing, so it needs no approval. A Bitcoin account asks the
-/// management canister for the public key of its derivation path first.
+/// one moves nothing, so it needs no approval. A Bitcoin or EVM account asks
+/// the management canister for the public key of its derivation path first.
 #[ic_cdk::update(guard = "access::owner")]
 async fn add_account(args: AddAccountArgs) -> Result<Account, WalletError> {
     let caller = ic_cdk::api::msg_caller();
     check_not_installing(ic_cdk::api::time())?;
     let index = accounts::check_new(&args, storage::accounts().iter().map(|(_, a)| a))?;
-    let public_key = match args.kind {
-        AccountKind::Bitcoin(network) => {
-            let key = bitcoin_key(network, index).await?;
-            // Other calls ran meanwhile.
-            if storage::member(caller).map(|member| member.role) != Some(Role::Owner) {
-                return Err(WalletError::Forbidden(
-                    "the caller is no longer an owner".to_string(),
-                ));
-            }
-            let again = accounts::check_new(&args, storage::accounts().iter().map(|(_, a)| a))?;
-            if again != index {
-                return Err(WalletError::InvalidArgument(
-                    "another account of this kind was added meanwhile; add this one again"
-                        .to_string(),
-                ));
-            }
-            Some(key)
+    let public_key = account_key(args.kind, index).await?;
+    if public_key.is_some() {
+        // Other calls ran meanwhile.
+        if storage::member(caller).map(|member| member.role) != Some(Role::Owner) {
+            return Err(WalletError::Forbidden(
+                "the caller is no longer an owner".to_string(),
+            ));
         }
-        _ => None,
-    };
+        let again = accounts::check_new(&args, storage::accounts().iter().map(|(_, a)| a))?;
+        if again != index {
+            return Err(WalletError::InvalidArgument(
+                "another account of this kind was added meanwhile; add this one again".to_string(),
+            ));
+        }
+    }
     let now = ic_cdk::api::time();
     let account = StoredAccount::new(args.kind, args.label, index, public_key, Some(caller), now);
     let id = storage::add_account(account.clone());
@@ -197,14 +194,24 @@ async fn add_account(args: AddAccountArgs) -> Result<Account, WalletError> {
     Ok(account.view(id, ic_cdk::api::canister_self()))
 }
 
-/// The public key of Bitcoin account `index` on `network`, checked to make
-/// an address.
-async fn bitcoin_key(network: BitcoinNetwork, index: u32) -> Result<Vec<u8>, WalletError> {
-    let key = keys::public_key(&keys::bitcoin(network, index))
+/// The public key of account `index` of `kind`, checked to make an
+/// address; an Internet Computer account has none. An EVM account's key is
+/// under the subnet key of the wallet's network.
+async fn account_key(kind: AccountKind, index: u32) -> Result<Option<Vec<u8>>, WalletError> {
+    let path = match kind {
+        AccountKind::InternetComputer => return Ok(None),
+        AccountKind::Bitcoin(network) => keys::bitcoin(network, index),
+        AccountKind::Evm => keys::evm(storage::bitcoin_network(), index),
+    };
+    let key = keys::public_key(&path)
         .await
         .map_err(WalletError::ChainError)?;
-    btc::address(&key, network).map_err(WalletError::ChainError)?;
-    Ok(key)
+    let checked = match kind {
+        AccountKind::Bitcoin(network) => btc::address(&key, network).map(drop),
+        _ => evm::address(&key).map(drop),
+    };
+    checked.map_err(WalletError::ChainError)?;
+    Ok(Some(key))
 }
 
 thread_local! {
@@ -269,8 +276,9 @@ fn defaults_at() -> Option<u64> {
     Some(DEFAULTS_RETRY.get().0)
 }
 
-/// Adds the default Bitcoin account, which needs its public key from the
-/// management canister. A failure waits, longer each time, and tries again.
+/// Adds the default Bitcoin and EVM accounts, which need their public keys
+/// from the management canister. A failure waits, longer each time, and
+/// tries again; the keys come from the same subnet, so the others wait too.
 async fn add_defaults() {
     if ADDING_DEFAULTS.replace(true) {
         return;
@@ -285,13 +293,13 @@ async fn add_defaults() {
     let _adding = Adding;
     add_defaults_now(ic_cdk::api::time());
     for kind in missing_defaults() {
-        let AccountKind::Bitcoin(network) = kind else {
+        if kind == AccountKind::InternetComputer {
             continue;
-        };
-        let key = bitcoin_key(network, 0).await;
+        }
+        let key = account_key(kind, 0).await;
         let now = ic_cdk::api::time();
         match key {
-            Ok(key) if missing_defaults().contains(&kind) => add_default(kind, Some(key), now),
+            Ok(key) if missing_defaults().contains(&kind) => add_default(kind, key, now),
             Ok(_) => {}
             Err(_) => {
                 let (_, waited) = DEFAULTS_RETRY.get();
@@ -299,17 +307,19 @@ async fn add_defaults() {
                     .saturating_mul(2)
                     .clamp(DEFAULTS_FIRST_WAIT_NS, policy::DAY_NS);
                 DEFAULTS_RETRY.set((now.saturating_add(wait), wait));
+                break;
             }
         }
     }
 }
 
-/// What an account holds of an asset, as its ledger or the Bitcoin canister
-/// answers it now: `asset`, or ICP, or the account's bitcoin. A ledger asset
-/// must be tracked, so no member makes the wallet call a canister the owners
-/// did not choose. A Bitcoin balance counts outputs with at least one
-/// confirmation, less what the wallet's transactions spend, plus their
-/// change.
+/// What an account holds of an asset, as its ledger, the Bitcoin canister or
+/// an EVM chain's providers answer it now: `asset`, or ICP, or the account's
+/// bitcoin. A ledger asset or EVM chain must be tracked, so no member makes
+/// the wallet call a canister the owners did not choose. A Bitcoin balance
+/// counts outputs with at least one confirmation, less what the wallet's
+/// transactions spend, plus their change. An EVM balance is the chain's at
+/// its latest block, in wei.
 #[ic_cdk::update(guard = "access::member")]
 async fn balance(id: AccountId, asset: Option<Chain>) -> Result<Balance, WalletError> {
     check_not_installing(ic_cdk::api::time())?;
@@ -325,6 +335,14 @@ async fn balance(id: AccountId, asset: Option<Chain>) -> Result<Balance, WalletE
         }
         (AccountKind::Bitcoin(network), _) => {
             Nat::from(sending::bitcoin_balance(id, &account, network).await?)
+        }
+        (AccountKind::Evm, _) => {
+            let Chain::Evm(chain) = asset else {
+                unreachable!("an EVM account holds EVM chains");
+            };
+            evm_rpc::balance(chain, &account.evm_address()?)
+                .await
+                .map_err(WalletError::ChainError)?
         }
         (kind, _) => {
             return Err(WalletError::InvalidArgument(format!(
@@ -346,33 +364,34 @@ fn assets() -> Result<Vec<Chain>, WalletError> {
     Ok(storage::tracked())
 }
 
-/// Tracks an ICRC-1 ledger, once it answers as one. Tracking moves nothing,
-/// so it needs no approval.
+/// Tracks an ICRC-1 ledger, once it answers as one, or an EVM chain the
+/// wallet's network holds. Tracking moves nothing, so it needs no approval.
 #[ic_cdk::update(guard = "access::owner")]
 async fn track_asset(asset: Chain) -> Result<Vec<Chain>, WalletError> {
     let caller = ic_cdk::api::msg_caller();
     check_not_installing(ic_cdk::api::time())?;
-    assets::check_track(&asset, &storage::tracked())?;
-    let ledger = assets::ledger(&asset).expect("a trackable asset has a ledger");
-    icrc::check_ledger(ledger)
-        .await
-        .map_err(WalletError::ChainError)?;
-    // Other calls ran meanwhile.
-    if storage::member(caller).map(|member| member.role) != Some(Role::Owner) {
-        return Err(WalletError::Forbidden(
-            "the caller is no longer an owner".to_string(),
-        ));
+    assets::check_track(&asset, &storage::tracked(), storage::bitcoin_network())?;
+    if let Some(ledger) = assets::ledger(&asset) {
+        icrc::check_ledger(ledger)
+            .await
+            .map_err(WalletError::ChainError)?;
+        // Other calls ran meanwhile.
+        if storage::member(caller).map(|member| member.role) != Some(Role::Owner) {
+            return Err(WalletError::Forbidden(
+                "the caller is no longer an owner".to_string(),
+            ));
+        }
     }
     let mut tracked = storage::tracked();
-    assets::check_track(&asset, &tracked)?;
+    assets::check_track(&asset, &tracked, storage::bitcoin_network())?;
     tracked.push(asset.clone());
     storage::set_tracked(tracked.clone());
     audit(caller, AuditEvent::AssetTracked(asset), ic_cdk::api::time());
     Ok(tracked)
 }
 
-/// Stops showing an ICRC-1 token. Its tokens stay where they are, and its
-/// open transfers still run.
+/// Stops showing an ICRC-1 token or an EVM chain. Its tokens stay where they
+/// are, and its open transfers still run.
 #[ic_cdk::update(guard = "access::owner")]
 fn untrack_asset(asset: Chain) -> Result<Vec<Chain>, WalletError> {
     let caller = ic_cdk::api::msg_caller();
