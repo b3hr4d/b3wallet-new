@@ -1337,7 +1337,8 @@ const RECEIVE_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/rece
 const ACCOUNT_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/account.html");
 const MEMBERS_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/members.html");
 const SETTINGS_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/settings.html");
-const NOTIFICATIONS_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/notifications.html");
+const NOTIFICATIONS_HTML: &[u8] =
+    include_bytes!("../../../canisters/wallet/pages/notifications.html");
 const CLAIM_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/claim.html");
 const NOT_FOUND_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/404.html");
 const APP_JS: &[u8] = include_bytes!("../../../canisters/wallet/pages/app.js");

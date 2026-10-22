@@ -80,7 +80,12 @@ fn router() -> AssetRouter<'static> {
         ("receive.html", RECEIVE_HTML, HTML, &["/receive"]),
         ("account.html", ACCOUNT_HTML, HTML, &["/account"]),
         ("approvals.html", APPROVALS_HTML, HTML, &["/approvals"]),
-        ("notifications.html", NOTIFICATIONS_HTML, HTML, &["/notifications"]),
+        (
+            "notifications.html",
+            NOTIFICATIONS_HTML,
+            HTML,
+            &["/notifications"],
+        ),
         ("settings.html", SETTINGS_HTML, HTML, &["/settings"]),
         ("members.html", MEMBERS_HTML, HTML, &["/members"]),
         ("claim.html", CLAIM_HTML, HTML, &["/claim"]),
