@@ -9,6 +9,7 @@ import {
   failureText,
   isJoinRequest,
   joinRequestText,
+  roleText,
   sourceOf,
   stateText,
 } from "./describe.ts"
@@ -21,7 +22,8 @@ import { useToken } from "./tokens.ts"
 
 /**
  * The approvals page: every open action, with what each member may do about
- * it. Owners propose and reject; owners and approvers approve and run.
+ * it. Owners propose and reject; owners and approvers approve and run; a
+ * proposer only reads what waits.
  */
 export function Approvals({ wallet }: { wallet: Principal }) {
   return (
@@ -39,6 +41,7 @@ function OpenActions({ wallet: id, me }: { wallet: Principal; me: Member }) {
   const { client, wallet } = useWallet(id)
   const pending = useQuery(client.queryOptions(wallet, "pending"))
   const accounts = useQuery(client.queryOptions(wallet, "accounts"))
+  const members = useQuery(client.queryOptions(wallet, "members"))
   const approve = useMutation(
     client.mutationOptions(wallet, "approve", { invalidates: [[wallet, "pending"]] }),
   )
@@ -81,6 +84,7 @@ function OpenActions({ wallet: id, me }: { wallet: Principal; me: Member }) {
               key={String(action.id)}
               pending={action}
               accounts={accounts.data}
+              members={members.data}
               me={me}
               now={now}
               busy={busy}
@@ -98,6 +102,7 @@ function OpenActions({ wallet: id, me }: { wallet: Principal; me: Member }) {
 function OpenAction({
   pending,
   accounts,
+  members,
   me,
   now,
   busy,
@@ -107,6 +112,7 @@ function OpenAction({
 }: {
   pending: Pending
   accounts: Account[] | undefined
+  members: Member[] | undefined
   me: Member
   now: bigint
   busy: boolean
@@ -143,7 +149,7 @@ function OpenAction({
       )}
       {!join && (
         <p className="quiet">
-          Proposed by {pending.proposed_by === me.id ? "you" : pending.proposed_by} on{" "}
+          Proposed by {proposerText(pending.proposed_by, me, members)} on{" "}
           {dateOf(pending.proposed_at_ns)}.
         </p>
       )}
@@ -171,4 +177,14 @@ function OpenAction({
       </div>
     </li>
   )
+}
+
+/**
+ * Who proposed an action: you, or a member by label and role, so a proposer
+ * such as an AI agent stands out. A member who has left shows as a principal.
+ */
+function proposerText(id: Principal, me: Member, members: Member[] | undefined): string {
+  if (id === me.id) return "you"
+  const member = members?.find((member) => member.id === id)
+  return member ? `“${member.label}”, ${roleText(member.role)} (${id})` : id
 }

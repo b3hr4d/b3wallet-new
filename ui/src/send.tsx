@@ -8,19 +8,31 @@ import { AsMember } from "./member.tsx"
 import { useNowNs } from "./now.ts"
 import { amountText, chainText, readAmount, useToken } from "./tokens.ts"
 
-/** The send page: an owner proposes a transfer, and runs it once it may. */
+/**
+ * The send page: an owner proposes a transfer, and runs it once it may. A
+ * proposer proposes one too, and it waits for an owner or an approver.
+ */
 export function Send({ wallet }: { wallet: Principal }) {
   return (
     <section>
       <h1>Send</h1>
       <AsMember wallet={wallet}>
         {(me) =>
-          me.role.tag === "Owner" ? (
-            <SendForm wallet={wallet} />
+          me.role.tag === "Owner" || me.role.tag === "Proposer" ? (
+            <>
+              {me.role.tag === "Proposer" && (
+                <p>
+                  You are a proposer: a transfer you propose waits for an owner or an approver to
+                  approve and run it.
+                </p>
+              )}
+              <SendForm wallet={wallet} />
+            </>
           ) : (
             <p>
-              Only an owner proposes a transfer, and you are {roleText(me.role)} of this wallet. You
-              approve and run transfers on the <a href="/approvals">Approvals page</a>.
+              Only an owner or a proposer proposes a transfer, and you are {roleText(me.role)} of
+              this wallet. You approve and run transfers on the{" "}
+              <a href="/approvals">Approvals page</a>.
             </p>
           )
         }
@@ -177,7 +189,7 @@ function Proposed({
       </p>
       {current.state.tag === "Waiting" && (
         <p>
-          The other owners and approvers approve it on the <a href="/approvals">Approvals page</a>.
+          Owners and approvers approve it on the <a href="/approvals">Approvals page</a>.
         </p>
       )}
       {execute.isError && (

@@ -27,7 +27,11 @@ type WalletArg = variant {
 
 // ---- Members ----------------------------------------------------------------
 
-type Role = variant { Owner; Approver; Viewer };
+// Owners propose, approve, run and reject; approvers approve and run;
+// viewers only read. A proposer, such as an AI agent, reads and proposes
+// transfers, and its approval never counts: each waits for an owner or an
+// approver.
+type Role = variant { Owner; Approver; Viewer; Proposer };
 
 type Member = record {
   id : principal;
@@ -372,8 +376,9 @@ service : (WalletArg) -> {
   whoami : () -> (opt Member) query;
   members : () -> (MembersResult) query;
   // A signed-in non-member asks to join; creates a pending AddMember action
-  // that adds the caller as a Viewer. Asking again returns the open request.
-  request_join : (text) -> (PendingResult);
+  // that adds the caller as a Viewer, or as a Proposer when it asks for that
+  // role. Asking again returns the open request.
+  request_join : (text, opt Role) -> (PendingResult);
 
   // Accounts. add_account is for owners and needs no approval: it moves nothing.
   accounts : () -> (AccountsResult) query;

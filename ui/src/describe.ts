@@ -94,6 +94,8 @@ export function roleText(role: Role): string {
       return "an approver"
     case "Viewer":
       return "a viewer"
+    case "Proposer":
+      return "a proposer"
   }
 }
 
@@ -221,8 +223,9 @@ export function sourceOf(action: Action, accounts: Account[] | undefined): Accou
 
 /** What a join request asks, in a sentence without its full stop. */
 export function joinRequestText(pending: Pending): string {
-  const label = pending.action.tag === "AddMember" ? pending.action.value.label : ""
-  return `${pending.proposed_by} asks to join as a viewer, “${label}”`
+  if (pending.action.tag !== "AddMember") return ""
+  const { role, label } = pending.action.value
+  return `${pending.proposed_by} asks to join as ${roleText(role)}, “${label}”`
 }
 
 /**
