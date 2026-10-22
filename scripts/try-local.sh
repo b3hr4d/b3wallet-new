@@ -6,6 +6,9 @@
 # With --browser it prints the wallet's claim link instead, for you to claim
 # it in a browser with the local Internet Identity, and stops there.
 #
+# With --upgrade it upgrades the wallet it installed last to this checkout,
+# in place: the wallet keeps its owners, accounts, balances and history.
+#
 # Needs icp-cli and ic-wasm, Node, the Rust toolchain of rust-toolchain.toml,
 # and a clang that compiles to WebAssembly (on a Mac, Homebrew's LLVM).
 # Bitcoin Core's bitcoind and bitcoin-cli, on PATH or
@@ -15,10 +18,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 browser=false
+upgrade=false
 case "${1:-}" in
   --browser) browser=true ;;
+  --upgrade) upgrade=true ;;
   "") ;;
-  *) echo "usage: $0 [--browser]" >&2; exit 2 ;;
+  *) echo "usage: $0 [--browser | --upgrade]" >&2; exit 2 ;;
 esac
 
 state=.icp/try
@@ -111,6 +116,20 @@ if $bitcoin && ! btc getblockcount >/dev/null 2>&1; then
   until btc getblockcount >/dev/null 2>&1; do sleep 1; done
 fi
 icp network status >/dev/null 2>&1 || icp network start -d
+
+if $upgrade; then
+  if ! wallet=$(icp canister status wallet --id-only 2>/dev/null); then
+    echo "There is no wallet to upgrade: run $0 first." >&2
+    exit 1
+  fi
+  # A wallet's Bitcoin network is set once it has a Bitcoin account; this
+  # names it for a wallet from before the setting.
+  icp deploy wallet --mode upgrade --yes \
+    --args "(variant { Upgrade = opt record { bitcoin_network = opt variant { Regtest } } })"
+  echo
+  echo "Wallet $wallet runs this checkout now: http://$wallet.localhost:8000/"
+  exit 0
+fi
 
 # The claim key's private half would live in the claim link's fragment.
 expires=$(($(date +%s) + 24 * 60 * 60))000000000
