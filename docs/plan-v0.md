@@ -100,6 +100,18 @@ the test, so the gap is always visible.
     has its own providers for, read with agreement between providers, and a
     default EVM account. Done when a transfer on Sepolia is signed, sent and
     confirmed, and the cost of each call is recorded.
+18. **Recovery controller.** A per-wallet controller canister with no
+    controller of its own, driven only by the owners' Ed25519 recovery keys,
+    the wallet's `HandOverControl` action and its Recovery card, and
+    `recovery-tool`, a client that needs nothing from the wallet
+    ([decision 0009](decisions/0009-recovery-controller.md),
+    [docs/recovery.md](recovery.md)). Done when PocketIC shows owners
+    repairing a wallet with broken and hostile code without any release
+    service, operations bound to one controller, wallet, policy version,
+    nonce and window, a wallet refusing a controller on another subnet or
+    with settings that could strand it, code that never lets the wallet
+    stop reinstalled with its funds kept, and icp-cli driving a controller with the tool's files,
+    including a call signed offline.
 
 ## Decisions still open
 

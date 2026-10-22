@@ -40,9 +40,12 @@ makes and signs the manifests. A wallet installs a release on itself by an
 and it was tested to upgrade from the version the wallet runs. It checks
 first that it can pay for the install, and sends again an install the IC
 refused. A release whose upgrade traps leaves the version before it running
-and the upgrade marked `Failed`; nothing rescues a wallet from a release that
-breaks upgrades
-([decision 0005](docs/decisions/0005-rescue-path.md)). A factory canister
+and the upgrade marked `Failed`. A wallet can hand control of its code to a
+recovery controller held by its owners' recovery keys, which then repairs it
+in place when its pages, sign-in, API or upgrades break, with `recovery-tool`
+and icp-cli and nothing from the wallet
+([decision 0009](docs/decisions/0009-recovery-controller.md),
+[docs/recovery.md](docs/recovery.md)); it has had no external review yet. A factory canister
 creates wallets: the cycles ledger takes a new wallet's cycles from its
 creator's account, the factory installs the channel's release once two of
 the three signer keys signed it, and the wallet becomes its own only
@@ -56,7 +59,8 @@ design, in [docs/design.md](docs/design.md).
 2. **Owned by its users.** Whoever completes the claim link on the wallet's
    own domain becomes the first owner; owners add more principals later.
 3. **Self-upgrading.** The canister is its only controller and installs
-   approved, signed releases on itself.
+   approved, signed releases on itself, until its owners hand its code to a
+   recovery controller that only their recovery keys drive.
 4. **Everything certified.** Pages are prerendered at build and ship inside
    the signed release, the canister serves them certified, and private values
    come from calls the agent verifies in the browser.
@@ -78,6 +82,10 @@ design, in [docs/design.md](docs/design.md).
 | `canisters/factory/` | The factory canister, which creates wallets |
 | `crates/release/` | Release manifests and their checks, shared by the channel, wallets and the tool |
 | `tools/release-tool/` | The command-line tool that makes, signs and checks manifests |
+| `canisters/controller/`, `candid/controller.did` | The recovery controller a wallet can hand control of its code to |
+| `crates/recovery/` | Recovery policies, operations, their byte encoding and checks, shared by the controller, the wallet and the tool |
+| `tools/recovery-tool/` | The owners' client for a recovery controller: keys, policies, operations, signatures and checks, sent with icp-cli |
+| `scripts/build-controller.sh` | Builds the controller to the same bytes in any directory, and prints its hash |
 | `tests/integration/` | PocketIC tests of the real wallet, release channel and factory Wasm |
 | `tests/caller/` | A canister the PocketIC tests call through, to call as a canister |
 | `scripts/try-local.sh`, `icp.yaml` | A local wallet to try, with icp-cli and a regtest Bitcoin node |
@@ -100,13 +108,19 @@ CI runs the same commands:
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo clippy -p wallet -p release_channel -p factory -p caller --target wasm32-unknown-unknown --locked -- -D warnings
+cargo clippy -p wallet -p release_channel -p factory -p controller -p caller --target wasm32-unknown-unknown --locked -- -D warnings
 cargo test --workspace --exclude integration --locked -- --nocapture   # unit, interface and tool tests
-cargo build -p wallet -p release_channel -p factory -p caller --target wasm32-unknown-unknown --release --locked
+python3 -I tools/recovery-tool/vectors.py   # the recovery guide's digests, computed again in Python
+cargo build -p wallet -p release_channel -p factory -p controller -p caller --target wasm32-unknown-unknown --release --locked
 POCKET_IC_BIN=/path/to/pocket-ic ICRC1_LEDGER_WASM=/path/to/ic-icrc1-ledger.wasm.gz \
   BITCOIND=/path/to/bitcoind BITCOIN_CLI=/path/to/bitcoin-cli \
   cargo test -p integration --locked -- --include-ignored
+POCKET_IC_BIN=/path/to/pocket-ic ICP_CLI=/path/to/icp \
+  cargo test -p recovery-tool --locked -- --include-ignored   # the tool's files, through icp-cli
 ```
+
+CI also builds the controller with `scripts/build-controller.sh` in two
+directories and checks the hashes match.
 
 The UI builds with the Node release `ui/package.json` names (the build checks
 it) and the dependencies its lockfile pins. CI runs, in `ui/`:

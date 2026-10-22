@@ -446,6 +446,14 @@ fn the_wallet_upgrades_itself_to_the_next_release_and_the_one_after() {
                 (None, AuditEvent::UpgradeInstalled(version.to_string())),
             ]
         );
+        // The timer clears the chunk store after the install, which takes
+        // more rounds the larger the release.
+        for _ in 0..10 {
+            if net.stored_chunks() == 0 {
+                break;
+            }
+            net.pic.tick();
+        }
         assert_eq!(net.stored_chunks(), 0, "the timer clears the chunk store");
         assert_eq!(net.release_available(), Ok(None));
         running = wasm;

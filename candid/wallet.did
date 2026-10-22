@@ -137,6 +137,17 @@ type Action = variant {
   UninstallExtension : principal;
   SetPolicy : Policy;
   Upgrade : record { version : text; wasm_sha256 : blob };
+  // Makes a recovery controller (candid/controller.did) the wallet's only
+  // controller, under the SetPolicy rule. Execute checks through the IC that
+  // the controller runs controller_module_hash, was installed once and
+  // fresh, and has no controller, and asks it that it serves this wallet
+  // with the policy whose hash is controller_policy_sha256 and was not
+  // replaced. Decision 0009, 2026-10-22.
+  HandOverControl : record {
+    controller : principal;
+    controller_module_hash : blob;
+    controller_policy_sha256 : blob;
+  };
 };
 
 type ActionKind = variant {
