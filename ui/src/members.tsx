@@ -90,7 +90,13 @@ function Manage({ wallet: id, me }: { wallet: Principal; me: Member }) {
         </div>
       )}
       {proposed && (
-        <Proposed wallet={id} pending={proposed} onDone={() => setProposed(undefined)} />
+        // Keyed by the action, so a new proposal starts with nothing run.
+        <Proposed
+          key={String(proposed.id)}
+          wallet={id}
+          pending={proposed}
+          onDone={() => setProposed(undefined)}
+        />
       )}
       <section className="card">
         <div className="card-head">
