@@ -84,6 +84,42 @@ jobs:
           diff -r canisters/wallet/pages "${RUNNER_TEMP}/again-pages"
           sha256sum canisters/wallet/pages/*
 
+  # The MCP server an AI agent runs on its owner's computer (mcp/README.md).
+  # Its tests call its tools against a fake replica, on the Node the UI pins.
+  mcp:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: mcp
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned Node
+        run: |
+          curl -sSfL -o "${RUNNER_TEMP}/node.tar.xz" \
+            "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz"
+          echo "${NODE_SHA256}  ${RUNNER_TEMP}/node.tar.xz" | sha256sum --check
+          mkdir "${RUNNER_TEMP}/node"
+          tar -xJf "${RUNNER_TEMP}/node.tar.xz" -C "${RUNNER_TEMP}/node" --strip-components=1
+          echo "${RUNNER_TEMP}/node/bin" >> "${GITHUB_PATH}"
+
+      - name: Install the locked dependencies, and write the bindings
+        run: npm ci
+
+      - name: Format
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+
   wallet:
     runs-on: ubuntu-24.04
     steps:

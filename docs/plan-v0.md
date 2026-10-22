@@ -82,6 +82,13 @@ the test, so the gap is always visible.
 14. **Mainnet gate.** Deploy, run the chunked self-upgrade from v(n) to v(n+2)
     on mainnet, and record the cycle cost of each step.
 
+15. **AI agents as proposers.** A `Proposer` role whose approval never
+    counts, and an MCP server in `mcp/` with its own key, so an AI on the
+    owner's computer can read the wallet and propose transfers that wait for
+    an owner ([decision 0007](decisions/0007-agent-proposer.md)). Done when a
+    proposer's transfer under the daily limit still waits for an owner, and
+    an AI client proposes one through the server on a local network.
+
 ## Decisions still open
 
 - License.

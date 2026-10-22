@@ -6,4 +6,6 @@ node_modules/
 *.wasm.gz
 # The UI's bindings, generated from candid/wallet.did on every build, and its scratch.
 ui/src/generated/
+# The MCP server's bindings, generated the same way when its packages install.
+mcp/src/generated/
 ui/.build/
