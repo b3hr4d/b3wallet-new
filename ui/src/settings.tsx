@@ -14,6 +14,7 @@ import { initialOf } from "./mark.ts"
 import { AsMember } from "./member.tsx"
 import { useNowNs } from "./now.ts"
 import { byRole, CHIP, Rules } from "./people.tsx"
+import { Recovery } from "./recovery.tsx"
 import { ReleaseCheck } from "./release.tsx"
 import { useRun } from "./sign-in.tsx"
 import { leftText } from "./time.ts"
@@ -125,6 +126,7 @@ function Sections({ wallet: id, me, local }: { wallet: Principal; me: Member; lo
         )}
       </section>
       <Rules wallet={id} members={members.data} />
+      <Recovery wallet={id} me={me} />
 
       <section id="wallet" className="card">
         <div className="card-head">

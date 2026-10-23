@@ -2694,6 +2694,10 @@ fn wallet_on_regtest_after(prepare: impl FnOnce(&PocketIc, Principal, Principal)
     try_install(&pic, wallet, &WalletArg::Init(args)).unwrap();
     let owner = user(7);
     claim(&pic, wallet, owner, claim_signature(wallet, owner)).unwrap();
+    // The wallet asks for its default accounts' keys from init. Moving the
+    // clock while one of those calls is out ends it past its deadline, and
+    // the wallet asks again only a minute of IC time later.
+    made_default_accounts(&pic, wallet, owner);
     prepare(&pic, wallet, owner);
     // The Bitcoin canister follows blocks only near the IC's time.
     let now = SystemTime::now().into();
@@ -2705,6 +2709,29 @@ fn wallet_on_regtest_after(prepare: impl FnOnce(&PocketIc, Principal, Principal)
         wallet,
         owner,
         _lock: lock,
+    }
+}
+
+/// Waits for the Bitcoin and EVM accounts the wallet makes itself, once the
+/// threshold key subnet gave it their keys, and returns the Bitcoin one.
+fn made_default_accounts(pic: &PocketIc, wallet: Principal, owner: Principal) -> Account {
+    let start = Instant::now();
+    loop {
+        let accounts = accounts(pic, wallet, owner);
+        let bitcoin = accounts
+            .iter()
+            .find(|account| account.kind == AccountKind::Bitcoin(BitcoinNetwork::Regtest));
+        let evm = accounts
+            .iter()
+            .any(|account| account.kind == AccountKind::Evm);
+        if let (Some(bitcoin), true) = (bitcoin, evm) {
+            return bitcoin.clone();
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(60),
+            "the wallet did not make its Bitcoin and EVM accounts"
+        );
+        pic.tick();
     }
 }
 
@@ -2749,23 +2776,9 @@ impl Regtest {
         add_account(&self.pic, self.wallet, self.owner, kind, label).unwrap()
     }
 
-    /// The Bitcoin account the wallet makes itself, once the threshold key
-    /// subnet gave it its key.
+    /// The Bitcoin account the wallet made itself.
     fn main_account(&self) -> Account {
-        let start = Instant::now();
-        loop {
-            let found = accounts(&self.pic, self.wallet, self.owner)
-                .into_iter()
-                .find(|account| account.kind == AccountKind::Bitcoin(BitcoinNetwork::Regtest));
-            if let Some(account) = found {
-                return account;
-            }
-            assert!(
-                start.elapsed() < Duration::from_secs(60),
-                "the wallet made no Bitcoin account"
-            );
-            self.pic.tick();
-        }
+        made_default_accounts(&self.pic, self.wallet, self.owner)
     }
 
     /// Lets the wallet's timer run, and any calls it makes end.

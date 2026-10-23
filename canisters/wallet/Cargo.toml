@@ -17,6 +17,7 @@ ic-cdk-bitcoin-canister.workspace = true
 ic-http-certification.workspace = true
 ic-stable-structures.workspace = true
 icrc-ledger-types.workspace = true
+recovery = { path = "../../crates/recovery" }
 release = { path = "../../crates/release" }
 secp256k1.workspace = true
 sha2.workspace = true

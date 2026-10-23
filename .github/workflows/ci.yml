@@ -23,6 +23,11 @@ env:
   # all 16 builders of the release signed in bitcoin-core/guix.sigs.
   BITCOIN_CORE_VERSION: "31.1"
   BITCOIN_CORE_SHA256: b80d9c3e04da78fb6f0569685673418cf686fadba9042d926d13fb87ff503f9e
+  # icp-cli, which the recovery tool's test drives as owners do. The
+  # checksum is of the npm registry's tarball, which matched the registry's
+  # sha512 integrity on 2026-10-22.
+  ICP_CLI_VERSION: 1.7.0
+  ICP_CLI_SHA256: b92746f1a8289cb7c86192f531ec50f6fa13d7e28c56b14df2d720f7b36172ed
   # The Node release the UI build is pinned to (ui/package.json's engines).
   # The checksum is the one nodejs.org lists in the release's SHASUMS256.txt.
   NODE_VERSION: 22.22.0
@@ -139,10 +144,15 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Clippy (canister target)
-        run: cargo clippy -p wallet -p release_channel -p factory -p caller -p evm_rpc_mock --target wasm32-unknown-unknown --locked -- -D warnings
+        run: cargo clippy -p wallet -p release_channel -p factory -p controller -p caller -p evm_rpc_mock --target wasm32-unknown-unknown --locked -- -D warnings
 
       - name: Unit, interface and release tool tests
         run: cargo test --workspace --exclude integration --locked -- --nocapture
+
+      # The digests the recovery keys sign, computed again in Python from
+      # docs/recovery.md alone.
+      - name: The recovery guide's encoding gives its test vectors
+        run: python3 -I tools/recovery-tool/vectors.py
 
       # The previous release is the pull request's base, or on main the commit
       # before. It builds in its own target directory: both builds write
@@ -160,8 +170,19 @@ jobs:
 
       # The caller canister lets the PocketIC tests call as a canister, and
       # the EVM RPC stand-in answers them as the EVM RPC canister.
-      - name: Build the wallet, release channel, factory, caller and EVM RPC stand-in Wasm
-        run: cargo build -p wallet -p release_channel -p factory -p caller -p evm_rpc_mock --target wasm32-unknown-unknown --release --locked
+      - name: Build the wallet, release channel, factory, controller, caller and EVM RPC stand-in Wasm
+        run: cargo build -p wallet -p release_channel -p factory -p controller -p caller -p evm_rpc_mock --target wasm32-unknown-unknown --release --locked
+
+      # Owners check a controller's module hash against this build
+      # (docs/recovery.md), so it must not depend on where the source sits.
+      - name: The controller builds to the same bytes in another directory
+        run: |
+          git worktree add --detach "${RUNNER_TEMP}/controller-again" HEAD
+          here=$(scripts/build-controller.sh)
+          there=$("${RUNNER_TEMP}/controller-again/scripts/build-controller.sh")
+          echo "${here}"
+          echo "${there}"
+          [ "${here%% *}" = "${there%% *}" ]
 
       - name: Download the PocketIC server
         run: |
@@ -188,5 +209,17 @@ jobs:
           echo "BITCOIND=${PWD}/bitcoin-${BITCOIN_CORE_VERSION}/bin/bitcoind" >> "${GITHUB_ENV}"
           echo "BITCOIN_CLI=${PWD}/bitcoin-${BITCOIN_CORE_VERSION}/bin/bitcoin-cli" >> "${GITHUB_ENV}"
 
+      - name: Download icp-cli
+        run: |
+          curl -sSfL -o icp-cli.tgz \
+            "https://registry.npmjs.org/@icp-sdk/icp-cli-linux-x64/-/icp-cli-linux-x64-${ICP_CLI_VERSION}.tgz"
+          echo "${ICP_CLI_SHA256}  icp-cli.tgz" | sha256sum --check
+          mkdir icp-cli
+          tar -xzf icp-cli.tgz -C icp-cli
+          echo "ICP_CLI=${PWD}/icp-cli/package/bin/icp" >> "${GITHUB_ENV}"
+
       - name: PocketIC tests, with the upgrade from the previous release, regtest and a 100 MiB release
         run: cargo test -p integration --locked -- --include-ignored
+
+      - name: The recovery tool drives a controller, directly and through icp-cli
+        run: cargo test -p recovery-tool --locked -- --include-ignored

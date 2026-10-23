@@ -490,6 +490,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2459377285ad874054d797f3ccebf984978aa39129f6eafde5cdc8315b612f8"
 
 [[package]]
+name = "controller"
+version = "0.1.0"
+dependencies = [
+ "candid",
+ "candid_parser",
+ "ed25519-dalek",
+ "ic-cdk",
+ "ic-stable-structures",
+ "proptest",
+ "recovery",
+ "release",
+ "serde",
+ "serde_bytes",
+]
+
+[[package]]
 name = "convert_case"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1729,6 +1745,7 @@ dependencies = [
  "ic-response-verification",
  "icrc-ledger-types",
  "pocket-ic",
+ "recovery",
  "release",
  "release-tool",
  "release_channel",
@@ -2537,6 +2554,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "513962919efc330f829edb2535844d1b912b0fbe2ca165d613e4e8788bb05a5a"
 dependencies = [
  "rand_core 0.9.5",
+]
+
+[[package]]
+name = "recovery"
+version = "0.1.0"
+dependencies = [
+ "candid",
+ "ed25519-dalek",
+ "proptest",
+ "release",
+ "serde",
+ "serde_bytes",
+ "sha2",
+]
+
+[[package]]
+name = "recovery-tool"
+version = "0.1.0"
+dependencies = [
+ "candid",
+ "candid_parser",
+ "ed25519-dalek",
+ "pocket-ic",
+ "recovery",
+ "release",
+ "release-tool",
+ "serde",
+ "serde_bytes",
+ "serde_json",
 ]
 
 [[package]]
@@ -3721,6 +3767,7 @@ dependencies = [
  "ic-stable-structures",
  "icrc-ledger-types",
  "proptest",
+ "recovery",
  "release",
  "secp256k1",
  "serde",

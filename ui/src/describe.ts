@@ -150,6 +150,8 @@ export function actionText(
       return "Change the approval policy"
     case "Upgrade":
       return `Upgrade the wallet to version ${action.value.version}`
+    case "HandOverControl":
+      return `Hand control of the wallet's code to the recovery controller ${action.value.controller}`
   }
 }
 
@@ -171,6 +173,12 @@ export function actionDetails(action: Action): string[] {
       return action.value.rules.flatMap(ruleText)
     case "Upgrade":
       return [`The new version's Wasm has the SHA-256 ${hexOf(action.value.wasm_sha256)}.`]
+    case "HandOverControl":
+      return [
+        "After it, only the recovery keys that controller holds can change the wallet's code, and the wallet can never take control back.",
+        `The controller's module has the SHA-256 ${hexOf(action.value.controller_module_hash)}.`,
+        `Its recovery policy has the SHA-256 ${hexOf(action.value.controller_policy_sha256)}.`,
+      ]
     case "AddMember":
     case "RemoveMember":
     case "ChangeRole":

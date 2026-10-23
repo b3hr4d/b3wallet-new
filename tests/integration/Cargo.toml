@@ -16,6 +16,7 @@ ic-http-certification.workspace = true
 ic-response-verification.workspace = true
 icrc-ledger-types.workspace = true
 pocket-ic.workspace = true
+recovery = { path = "../../crates/recovery" }
 release = { path = "../../crates/release" }
 release-tool = { path = "../../tools/release-tool" }
 release_channel = { path = "../../canisters/release_channel" }
