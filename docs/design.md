@@ -418,7 +418,7 @@ it runs, and one when it runs low on cycles; it lets an owner add an
 account, and asks to join for someone signed in who is not a member. The
 send page proposes a transfer and runs it when the policy lets it through at
 once; the receive page shows each account's whole address and its QR code to
-give a sender ([decision 0009](decisions/0009-qr-encoder.md)), in both forms
+give a sender ([decision 0010](decisions/0010-qr-encoder.md)), in both forms
 for an Internet Computer account; each account's own page shows what it
 holds of each asset, its addresses and its open transfers; the
 notifications page lists what needs you and the audit log, marking what is

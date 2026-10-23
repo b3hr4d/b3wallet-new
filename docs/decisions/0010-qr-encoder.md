@@ -1,4 +1,4 @@
-# 0009: uqr draws the receive page's QR codes
+# 0010: uqr draws the receive page's QR codes
 
 Status: proposed, 2026-10-22.
 
