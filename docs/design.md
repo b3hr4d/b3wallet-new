@@ -398,19 +398,24 @@ icp-cli's network), takes the wallet's id from it, and fills in everything
 else from calls to the wallet. It makes its reads as replicated calls, which
 the subnet certifies, rather than as queries a single replica answers, and
 reads a token's symbol, decimals and fee from its ledger's `icrc1_metadata`
-the same way. The start page shows a member the wallet's holdings per
-token, its accounts with their balances, its open actions, cycles and
-version, and its newest audit entries, with a notice for every open action
-that is not a transfer, since those change who controls the wallet or what
-it runs, and one when it runs low on cycles; it lets an owner add an
-account, and asks to join for someone signed in who is not a member. The
+the same way. Every page frames the same rail beside it on a wide screen
+(narrower, the start page and the inbox show it on the page): what needs
+the member, a notice for every open action that is not a transfer, since
+those change who controls the wallet or what it runs, one when it runs low
+on cycles or an upgrade fails, and each action the member may approve or
+run with the same buttons as the approvals page, then its newest audit
+entries. The start page shows a member the wallet's holdings per token and
+how they split between its accounts, its instruments (open actions, cycles,
+what a transfer needs, members, version) and its accounts with their
+balances; it lets an owner add an account, and asks to join for someone
+signed in who is not a member. The
 send page proposes a transfer and runs it when the policy lets it through at
 once; the receive page shows each account's whole address and its QR code to
 give a sender ([decision 0009](decisions/0009-qr-encoder.md)), in both forms
 for an Internet Computer account; each account's own page shows what it
 holds of each asset, its addresses and its open transfers; the
-notifications page lists what needs you and the audit log, marking what is
-new since you last looked, which only the browser remembers; the approvals
+inbox lists what needs you and the audit log, marking what is new since
+you last looked, which only the browser remembers; the approvals
 page lists the open actions with the buttons the member's role allows. The
 settings page holds the rest: the members, a security checkup with the
 policy, what the IC's certified state says of the wallet's controllers and

@@ -2,6 +2,7 @@ import { isPrincipal, principal, type Principal } from "@candid-core/schema"
 import { useMutation, type UseQueryResult } from "@tanstack/react-query"
 import { useState, type ReactNode } from "react"
 import { useWallet } from "./canister.ts"
+import { CopyButton } from "./copy.tsx"
 import { failureText, shortText } from "./describe.ts"
 import type {
   Account,
@@ -40,7 +41,7 @@ export function Amount({ amount, token }: { amount: bigint; token: Token }) {
 
 /**
  * What the wallet holds, a total per asset over its accounts, once every
- * balance of that asset is read.
+ * balance of that asset is read, with how it splits between them.
  */
 export function Holdings({
   accounts,
@@ -53,44 +54,43 @@ export function Holdings({
   if (accounts.data === undefined) {
     return (
       <div className="holdings">
-        <span className="skeleton big" />
+        <div className="holding">
+          <span className="skeleton" />
+          <span className="skeleton big" />
+        </div>
       </div>
     )
   }
-  const groups = new Map<string, { asset: Chain; reads: Array<UseQueryResult<Balance>> }>()
-  for (const { asset, read } of balances) {
-    const key = chainKey(asset)
-    const group = groups.get(key) ?? { asset, reads: [] }
-    group.reads.push(read)
+  const groups = new Map<string, { asset: Chain; parts: BalanceRead[] }>()
+  for (const balance of balances) {
+    const key = chainKey(balance.asset)
+    const group = groups.get(key) ?? { asset: balance.asset, parts: [] }
+    group.parts.push(balance)
     groups.set(key, group)
   }
   return (
     <div className="holdings">
       {[...groups].map(([key, group]) => (
-        <Holding key={key} asset={group.asset} reads={group.reads} />
+        <Holding key={key} asset={group.asset} parts={group.parts} />
       ))}
     </div>
   )
 }
 
-/** One asset's total, under its symbol and how many accounts hold it. */
-function Holding({ asset, reads }: { asset: Chain; reads: Array<UseQueryResult<Balance>> }) {
+/** One asset's total, under its symbol, and its split between the accounts that hold it. */
+function Holding({ asset, parts }: { asset: Chain; parts: BalanceRead[] }) {
   const { token, error } = useToken(asset)
-  const amounts = reads.map((read) => read.data?.amount)
-  const failed = error !== undefined || reads.some((read) => read.isError)
-  const total =
-    token === undefined || amounts.some((amount) => amount === undefined)
-      ? undefined
-      : amountParts(
-          amounts.reduce<bigint>((sum, amount) => sum + (amount ?? 0n), 0n),
-          token,
-        )
+  const amounts = parts.map(({ read }) => read.data?.amount)
+  const failed = error !== undefined || parts.some(({ read }) => read.isError)
+  const allRead = amounts.every((amount) => amount !== undefined)
+  const sum = amounts.reduce<bigint>((total, amount) => total + (amount ?? 0n), 0n)
+  const total = token === undefined || !allRead ? undefined : amountParts(sum, token)
   return (
     <div className="holding">
       <p className="holding-label">
         {token ? <strong>{token.symbol}</strong> : <span className="skeleton" />}
         <span>
-          {reads.length} account{reads.length === 1 ? "" : "s"}
+          {parts.length} account{parts.length === 1 ? "" : "s"}
         </span>
       </p>
       {failed ? (
@@ -103,6 +103,48 @@ function Holding({ asset, reads }: { asset: Chain; reads: Array<UseQueryResult<B
           <span className="amount-fraction">{total.fraction}</span>
         </p>
       )}
+      {!failed && allRead && parts.length > 1 && sum > 0n && (
+        <Split
+          parts={parts.map(({ account, read }) => ({
+            label: account.label,
+            share: Number(((read.data?.amount ?? 0n) * 1000n) / sum) / 10,
+          }))}
+        />
+      )}
+    </div>
+  )
+}
+
+/**
+ * How an asset splits between accounts: a bar of a segment each, widest
+ * first, and the shares in words. The bar is drawn in its own units, since
+ * the CSP allows no style attribute.
+ */
+function Split({ parts }: { parts: Array<{ label: string; share: number }> }) {
+  const sorted = [...parts].sort((a, b) => b.share - a.share)
+  const starts = sorted.map((_, index) =>
+    sorted.slice(0, index).reduce((sum, part) => sum + part.share, 0),
+  )
+  return (
+    <div className="split">
+      <svg viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true">
+        {sorted.map((part, index) => (
+          <rect
+            key={part.label + index}
+            className={`split-${Math.min(index, 3)}`}
+            x={starts[index]}
+            width={Math.max(part.share - 0.6, 0.4)}
+            height="4"
+          />
+        ))}
+      </svg>
+      <p className="split-legend">
+        {sorted.slice(0, 3).map((part, index) => (
+          <span key={part.label + index} className={`split-${Math.min(index, 3)}`}>
+            {part.label} {part.share < 1 && part.share > 0 ? "<1" : Math.round(part.share)}%
+          </span>
+        ))}
+      </p>
     </div>
   )
 }
@@ -187,12 +229,13 @@ export function Accounts({
 }
 
 /**
- * One account in the list: its first asset's balance, which the wallet asks
- * a ledger, the Bitcoin canister or an EVM chain's providers for, and how
- * many tokens it shows. It opens the account's own page, which holds the rest.
+ * One account, as a card: its first asset's balance large, which the wallet
+ * asks a ledger, the Bitcoin canister or an EVM chain's providers for, its
+ * other tokens, and its address to copy. The card opens the account's own
+ * page, which holds the rest.
  */
 function AccountItem({ account, reads }: { account: Account; reads: BalanceRead[] }) {
-  const [first] = reads
+  const [first, ...more] = reads
   const token = useToken(first?.asset)
   const failure = first?.read.isError ? first.read.error : token.error
   let shown: ReactNode
@@ -208,18 +251,30 @@ function AccountItem({ account, reads }: { account: Account; reads: BalanceRead[
   }
   return (
     <li className="account">
-      <a className="account-link" href={`/account?id=${account.id}`}>
+      <div className="account-top">
         <KindAvatar kind={account.kind} />
-        <span className="account-name">
-          <strong>{account.label}</strong>
+        <p className="account-name">
+          <a className="account-link" href={`/account?id=${account.id}`}>
+            <strong>{account.label}</strong>
+          </a>
           <span>
-            {kindText(account.kind)}
-            {reads.length > 1 ? ` · ${reads.length} tokens` : ""}
+            {kindText(account.kind)} · {account.index}
           </span>
-        </span>
-        <span className="account-balance">{shown}</span>
+        </p>
         <ArrowIcon />
-      </a>
+      </div>
+      <p className="account-balance">{shown}</p>
+      {more.length > 0 && (
+        <ul className="holds">
+          {more.map(({ asset, read }) => (
+            <HeldAsset key={chainKey(asset)} asset={asset} read={read} />
+          ))}
+        </ul>
+      )}
+      <p className="account-address">
+        <code>{shortText(account.address, 10, 6)}</code>
+        <CopyButton text={account.address} label={`Copy the address of ${account.label}`} />
+      </p>
     </li>
   )
 }

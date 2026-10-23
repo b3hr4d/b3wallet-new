@@ -8,16 +8,15 @@ import { failureText, shortText } from "./describe.ts"
 import { CheckList } from "./checks.tsx"
 import { healthOf } from "./health.ts"
 import { useMe } from "./member.tsx"
-import { useUnread } from "./notifications-page.tsx"
 import { useNowNs } from "./now.ts"
+import { ArrowIcon } from "./icons.tsx"
 import { useRun } from "./sign-in.tsx"
 
 /**
- * Who is signed in, at the end of the bar on every page. Signed in, it is the
+ * Who is signed in, in the spine on every page. Signed in, it is the
  * wallet's health: a dot that is the logo's node while all is well, sends out
- * a ring when something needs you and turns red when something is wrong,
- * with a count of the notifications you have not seen, and opens to say why,
- * with the notifications and the sign-out. Internet Identity gives each site its
+ * a ring when something needs you and turns red when something is wrong, and
+ * opens to say why, with the inbox and the sign-out. Internet Identity gives each site its
  * own principal, so the identity this page signs in with belongs to this
  * wallet's address only.
  */
@@ -28,12 +27,7 @@ export function Account({ wallet }: { wallet: Principal }) {
     <>
       {failure && <span className="error bar-error">{failure}</span>}
       {auth.status === "signed-in" ? (
-        <Health
-          wallet={wallet}
-          principal={auth.principal}
-          expiresAt={auth.expiresAt}
-          onSignOut={() => run(auth.signOut)}
-        />
+        <Health wallet={wallet} principal={auth.principal} onSignOut={() => run(auth.signOut)} />
       ) : (
         <button type="button" className="primary small" onClick={() => run(auth.signIn)}>
           {auth.status === "expired" ? "Sign in again" : "Sign in"}
@@ -44,40 +38,41 @@ export function Account({ wallet }: { wallet: Principal }) {
 }
 
 /**
- * The health chip and its panel. It reads the status and who you are, which
- * every page reads, and for a member the open actions and the newest audit
- * entries, which the start page reads too: elsewhere they cost a read each.
+ * The wallet's health, as the chip, the rail and the inbox show it. It reads
+ * the status and who you are, which every page reads, and for a member the
+ * open actions, which the start page and the rail read too.
  */
-function Health({
-  wallet: id,
-  principal,
-  expiresAt,
-  onSignOut,
-}: {
-  wallet: Principal
-  principal: string
-  expiresAt: number | undefined
-  onSignOut: () => void
-}) {
+export function useHealth(id: Principal) {
+  const auth = useAuth()
   const { status, me } = useMe(id)
   const { client, wallet } = useWallet(id)
   const member = me.isSuccess ? me.data : undefined
   const pending = useQuery(client.queryOptions(wallet, "pending", member ? undefined : skipToken))
   const nowNs = useNowNs()
-  const health = healthOf({
+  return healthOf({
     status: status.data,
     statusFailure: status.isError ? failureText(status.error) : undefined,
     me: member,
     pending: pending.data,
-    sessionEndsNs: expiresAt === undefined ? undefined : BigInt(expiresAt) * 1_000_000n,
+    sessionEndsNs:
+      auth.status === "signed-in" && auth.expiresAt !== undefined
+        ? BigInt(auth.expiresAt) * 1_000_000n
+        : undefined,
     nowNs,
   })
+}
 
-  const unread = useUnread(id, member ?? undefined)
-  const news =
-    unread.count === 0
-      ? ""
-      : `${unread.count}${unread.more ? "+" : ""} new notification${unread.count === 1 && !unread.more ? "" : "s"}`
+/** The health chip and its panel, which opens to every check and the sign-out. */
+function Health({
+  wallet: id,
+  principal,
+  onSignOut,
+}: {
+  wallet: Principal
+  principal: string
+  onSignOut: () => void
+}) {
+  const health = useHealth(id)
   const [open, setOpen] = useState(false)
   const box = useRef<HTMLDivElement>(null)
   // Closes on a press outside the chip and its panel, and on Escape.
@@ -104,18 +99,12 @@ function Health({
         className={`who ${health.level}`}
         aria-expanded={open}
         aria-controls="health"
-        aria-label={`Signed in as ${shortText(principal)}. Wallet health: ${health.summary}.${news ? ` ${news}.` : ""}`}
-        title={news ? `${health.summary} · ${news}` : health.summary}
+        aria-label={`Signed in as ${shortText(principal)}. Wallet health: ${health.summary}.`}
+        title={health.summary}
         onClick={() => setOpen(!open)}
       >
         <span className="health-dot" aria-hidden="true" />
         <code>{shortText(principal)}</code>
-        {unread.count > 0 && (
-          <span className="badge" aria-hidden="true">
-            {unread.count}
-            {unread.more ? "+" : ""}
-          </span>
-        )}
       </button>
       {open && (
         <div id="health" className="health-panel" role="dialog" aria-label="Wallet health">
@@ -124,10 +113,8 @@ function Health({
             {health.summary}
           </p>
           <a className="health-news" href="/notifications">
-            <span>Notifications</span>
-            <span className={unread.count > 0 ? "badge" : "count"}>
-              {unread.count > 0 ? `${unread.count}${unread.more ? "+" : ""} new` : "None new"}
-            </span>
+            <span>Open the inbox</span>
+            <ArrowIcon />
           </a>
           <CheckList checks={health.checks} />
           <div className="health-foot">

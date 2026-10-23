@@ -47,6 +47,7 @@ export function MembersPage({ wallet }: { wallet: Principal }) {
         <a href="/settings">Settings</a>
       </p>
       <div className="page-head">
+        <p className="eyebrow">Who holds the keys</p>
         <h1>Members</h1>
         <p className="quiet">
           Who can see and move this wallet, and with what role. Every change waits for the approvals

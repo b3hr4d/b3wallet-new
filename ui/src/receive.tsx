@@ -20,6 +20,7 @@ export function Receive({ wallet }: { wallet: Principal }) {
   return (
     <section className="column">
       <div className="page-head">
+        <p className="eyebrow">Your addresses</p>
         <h1>Receive</h1>
         <p className="quiet">
           Give the sender the whole address of the account that should receive, and check it with

@@ -5,7 +5,7 @@ export const PAGES = [
   { page: "receive", file: "receive.html", title: "Receive · B3Wallet" },
   { page: "account", file: "account.html", title: "Account · B3Wallet" },
   { page: "members", file: "members.html", title: "Members · B3Wallet" },
-  { page: "notifications", file: "notifications.html", title: "Notifications · B3Wallet" },
+  { page: "notifications", file: "notifications.html", title: "Inbox · B3Wallet" },
   { page: "settings", file: "settings.html", title: "Settings · B3Wallet" },
   { page: "approvals", file: "approvals.html", title: "Approvals · B3Wallet" },
   { page: "claim", file: "claim.html", title: "Claim your wallet · B3Wallet" },
