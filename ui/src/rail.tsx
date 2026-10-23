@@ -198,6 +198,7 @@ function kindOf(pending: Pending): string {
     Upgrade: "Upgrade",
     InstallExtension: "New extension",
     UninstallExtension: "Remove extension",
+    HandOverControl: "Hand-over",
   }
   return isJoinRequest(pending) ? "Join request" : names[pending.action.tag]
 }

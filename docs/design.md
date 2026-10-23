@@ -95,6 +95,18 @@ The browser reaches the wallet only through certified pages and update calls on
 the wallet's own domain. Extensions, the release channel and the factory are
 separate canisters that can ask, offer or create, but never control the wallet.
 
+A wallet can hand control of its code to a recovery controller
+([decision 0009](decisions/0009-recovery-controller.md)): a small canister
+on the wallet's subnet with no controller of its own that installs code on the wallet only on
+operations the owners' Ed25519 recovery keys signed, after their threshold
+and delay. It reads nothing from the wallet and gives a call from it no
+weight, so it can repair the wallet in place when the wallet's pages, sign-in,
+API or own upgrade method break. A wallet handed over no longer upgrades
+itself; [docs/recovery.md](recovery.md) is the owners' guide. Its stable
+memory holds the config and policy (memory 0), every operation ever proposed
+(1), the open ones (2), the chunks of open installs (3) and the execution in
+flight (4).
+
 ## Firmware modules
 
 Only the chain adapters, the signer and the upgrade gate can move funds or
@@ -411,7 +423,7 @@ balances; it lets an owner add an account, and asks to join for someone
 signed in who is not a member. The
 send page proposes a transfer and runs it when the policy lets it through at
 once; the receive page shows each account's whole address and its QR code to
-give a sender ([decision 0009](decisions/0009-qr-encoder.md)), in both forms
+give a sender ([decision 0010](decisions/0010-qr-encoder.md)), in both forms
 for an Internet Computer account; each account's own page shows what it
 holds of each asset, its addresses and its open transfers; the
 inbox lists what needs you and the audit log, marking what is new since
@@ -506,7 +518,9 @@ exists in canister memory, but whoever can install code can move every fund.
 | A compromised release channel or publisher | The channel publishes only a manifest two signers signed, with chunks that match it; wallets check both again themselves | It can withhold releases |
 | A malicious or compromised factory | It installs only a release two of the three signer keys signed, pins those keys in the wallet, and leaves each wallet its own only controller; a wallet's module hash and controllers are public in the IC's certified state | A factory whose controllers change its code can create wallets that run other code or that it still controls, and nothing checks a new wallet's module hash and controllers before the claim yet. Wallets already handed over are out of its reach |
 | Strangers calling the factory | `create_wallet` checks its arguments and the release before the creator pays; the creator pays the wallet's cycles | Each call costs the factory cycles: a refused one a channel read and the signature checks, and each wallet about 8.5B for the factory's calls, which the creator does not pay |
-| An upgrade that bricks the wallet | One-way install keeps the old code when `post_upgrade` traps, the wallet sends an install the IC refused again, and marks the upgrade `Failed` an hour later; an upgrade the wallet cannot pay for stops before it stages; `tested_from` refuses untested paths; every release is tested over the last two versions | No rescue if a release breaks its own upgrade method ([decision 0005](decisions/0005-rescue-path.md)) |
+| An upgrade that bricks the wallet | One-way install keeps the old code when `post_upgrade` traps, the wallet sends an install the IC refused again, and marks the upgrade `Failed` an hour later; an upgrade the wallet cannot pay for stops before it stages; `tested_from` refuses untested paths; every release is tested over the last two versions | A wallet that controls itself has no rescue if a release breaks its own upgrade method; one handed to a recovery controller is repaired in place by its owners' recovery keys ([decision 0009](decisions/0009-recovery-controller.md)) |
+| Broken wallet code: pages, sign-in, API or upgrade method | A recovery controller installs a fix, or a module the owners built themselves, on recovery keys independent of the wallet's login; it stops the wallet first, or for a reinstall uninstalls its code, which ends every call the code held, so no call is in flight across the install; it pays what the wallet lacks for the install, and never restores a snapshot | A bug in the immutable controller, fixed only by moving to a new one through its `ReplaceController`; no external audit yet |
+| Recovery keys lost or stolen | Any key cancels an open operation except a policy change that removes it; the remaining keys rotate keys out at the sovereign threshold; every operation names the controller, wallet, policy version, nonce and expiry | The sovereign threshold of keys can install anything after two delays; nothing yet tells the owners an operation was proposed |
 | An AI agent that is misled or compromised | It joins as a proposer: it reads and proposes only transfers, its approval never counts, so each transfer waits for an owner or an approver; at most 8 of its actions are open at once; its MCP server runs on its user's computer with a key file only that user can read, and offers no tool that approves, runs or rejects ([decision 0007](decisions/0007-agent-proposer.md)) | An owner who approves what the agent proposes without reading it; what the agent can read: balances, the audit log and members |
 | One owner's device or anchor stolen | Quorum and timelock above the daily limit; any owner can reject; removing an owner needs the others | Losses up to the daily limit |
 | Claim link intercepted | Private key only in the fragment; one use; expiry; the signature names the caller | Whoever opens the link first owns the wallet |

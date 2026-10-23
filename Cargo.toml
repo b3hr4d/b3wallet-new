@@ -1,13 +1,16 @@
 [workspace]
 resolver = "3"
 members = [
+  "canisters/controller",
   "canisters/factory",
   "canisters/release_channel",
   "canisters/wallet",
+  "crates/recovery",
   "crates/release",
   "tests/caller",
   "tests/evm_rpc_mock",
   "tests/integration",
+  "tools/recovery-tool",
   "tools/release-tool",
 ]
 
@@ -43,7 +46,8 @@ proptest = { version = "=1.11.0", default-features = false, features = ["std"] }
 secp256k1 = { version = "=0.29.1", default-features = false, features = ["lowmemory", "recovery"] }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_bytes = "=0.11.19"
-# The EVM RPC mock reads the JSON-RPC requests the wallet sends; tests only.
+# The EVM RPC mock reads the JSON-RPC requests the wallet sends (tests only),
+# and the recovery tool reads icp-cli's JSON; already under candid_parser.
 serde_json = "=1.0.154"
 # Chunk and manifest hashes; already under ed25519-dalek.
 sha2 = { version = "=0.10.9", default-features = false }

@@ -111,6 +111,11 @@ impl Governance {
                     action.kind()
                 )));
             }
+            Action::HandOverControl { .. } => {
+                return Err(WalletError::InvalidArgument(
+                    "HandOverControl is not a change to the members or the policy".to_string(),
+                ));
+            }
             // Extensions arrive in a later step.
             Action::InstallExtension { .. } | Action::UninstallExtension(_) => {
                 return Err(WalletError::InvalidArgument(format!(

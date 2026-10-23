@@ -778,6 +778,12 @@ fn an_upgrade_the_wallet_cannot_pay_for_stops_until_it_has_the_cycles() {
     let wasm = release_of(&first, "0.2.0");
     let release = net.publish("0.2.0", &wasm, vec![sha256(&first)], &[1, 2]);
     let id = net.ready_upgrade(&release);
+    // The IC bills storage every 20 rounds, so the timelock's week lands as
+    // one charge of about 24B cycles within the next 20. Counted cycles
+    // start after it, or it can land between the top-up and the install.
+    for _ in 0..20 {
+        net.pic.tick();
+    }
 
     let chunks = release.chunk_hashes.len() as u32;
     let refused = net.act("execute", id);

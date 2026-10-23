@@ -1,10 +1,12 @@
 //! Calls to the management canister about the wallet itself: the module it
-//! runs, its chunk store, and installing a release from it. The install
-//! needs the wallet to be its own controller.
+//! runs, its chunk store, installing a release from it, and handing it to a
+//! recovery controller. The install and the hand-over need the wallet to be
+//! its own controller.
 
-use crate::calls::{self, call};
+use crate::calls::{self, CallFailure, call};
 use candid::{CandidType, Principal};
 use ic_cdk::call::Call;
+use recovery::history::CanisterInfo as HistoryInfo;
 use serde::Deserialize;
 use serde_bytes::ByteBuf;
 
@@ -162,4 +164,55 @@ pub fn install(chunk_hashes: Vec<ByteBuf>, wasm_module_hash: ByteBuf) -> Result<
         .with_arg(arg)
         .oneway()
         .map_err(|error| format!("cannot call {WHO}: {error}"))
+}
+
+/// The module `canister` runs, its controllers, how many changes the IC has
+/// recorded for it, and the last `changes` of them.
+pub async fn info(canister: Principal, changes: u64) -> Result<HistoryInfo, String> {
+    let arg = CanisterInfoArgs {
+        canister_id: canister,
+        num_requested_changes: Some(changes),
+    };
+    call(
+        Principal::management_canister(),
+        WHO,
+        "canister_info",
+        arg,
+        0,
+    )
+    .await
+    .map_err(calls::reason)
+}
+
+/// The IC leaves every setting left out as it is.
+#[derive(CandidType)]
+struct Settings {
+    controllers: Option<Vec<Principal>>,
+}
+
+#[derive(CandidType)]
+struct UpdateSettingsArgs {
+    canister_id: Principal,
+    settings: Settings,
+    sender_canister_version: Option<u64>,
+}
+
+/// Makes `controllers` the wallet's controllers, which needs the wallet to
+/// be one of them now.
+pub async fn set_controllers(controllers: Vec<Principal>) -> Result<(), CallFailure> {
+    let arg = UpdateSettingsArgs {
+        canister_id: wallet(),
+        settings: Settings {
+            controllers: Some(controllers),
+        },
+        sender_canister_version: Some(ic_cdk::api::canister_version()),
+    };
+    call(
+        Principal::management_canister(),
+        WHO,
+        "update_settings",
+        arg,
+        0,
+    )
+    .await
 }
