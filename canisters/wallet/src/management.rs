@@ -3,8 +3,7 @@
 //! recovery controller. The install and the hand-over need the wallet to be
 //! its own controller.
 
-use crate::calls::{self, call};
-use crate::transfers::CallFailure;
+use crate::calls::{self, CallFailure, call};
 use candid::{CandidType, Principal};
 use ic_cdk::call::Call;
 use recovery::history::CanisterInfo as HistoryInfo;
@@ -157,7 +156,7 @@ pub fn install(chunk_hashes: Vec<ByteBuf>, wasm_module_hash: ByteBuf) -> Result<
             .collect(),
         wasm_module_hash,
         arg: ByteBuf::from(
-            candid::encode_one(crate::WalletArg::Upgrade).expect("WalletArg encodes"),
+            candid::encode_one(crate::WalletArg::Upgrade(None)).expect("WalletArg encodes"),
         ),
         sender_canister_version: Some(ic_cdk::api::canister_version()),
     };

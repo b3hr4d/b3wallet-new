@@ -1,14 +1,23 @@
 //! Bitcoin accounts and transactions: an account's address, what `propose`
-//! checks in a Bitcoin transfer, which outputs a transfer spends, and the
-//! transaction it signs. Pure: `signer` and `bitcoin_canister` make the calls
-//! and `actions` records how they ended.
+//! checks in a Bitcoin transfer, which outputs a transfer spends, the
+//! transaction it signs, and what becomes of that transaction once sent.
+//! Pure: `keys` and `bitcoin_canister` make the calls and `actions` records
+//! how they ended.
 //!
 //! An account's coins are held by the P2WPKH address of its threshold ECDSA
 //! key. A transfer spends the account's confirmed outputs, those 100 blocks
-//! old first and then the largest first, pays the recipient in its first output and the change back to the account
-//! in its second. Its id covers neither signature, so signing the same
-//! transaction again cannot make a second one.
+//! old first and then the largest first, pays the recipient in its first
+//! output and the change back to the account in its second. Its id covers
+//! no signature, so signing the same transaction again cannot make a second
+//! one.
+//!
+//! A transaction the Bitcoin canister took may still never confirm: a node
+//! can drop it from its mempool. Only that transaction may spend its inputs,
+//! so the wallet keeps them reserved and sends it again, less often each
+//! time, until the account's outputs show them spent and that stays so for
+//! `SETTLE_CONFIRMATIONS` blocks.
 
+use crate::policy::{DAY_NS, HOUR_NS};
 use crate::{BitcoinNetwork, TransferRequest, WalletError};
 use bitcoin::consensus::encode;
 use bitcoin::hashes::Hash;
@@ -20,6 +29,7 @@ use bitcoin::{
     Transaction, TxIn, TxOut, Txid, Witness, absolute::LockTime,
 };
 use candid::Nat;
+use std::collections::BTreeSet;
 use std::str::FromStr;
 
 /// All the satoshis there will ever be.
@@ -156,6 +166,8 @@ pub struct Coin {
     pub txid: [u8; 32],
     pub vout: u32,
     pub value: u64,
+    /// The height of the block that holds it.
+    pub height: u32,
     /// Whether it has `COINBASE_MATURITY` confirmations.
     pub mature: bool,
 }
@@ -314,6 +326,12 @@ pub fn txid(tx: &Transaction) -> String {
     tx.compute_txid().to_string()
 }
 
+/// A transaction's id in the byte order of `Coin::txid`. Signatures are
+/// witness data, so a transaction has the same id signed and unsigned.
+pub fn txid_bytes(tx: &Transaction) -> [u8; 32] {
+    tx.compute_txid().to_byte_array()
+}
+
 /// The outpoints a transaction spends, as `outpoint_key` writes them.
 pub fn spent_keys(tx: &Transaction) -> Vec<[u8; 36]> {
     tx.input
@@ -380,6 +398,154 @@ pub fn signed(
     Ok(tx)
 }
 
+/// What a transaction pays the account whose script is `own`: its change,
+/// and the amount too when it pays the account itself.
+pub fn paid_to(tx: &Transaction, own: &Script) -> u64 {
+    tx.output
+        .iter()
+        .filter(|output| output.script_pubkey.as_script() == own)
+        .map(|output| output.value.to_sat())
+        .sum()
+}
+
+/// An account's outputs, as the Bitcoin canister lists them at its tip.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Utxos {
+    pub coins: Vec<Coin>,
+    pub tip_height: u32,
+    /// Whether every page was read. Only a complete list shows an output
+    /// spent: one on a page not read is not listed either.
+    pub complete: bool,
+}
+
+/// Blocks after which a transaction's inputs, once spent, count as spent for
+/// good: the wallet then stops watching the transaction and forgets its
+/// inputs.
+pub const SETTLE_CONFIRMATIONS: u32 = 6;
+/// How long after a send the wallet first sends a transaction again while
+/// its inputs are unspent; each later wait doubles, up to `MAX_RESEND_NS`.
+pub const FIRST_RESEND_NS: u64 = HOUR_NS;
+pub const MAX_RESEND_NS: u64 = DAY_NS;
+
+/// A transaction the Bitcoin canister may have taken, as the wallet watches
+/// it until it settles.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Watched {
+    /// Its id, as `txid_bytes` writes it.
+    pub txid: [u8; 32],
+    /// The outpoints it spends, as `outpoint_key` writes them.
+    pub inputs: Vec<[u8; 36]>,
+    /// What those outputs hold.
+    pub spends: u64,
+    /// What it pays back to the account.
+    pub change: u64,
+    /// How many times it was handed to the Bitcoin canister.
+    pub sends: u32,
+    pub last_sent_ns: u64,
+    /// The height of the block that holds it, or the tip height when the
+    /// wallet first found its inputs spent; `None` while they are not.
+    pub spent_at_height: Option<u32>,
+}
+
+/// What the wallet does next with a watched transaction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Next {
+    /// Nothing yet.
+    Wait,
+    /// Its inputs are still unspent and its next send is due: send it again.
+    Resend,
+    /// Its inputs have been spent for `SETTLE_CONFIRMATIONS` blocks: stop
+    /// watching it and release them.
+    Settled,
+}
+
+/// The wait before the send after `sends` of them.
+pub fn resend_wait(sends: u32) -> u64 {
+    let doublings = sends.saturating_sub(1).min(16);
+    FIRST_RESEND_NS
+        .saturating_mul(1 << doublings)
+        .min(MAX_RESEND_NS)
+}
+
+impl Watched {
+    /// Whether the account still holds an output this transaction spends,
+    /// given the outputs it holds now, `present`. Only this transaction may
+    /// spend them, so they are unspent until it confirms.
+    pub fn unspent(&self, present: &BTreeSet<[u8; 36]>) -> bool {
+        self.inputs.iter().any(|input| present.contains(input))
+    }
+
+    /// Updates what the wallet knows from `utxos`, the outputs the account
+    /// holds, and says what to do next at `now`. An input among them is
+    /// unspent, and a reorganization that brings one back makes the
+    /// transaction unconfirmed again. An output of its own shows the block
+    /// that holds it, even in an incomplete list. An input missing from an
+    /// incomplete list may be on a page not read, so it shows nothing new.
+    pub fn observe(&mut self, utxos: &Utxos, now: u64) -> Next {
+        let present: BTreeSet<[u8; 36]> = utxos.coins.iter().map(Coin::key).collect();
+        if self.unspent(&present) {
+            self.spent_at_height = None;
+            let due = self.last_sent_ns.saturating_add(resend_wait(self.sends));
+            return if now >= due { Next::Resend } else { Next::Wait };
+        }
+        let held_at = utxos
+            .coins
+            .iter()
+            .filter(|coin| coin.txid == self.txid)
+            .map(|coin| coin.height)
+            .min();
+        if held_at.is_some() {
+            self.spent_at_height = held_at;
+        } else if utxos.complete {
+            self.spent_at_height.get_or_insert(utxos.tip_height);
+        }
+        match self.spent_at_height {
+            Some(spent_at)
+                if utxos.tip_height.saturating_sub(spent_at) + 1 >= SETTLE_CONFIRMATIONS =>
+            {
+                Next::Settled
+            }
+            _ => Next::Wait,
+        }
+    }
+}
+
+/// What an account holds once the network confirms the wallet's watched
+/// transactions: its outputs, less those the transactions spend, plus the
+/// change of each transaction whose inputs are still unspent. Change shows
+/// among the outputs only once its transaction confirms, and then the
+/// inputs are gone.
+pub fn available(coins: &[Coin], watched: &[Watched]) -> u64 {
+    let present: BTreeSet<[u8; 36]> = coins.iter().map(Coin::key).collect();
+    let mut leaving = BTreeSet::new();
+    let mut change = 0u64;
+    for tx in watched.iter().filter(|tx| tx.unspent(&present)) {
+        leaving.extend(tx.inputs.iter().copied());
+        change = change.saturating_add(tx.change);
+    }
+    coins
+        .iter()
+        .filter(|coin| !leaving.contains(&coin.key()))
+        .fold(change, |sum, coin| sum.saturating_add(coin.value))
+}
+
+/// The same from `total`, what all the account's outputs hold, when there
+/// were too many of them to read: less what each watched transaction spends,
+/// plus its change, unless it is known to be confirmed. One the wallet has
+/// not seen confirmed counts as unconfirmed, so the amount errs low.
+pub fn available_of_total(total: u64, watched: &[Watched]) -> u64 {
+    let (spends, change) = watched
+        .iter()
+        .filter(|tx| tx.spent_at_height.is_none())
+        .fold((0u64, 0u64), |(spends, change), tx| {
+            (
+                spends.saturating_add(tx.spends),
+                change.saturating_add(tx.change),
+            )
+        });
+    total.saturating_add(change).saturating_sub(spends)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -408,6 +574,7 @@ pub(crate) mod tests {
     fn request(to: &str, amount: u64) -> TransferRequest {
         TransferRequest {
             from: 1,
+            asset: Some(crate::Chain::Bitcoin(REGTEST)),
             to: to.to_string(),
             amount: Nat::from(amount),
             fee: None,
@@ -420,6 +587,7 @@ pub(crate) mod tests {
             txid: [seed; 32],
             vout: u32::from(seed),
             value,
+            height: 1,
             mature: true,
         }
     }
@@ -714,5 +882,128 @@ pub(crate) mod tests {
         other[0] += 1;
         let wrong = sighashes(&tx, &other, &change).unwrap();
         assert!(super::signed(tx, &hashes, &sign_all(&wrong, 1, false), &public(1)).is_err());
+    }
+
+    /// The transaction that pays its change in the outputs of seed 9.
+    fn watched(inputs: &[u8], change: u64) -> Watched {
+        Watched {
+            txid: [9; 32],
+            inputs: inputs.iter().map(|seed| coin(*seed, 1_000).key()).collect(),
+            spends: 1_000 * inputs.len() as u64,
+            change,
+            sends: 1,
+            last_sent_ns: 0,
+            spent_at_height: None,
+        }
+    }
+
+    /// The account's outputs `seeds` at `tip`, all of them unless
+    /// `complete` is false.
+    fn utxos(seeds: &[u8], tip: u32, complete: bool) -> Utxos {
+        Utxos {
+            coins: seeds.iter().map(|seed| coin(*seed, 1_000)).collect(),
+            tip_height: tip,
+            complete,
+        }
+    }
+
+    #[test]
+    fn an_unconfirmed_transaction_is_sent_again_less_often_each_time() {
+        assert_eq!(resend_wait(1), HOUR_NS);
+        assert_eq!(resend_wait(2), 2 * HOUR_NS);
+        assert_eq!(resend_wait(3), 4 * HOUR_NS);
+        assert_eq!(resend_wait(6), DAY_NS);
+        assert_eq!(resend_wait(u32::MAX), DAY_NS);
+        assert_eq!(resend_wait(0), HOUR_NS);
+
+        let mut tx = watched(&[1, 2], 500);
+        let unspent = utxos(&[1, 2, 3], 200, true);
+        assert_eq!(tx.observe(&unspent, HOUR_NS - 1), Next::Wait);
+        assert_eq!(tx.observe(&unspent, HOUR_NS), Next::Resend);
+        tx.sends = 2;
+        tx.last_sent_ns = HOUR_NS;
+        assert_eq!(tx.observe(&unspent, 3 * HOUR_NS - 1), Next::Wait);
+        assert_eq!(tx.observe(&unspent, 3 * HOUR_NS), Next::Resend);
+        // One input left is enough: only this transaction spends it, and
+        // an incomplete list that shows it shows it unspent.
+        assert_eq!(
+            tx.observe(&utxos(&[2], 200, false), 3 * HOUR_NS),
+            Next::Resend
+        );
+        assert_eq!(tx.spent_at_height, None);
+    }
+
+    #[test]
+    fn a_transaction_settles_once_its_inputs_stay_spent_for_six_blocks() {
+        let mut tx = watched(&[1, 2], 500);
+        assert_eq!(tx.observe(&utxos(&[3], 100, true), 0), Next::Wait);
+        assert_eq!(tx.spent_at_height, Some(100));
+        assert_eq!(tx.observe(&utxos(&[3], 104, true), 0), Next::Wait);
+        // A reorganization brings an input back: it counts again from the
+        // block that spends it next.
+        assert_eq!(tx.observe(&utxos(&[1], 104, true), 0), Next::Wait);
+        assert_eq!(tx.spent_at_height, None);
+        assert_eq!(tx.observe(&utxos(&[3], 105, true), 0), Next::Wait);
+        assert_eq!(tx.observe(&utxos(&[3], 109, true), 0), Next::Wait);
+        assert_eq!(tx.observe(&utxos(&[3], 110, true), 0), Next::Settled);
+        assert_eq!(tx.spent_at_height, Some(105));
+    }
+
+    #[test]
+    fn an_incomplete_list_settles_a_transaction_by_its_own_output() {
+        // More outputs than the wallet reads, and its inputs not among
+        // those read: they may be on a page not read.
+        let mut tx = watched(&[1, 2], 500);
+        assert_eq!(
+            tx.observe(&utxos(&[3], 100, false), 2 * HOUR_NS),
+            Next::Wait
+        );
+        assert_eq!(tx.spent_at_height, None);
+        // Its change shows the block that holds it, height 1 here.
+        assert_eq!(tx.observe(&utxos(&[3, 9], 5, false), 0), Next::Wait);
+        assert_eq!(tx.spent_at_height, Some(1));
+        assert_eq!(tx.observe(&utxos(&[3, 9], 6, false), 0), Next::Settled);
+        // What it learned stands once the change is off the pages read.
+        let mut tx = watched(&[1, 2], 500);
+        assert_eq!(tx.observe(&utxos(&[9], 3, false), 0), Next::Wait);
+        assert_eq!(tx.observe(&utxos(&[3], 6, false), 0), Next::Settled);
+    }
+
+    #[test]
+    fn the_available_amount_leaves_out_what_sent_transactions_spend_and_adds_their_change() {
+        let coins = vec![coin(1, 10_000), coin(2, 20_000), coin(3, 40_000)];
+        assert_eq!(available(&coins, &[]), 70_000);
+        // Sent from outputs 1 and 2, with 4,000 of change, not confirmed.
+        assert_eq!(available(&coins, &[watched(&[1, 2], 4_000)]), 44_000);
+        // Confirmed: its inputs are gone, and its change is an output.
+        let after = vec![coin(3, 40_000), coin(9, 4_000)];
+        assert_eq!(available(&after, &[watched(&[1, 2], 4_000)]), 44_000);
+    }
+
+    #[test]
+    fn past_a_long_output_list_the_available_amount_comes_from_the_balance() {
+        // Outputs 1 and 2 hold 1,000 each; the transaction pays back 400.
+        let mut tx = watched(&[1, 2], 400);
+        // The balance counts every output, those not read included.
+        assert_eq!(available_of_total(70_000, &[]), 70_000);
+        // Its inputs are on a page read: not confirmed.
+        tx.observe(&utxos(&[1, 3], 200, false), 0);
+        assert_eq!(available_of_total(70_000, &[tx.clone()]), 68_400);
+        // Neither its inputs nor its change on the pages read: not known to
+        // be confirmed, so still counted out.
+        tx.observe(&utxos(&[3, 4], 201, false), 0);
+        assert_eq!(available_of_total(70_000, &[tx.clone()]), 68_400);
+        // Its change on a page read: confirmed, and the balance has it all.
+        let mut confirmed = utxos(&[3], 202, false);
+        confirmed.coins.push(Coin {
+            txid: tx.txid,
+            vout: 1,
+            value: 400,
+            height: 202,
+            mature: true,
+        });
+        tx.observe(&confirmed, 0);
+        assert_eq!(tx.spent_at_height, Some(202));
+        assert_eq!(available_of_total(68_400, &[tx]), 68_400);
     }
 }

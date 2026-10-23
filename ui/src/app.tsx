@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react"
 import { B3Mark, Loader, Lockup } from "./brand.tsx"
-import { ApproveIcon, OverviewIcon, SendIcon } from "./icons.tsx"
+import { ApproveIcon, GearIcon, OverviewIcon, ReceiveIcon, SendIcon } from "./icons.tsx"
 import { Live } from "./live.tsx"
 import { HomeOutline } from "./outline.tsx"
 import type { Page } from "./page.ts"
@@ -9,6 +9,7 @@ import { useInBrowser } from "./in-browser.ts"
 const LINKS: ReadonlyArray<{ page: Page; href: string; label: string; icon: ReactNode }> = [
   { page: "home", href: "/", label: "Overview", icon: <OverviewIcon /> },
   { page: "send", href: "/send", label: "Send", icon: <SendIcon /> },
+  { page: "receive", href: "/receive", label: "Receive", icon: <ReceiveIcon /> },
   { page: "approvals", href: "/approvals", label: "Approvals", icon: <ApproveIcon /> },
 ]
 
@@ -40,7 +41,18 @@ export function App({ page }: { page: Page }) {
               </a>
             ))}
           </nav>
-          <div className="bar-end" ref={setAccount} />
+          <div className="bar-end">
+            <a
+              className="gear"
+              href="/settings"
+              aria-label="Settings"
+              title="Settings"
+              aria-current={page === "settings" || page === "members" ? "page" : undefined}
+            >
+              <GearIcon />
+            </a>
+            <div className="account-slot" ref={setAccount} />
+          </div>
         </div>
       </header>
       <main className="page">

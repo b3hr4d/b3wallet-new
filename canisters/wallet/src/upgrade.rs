@@ -12,8 +12,8 @@
 //! still running at the deadline means the install failed, and the upgrade
 //! ends `Failed`.
 
+use crate::icrc::STALE_CALL_NS;
 use crate::policy::HOUR_NS;
-use crate::transfers::STALE_CALL_NS;
 use crate::{ActionId, UpgradeState, WalletError};
 use candid::CandidType;
 use release::{ReleaseManifest, Signers};
@@ -28,11 +28,12 @@ pub const INSTALL_DEADLINE_NS: u64 = HOUR_NS;
 
 /// The cycles the wallet must be able to spend, above what it keeps to stay
 /// running, when it sends an install. The IC holds back what the install's
-/// instruction limit would cost and refuses the install when the canister
-/// cannot pay it. On icp-cli's local network, which charges as a 13-node
-/// subnet does, an install of a 4.4 MB release was refused at 290.9B and
-/// 12.9B short, so the IC wanted 303.7B; this leaves a margin of about 5%.
-pub const INSTALL_CYCLES: u128 = 320_000_000_000;
+/// instruction limit would cost, 300B on a 13-node subnet, and refuses the
+/// install when the canister cannot pay it; the call that sends the install
+/// holds back cycles for its answer as well. In PocketIC, which charges as a
+/// 13-node subnet does, a 5.5 MB release sent with 330.4B to spend installed
+/// and one sent with 329.9B was refused; this leaves a margin of about 6%.
+pub const INSTALL_CYCLES: u128 = 350_000_000_000;
 
 /// What staging a chunk takes from the cycles the wallet can spend: fetching
 /// it from the channel, uploading it, and the larger reserve the bigger
@@ -572,7 +573,7 @@ mod tests {
     #[test]
     fn an_upgrade_needs_the_install_and_the_staging_paid_for() {
         assert_eq!(cycles_to_upgrade(0), INSTALL_CYCLES);
-        assert_eq!(cycles_to_upgrade(5), 340_000_000_000);
+        assert_eq!(cycles_to_upgrade(5), 370_000_000_000);
     }
 
     #[test]

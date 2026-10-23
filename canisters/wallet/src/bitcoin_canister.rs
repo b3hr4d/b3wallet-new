@@ -3,9 +3,8 @@
 //! carries the cycles the Bitcoin canister charges for it.
 
 use crate::BitcoinNetwork;
-use crate::btc::{self, Coin};
-use crate::calls::{self, call};
-use crate::transfers::CallFailure;
+use crate::btc::{self, Coin, Utxos};
+use crate::calls::{self, CallFailure, call};
 use ic_cdk_bitcoin_canister::{
     GetBalanceRequest, GetCurrentFeePercentilesRequest, GetUtxosRequest, GetUtxosResponse, Network,
     NetworkInRequest, SendTransactionRequest, UtxosFilterInRequest, cost_get_balance,
@@ -45,10 +44,14 @@ pub async fn balance(network: BitcoinNetwork, address: String) -> Result<u64, St
 
 /// The outputs `address` can spend, with at least one confirmation, from
 /// the first `MAX_UTXO_PAGES` pages, each marked mature by its page's tip.
-pub async fn coins(network: BitcoinNetwork, address: String) -> Result<Vec<Coin>, String> {
-    let mut coins = Vec::new();
+pub async fn coins(network: BitcoinNetwork, address: String) -> Result<Utxos, String> {
+    let mut utxos = Utxos {
+        coins: Vec::new(),
+        tip_height: 0,
+        complete: false,
+    };
     let mut filter = None;
-    for _ in 0..MAX_UTXO_PAGES {
+    for page_number in 0..MAX_UTXO_PAGES {
         let arg = GetUtxosRequest {
             address: address.clone(),
             network: in_request(network),
@@ -59,18 +62,25 @@ pub async fn coins(network: BitcoinNetwork, address: String) -> Result<Vec<Coin>
             .await
             .map_err(calls::reason)?;
         let tip_height = page.tip_height;
-        coins.extend(page.utxos.into_iter().map(|utxo| Coin {
+        if page_number == 0 {
+            utxos.tip_height = tip_height;
+        }
+        utxos.coins.extend(page.utxos.into_iter().map(|utxo| Coin {
             txid: utxo.outpoint.txid.into(),
             vout: utxo.outpoint.vout,
             value: utxo.value,
+            height: utxo.height,
             mature: btc::mature(utxo.height, tip_height),
         }));
         match page.next_page {
             Some(next) => filter = Some(UtxosFilterInRequest::Page(next)),
-            None => break,
+            None => {
+                utxos.complete = true;
+                break;
+            }
         }
     }
-    Ok(coins)
+    Ok(utxos)
 }
 
 /// The fee rates of the network's recent transactions, in millisatoshi per

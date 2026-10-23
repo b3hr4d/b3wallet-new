@@ -144,7 +144,7 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Clippy (canister target)
-        run: cargo clippy -p wallet -p release_channel -p factory -p controller -p caller --target wasm32-unknown-unknown --locked -- -D warnings
+        run: cargo clippy -p wallet -p release_channel -p factory -p controller -p caller -p evm_rpc_mock --target wasm32-unknown-unknown --locked -- -D warnings
 
       - name: Unit, interface and release tool tests
         run: cargo test --workspace --exclude integration --locked -- --nocapture
@@ -168,9 +168,10 @@ jobs:
             -p wallet --target wasm32-unknown-unknown --release --locked
           echo "PREVIOUS_WALLET_WASM=${RUNNER_TEMP}/previous-target/wasm32-unknown-unknown/release/wallet.wasm" >> "${GITHUB_ENV}"
 
-      # The caller canister lets the PocketIC tests call as a canister.
-      - name: Build the wallet, release channel, factory, controller and caller Wasm
-        run: cargo build -p wallet -p release_channel -p factory -p controller -p caller --target wasm32-unknown-unknown --release --locked
+      # The caller canister lets the PocketIC tests call as a canister, and
+      # the EVM RPC stand-in answers them as the EVM RPC canister.
+      - name: Build the wallet, release channel, factory, controller, caller and EVM RPC stand-in Wasm
+        run: cargo build -p wallet -p release_channel -p factory -p controller -p caller -p evm_rpc_mock --target wasm32-unknown-unknown --release --locked
 
       # Owners check a controller's module hash against this build
       # (docs/recovery.md), so it must not depend on where the source sits.

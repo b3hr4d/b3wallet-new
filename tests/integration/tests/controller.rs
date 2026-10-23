@@ -173,7 +173,7 @@ fn cancellation(seed: u8, operation: &Operation) -> Signed {
 }
 
 fn upgrade_arg() -> ByteBuf {
-    ByteBuf::from(encode_one(WalletArg::Upgrade).unwrap())
+    ByteBuf::from(encode_one(WalletArg::Upgrade(None)).unwrap())
 }
 
 fn no_arg() -> ByteBuf {
@@ -216,6 +216,7 @@ fn claimed_wallet(pic: &PocketIc, cycles: u128) -> (Principal, Principal) {
         release_signers: SIGNERS.iter().map(|&seed| public(seed)).collect(),
         release_threshold: 2,
         factory: None,
+        bitcoin_network: None,
     };
     pic.install_canister(
         wallet,
@@ -1665,7 +1666,7 @@ fn code_that_never_lets_the_wallet_stop_is_reinstalled_and_the_funds_stay() {
         net.pic
             .create_canister_on_subnet(None, None, net.pic.topology().get_nns().unwrap());
     ledgers::install(&net.pic, ledger, net.wallet);
-    let account = ledgers::add_token_account(&net, ledger);
+    let account = ledgers::token_account(&net, ledger);
     let accounts = ledgers::accounts(&net);
     assert_eq!(ledgers::balance(&net.pic, ledger, &account), 1_000);
 
@@ -1721,6 +1722,7 @@ fn code_that_never_lets_the_wallet_stop_is_reinstalled_and_the_funds_stay() {
         release_signers: SIGNERS.iter().map(|&seed| public(seed)).collect(),
         release_threshold: 2,
         factory: None,
+        bitcoin_network: None,
     });
     let reinstall = net.install_of(
         &repaired,
@@ -1753,11 +1755,11 @@ fn code_that_never_lets_the_wallet_stop_is_reinstalled_and_the_funds_stay() {
         encode_one(ClaimArgs { signature }).unwrap(),
     )
     .unwrap();
-    let again = ledgers::add_token_account(&net, ledger);
+    let again = ledgers::token_account(&net, ledger);
     assert_eq!(ledgers::accounts(&net), accounts);
     assert_eq!(ledgers::balance(&net.pic, ledger, &again), 1_000);
     let transfer = net
-        .propose_action(ledgers::transfer(again.id, user(20), 100))
+        .propose_action(ledgers::transfer(again.id, ledger, user(20), 100))
         .unwrap();
     let sent = net.execute_action(transfer.id).unwrap();
     assert!(
@@ -1798,12 +1800,14 @@ fn a_controller_short_of_cycles_refuses_until_topped_up() {
         ..pocket_ic::CanisterSettings::default()
     };
     spendable_only(&net.pic, controller, None, 60_000_000_000);
+    // What the controller keeps for its own calls: 100B, and 2B a chunk.
+    let own = 100_000_000_000 + 2_000_000_000 * chunks(&wasm).count() as u64;
     let refused = net.execute(11, id);
     assert!(
         matches!(
             &refused,
             Err(ControllerError::InsufficientCycles { canister, needed, .. })
-                if *canister == net.controller && u64::try_from(&needed.0) == Ok(110_000_000_000)
+                if *canister == net.controller && u64::try_from(&needed.0) == Ok(own)
         ),
         "{refused:?}"
     );
@@ -1819,7 +1823,7 @@ fn a_controller_short_of_cycles_refuses_until_topped_up() {
             &refused,
             Err(ControllerError::InsufficientCycles { canister, needed, .. })
                 if *canister == net.controller
-                    && u64::try_from(&needed.0).is_ok_and(|needed| needed > 110_000_000_000 + 330_000_000_000)
+                    && u64::try_from(&needed.0).is_ok_and(|needed| needed > own + 330_000_000_000)
         ),
         "{refused:?}"
     );
@@ -2002,7 +2006,7 @@ fn a_transfer_and_an_install_started_together_leave_the_transfer_sent_once() {
         net.pic
             .create_canister_on_subnet(None, None, net.pic.topology().get_nns().unwrap());
     ledgers::install(&net.pic, ledger, net.wallet);
-    let account = ledgers::add_token_account(&net, ledger);
+    let account = ledgers::token_account(&net, ledger);
     let before = ledgers::accounts(&net);
     assert_eq!(ledgers::balance(&net.pic, ledger, &account), 1_000);
 
@@ -2017,7 +2021,7 @@ fn a_transfer_and_an_install_started_together_leave_the_transfer_sent_once() {
     );
     let id = net.ready(&operation, &[11, 12], Some(&wasm));
     let transfer = net
-        .propose_action(ledgers::transfer(account.id, user(20), 100))
+        .propose_action(ledgers::transfer(account.id, ledger, user(20), 100))
         .unwrap();
 
     // Both start in the same round: the wallet calls the ledger on another
@@ -2058,7 +2062,10 @@ fn a_transfer_and_an_install_started_together_leave_the_transfer_sent_once() {
     // The same accounts, at the same addresses, and the wallet reads the
     // same balance the ledger does.
     assert_eq!(ledgers::accounts(&net), before);
-    assert_eq!(ledgers::wallet_balance(&net, account.id), 1_000 - 100 - 10);
+    assert_eq!(
+        ledgers::wallet_balance(&net, account.id, ledger),
+        1_000 - 100 - 10
+    );
     let executed = net.execute_action(transfer.id);
     assert!(
         matches!(executed, Err(WalletError::InvalidArgument(_))),
@@ -2070,7 +2077,7 @@ fn a_transfer_and_an_install_started_together_leave_the_transfer_sent_once() {
 mod ledgers {
     use super::*;
     use icrc_ledger_types::icrc1::account::Account as LedgerAccount;
-    use wallet::{Account, AddAccountArgs, Balance, Chain, TransferRequest};
+    use wallet::{Account, AccountKind, Balance, Chain, TransferRequest};
 
     #[derive(CandidType)]
     enum LedgerArg {
@@ -2159,16 +2166,19 @@ mod ledgers {
         );
     }
 
-    pub fn add_token_account(net: &Net, ledger: Principal) -> Account {
-        net.wallet_call::<Result<Account, WalletError>>(
-            "add_account",
-            encode_one(AddAccountArgs {
-                chain: Chain::Icrc(ledger),
-                label: "tokens".to_string(),
-            })
-            .unwrap(),
+    /// Tracks the ledger's token, which the wallet's first Internet Computer
+    /// account then holds: index 0, the wallet's principal with no
+    /// subaccount.
+    pub fn token_account(net: &Net, ledger: Principal) -> Account {
+        net.wallet_call::<Result<Vec<Chain>, WalletError>>(
+            "track_asset",
+            encode_one(Chain::Icrc(ledger)).unwrap(),
         )
-        .unwrap()
+        .unwrap();
+        accounts(net)
+            .into_iter()
+            .find(|account| account.kind == AccountKind::InternetComputer && account.index == 0)
+            .unwrap()
     }
 
     pub fn accounts(net: &Net) -> Vec<Account> {
@@ -2192,16 +2202,20 @@ mod ledgers {
         u64::try_from(decode::<Nat>("icrc1_balance_of", reply).0).unwrap()
     }
 
-    pub fn wallet_balance(net: &Net, account: u32) -> u64 {
+    pub fn wallet_balance(net: &Net, account: u32, ledger: Principal) -> u64 {
         let balance = net
-            .wallet_call::<Result<Balance, WalletError>>("balance", encode_one(account).unwrap())
+            .wallet_call::<Result<Balance, WalletError>>(
+                "balance",
+                encode_args((account, Some(Chain::Icrc(ledger)))).unwrap(),
+            )
             .unwrap();
         u64::try_from(balance.amount.0).unwrap()
     }
 
-    pub fn transfer(from: u32, to: Principal, amount: u64) -> Action {
+    pub fn transfer(from: u32, ledger: Principal, to: Principal, amount: u64) -> Action {
         Action::Transfer(TransferRequest {
             from,
+            asset: Some(Chain::Icrc(ledger)),
             to: LedgerAccount::from(to).to_string(),
             amount: Nat::from(amount),
             fee: None,

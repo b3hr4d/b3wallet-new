@@ -291,12 +291,12 @@ at most 4 open at once, so a stolen key cannot fill the controller.
 ### 4.1 Upgrade or repair the wallet
 
 Write the operation, with the Wasm and the install argument the release's
-notes name (`(variant { Upgrade })` for this version of the wallet):
+notes name (`(variant { Upgrade = null })` for this version of the wallet):
 
 ```sh
 recovery-tool install --controller $CONTROLLER --wallet $WALLET \
   --policy-version 1 --nonce 1 --expires-in 14d --wasm wallet.wasm \
-  --arg-candid '(variant { Upgrade })' --interface $DID/wallet.did > upgrade.did
+  --arg-candid '(variant { Upgrade = null })' --interface $DID/wallet.did > upgrade.did
 ```
 
 Read it before anyone signs it, on each key's computer:
@@ -309,11 +309,11 @@ recovery-tool show --interface $DID/wallet.did upgrade.did
 Operation 1 for recovery controller ibrml-ld777-77774-qaabq-cai of wallet igqk7-g3777-77774-qaaba-cai,
 under policy version 1, expiring at 2026-11-13 20:25:40 UTC.
 It would upgrade the wallet's code, keeping its state
-to the module with SHA-256 96147e6f36dbd8d7ccedfabfcaa5aa93f3e5ff71f01e86fba11ce1093c6df7da, in 5 chunks,
-with an install argument of 66 bytes, SHA-256 024a270aebd3f0778ac4bcf8a55f992b35d4a78d45baeccab7280735a11b4035.
+to the module with SHA-256 0fa885b803245d9e17e0433c6916f7f049e7bf88352c2ebe23e58165157130ff, in 6 chunks,
+with an install argument of 104 bytes, SHA-256 25cc5c75cda3e074a773a2c662962ff3ed9edaaa742c5994abf1fe794f5a5c0d.
 Route: sovereign. No release signer vouches for this module: check it yourself.
-Digest: 082277c4a5cec93fa237aad83da68f6c88373eabaf30048a37716e90abfd5b56
-Install argument: (variant { Upgrade })
+Digest: 7083ae5374c6390cbaa143bec6b58f36fe787fb06c64d045d8878429d4d037ce
+Install argument: (variant { Upgrade = null })
 No approvals in this file yet.
 ```
 

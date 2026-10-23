@@ -17,12 +17,24 @@ type InitArgs = record {
   release_threshold : nat8;
   // The factory that created the wallet. Informational; it holds no rights.
   factory : opt principal;
+  // The network of the default Bitcoin account, which also picks the
+  // threshold key: key_1 for mainnet, test_key_1 for testnet, dfx_test_key
+  // for regtest. None is mainnet.
+  bitcoin_network : opt BitcoinNetwork;
+};
+
+type UpgradeArgs = record {
+  // Sets the network of a wallet that has no Bitcoin or EVM account yet; once
+  // it has one, an upgrade never changes it. Without one, a wallet keeps its
+  // network, or takes that of its first Bitcoin account, or mainnet.
+  bitcoin_network : opt BitcoinNetwork;
 };
 
 // The firmware installs itself with `Upgrade`; all state is in stable memory.
+// `variant { Upgrade }` still decodes, as an upgrade without arguments.
 type WalletArg = variant {
   Init : InitArgs;
-  Upgrade;
+  Upgrade : opt UpgradeArgs;
 };
 
 // ---- Members ----------------------------------------------------------------
@@ -53,36 +65,46 @@ type ClaimArgs = record {
 type AccountId = nat32;
 
 type AccountHolder = variant {
-  // Derivation path: "wallet" / chain / index.
+  // Derivation path: "wallet" / kind / index.
   Wallet;
-  // Derivation path: "ext" / extension canister id / chain / index.
+  // Derivation path: "ext" / extension canister id / kind / index.
   Extension : principal;
 };
 
-// For ICP and ICRC, index n is the wallet's ICRC-1 subaccount n as 32
-// big-endian bytes; index 0 is the plain principal. For Bitcoin, index n is
-// the threshold ECDSA key of the path "wallet" / "bitcoin-<network>" / n as 4
-// big-endian bytes, and the address is that key's P2WPKH address.
+// Indices count per kind, and per network for Bitcoin, from 0; every wallet
+// has account 0 of each kind from the start. For an Internet Computer
+// account, index n is the wallet's ICRC-1 subaccount n as 32 big-endian
+// bytes, and index 0 is the plain principal. For Bitcoin, index n is the
+// threshold ECDSA key of the path "wallet" / "bitcoin-<network>" / n as 4
+// big-endian bytes, and the address is that key's P2WPKH address. For EVM,
+// index n is the key of the path "wallet" / "evm" / n, and the address is
+// that key's EIP-55 address on every EVM chain.
 type Account = record {
   id : AccountId;
-  chain : Chain;
+  kind : AccountKind;
   label : text;
   index : nat32;
   holder : AccountHolder;
-  // Chain-native text: an ICRC-1 account, a Bitcoin address, or an EVM address.
+  // An ICRC-1 account in its text form, a Bitcoin address, or an EVM address.
   address : text;
+  // An Internet Computer account's ICP account identifier, as 64 hex digits:
+  // the form exchanges ask for to send it ICP.
+  icp_account_id : opt text;
 };
 
 type AddAccountArgs = record {
-  chain : Chain;
+  kind : AccountKind;
   label : text;
 };
 
 type Balance = record {
   account : AccountId;
+  asset : Chain;
   amount : nat;
   as_of_ns : nat64;
 };
+
+type AssetsResult = variant { Ok : vec Chain; Err : WalletError };
 
 type Direction = variant { In; Out };
 
@@ -111,16 +133,22 @@ type ActionId = nat64;
 
 type TransferRequest = record {
   from : AccountId;
+  // What it sends: ICP or a tracked ICRC-1 token from an Internet Computer
+  // account, the bitcoin of a Bitcoin account's network, or the native token
+  // of a tracked EVM chain from an EVM account. None is ICP, or the account's
+  // bitcoin; `propose` stores the asset it sends.
+  asset : opt Chain;
   // For ICP and ICRC, an ICRC-1 account in its text form; for Bitcoin, an
-  // address of the account's network.
+  // address of the account's network; for EVM, an address.
   to : text;
-  // Base units of the account's chain: e8s, or satoshis.
+  // Base units of the asset: e8s, satoshis, or wei.
   amount : nat;
   // The ledger refuses a fee other than its own; none pays its own. For
   // Bitcoin, the whole fee in satoshis; none pays the median rate of recent
-  // transactions. A Bitcoin fee counts toward the daily limit.
+  // transactions. For EVM, the most it pays in fees, in wei; none pays the
+  // chain's recent fees. A Bitcoin or EVM fee counts toward the daily limit.
   fee : opt nat;
-  // At most 32 bytes. A Bitcoin transfer carries none.
+  // At most 32 bytes. A Bitcoin or EVM transfer carries none.
   memo : opt blob;
 };
 
@@ -171,7 +199,7 @@ type PolicyRule = record {
   // Approvals needed, the proposer's included.
   quorum : nat8;
   timelock_ns : nat64;
-  // A transfer that keeps its chain's spending over the last 24 hours within
+  // A transfer that keeps its asset's spending over the last 24 hours within
   // these limits needs only the proposer and no timelock.
   daily_limits : vec DailyLimit;
 };
@@ -217,7 +245,8 @@ type Pending = record {
   // transfer whose ledger call may have run stays open until 24 hours after
   // that call, while the ledger can still find it. A Bitcoin transfer whose
   // transaction may have reached the Bitcoin canister never expires: execute
-  // it again to send the same transaction.
+  // it again to send the same transaction. Once the Bitcoin canister took
+  // it, the wallet sends it again on its own until the network confirms it.
   expires_at_ns : nat64;
   state : ActionState;
 };
@@ -292,12 +321,15 @@ type Status = record {
   cycles : nat;
   upgrade : UpgradeState;
   release_channel : principal;
+  bitcoin_network : BitcoinNetwork;
 };
 
 type AuditEvent = variant {
   Claimed;
   JoinRequested : principal;
   AccountAdded : AccountId;
+  AssetTracked : Chain;
+  AssetUntracked : Chain;
   Proposed : ActionId;
   Approved : ActionId;
   Rejected : ActionId;
@@ -394,8 +426,21 @@ service : (WalletArg) -> {
   // Accounts. add_account is for owners and needs no approval: it moves nothing.
   accounts : () -> (AccountsResult) query;
   add_account : (AddAccountArgs) -> (AccountResult);
-  // Update: asks the ledger, the Bitcoin canister or the EVM RPC canister.
-  balance : (AccountId) -> (BalanceResult);
+  // Update: asks the ledger, the Bitcoin canister or the EVM RPC canister for
+  // what an account holds of an asset: none is ICP, or the account's bitcoin;
+  // an EVM account names its chain.
+  // A Bitcoin balance leaves out what the wallet's transactions spend and
+  // counts their change, before the network confirms them.
+  balance : (AccountId, opt Chain) -> (BalanceResult);
+  // The assets the accounts show: ICP first, then the ICRC-1 ledgers and EVM
+  // chains owners track; a new wallet tracks Ethereum, or Sepolia on test
+  // keys. Tracking moves nothing, so owners change it without approval.
+  // Tracking a ledger asks it for its standards, and refuses a canister that
+  // is not an ICRC-1 ledger; an EVM chain must be one the EVM RPC canister
+  // has providers of, and Sepolia alone on test keys.
+  assets : () -> (AssetsResult) query;
+  track_asset : (Chain) -> (AssetsResult);
+  untrack_asset : (Chain) -> (AssetsResult);
   history : (HistoryRequest) -> (HistoryResult) query;
 
   // Actions: every transfer, membership, extension, policy and upgrade change.
@@ -424,10 +469,11 @@ service : (WalletArg) -> {
   status : () -> (Status) query;
   // Newest first, at most 100 entries.
   audit_log : (AuditRequest) -> (AuditResult) query;
-  // Query only: the start page at / and /index.html, the send, approvals
-  // and claim pages at /send, /approvals and /claim, the app at /app.js and
-  // /app.css, and a certified 404 for any other path. See "Serve a page" in
-  // docs/design.md.
+  // Query only: the start page at / and /index.html, the send, receive,
+  // account, approvals, notifications, settings, members and claim pages at
+  // /send, /receive, /account, /approvals, /notifications, /settings,
+  // /members and /claim, the app at /app.js and /app.css, and a certified 404
+  // for any other path. See "Serve a page" in docs/design.md.
   http_request : (HttpRequest) -> (HttpResponse) query;
 
   // Standards for the signer window (ICRC-25, ICRC-29) and consent (ICRC-21).

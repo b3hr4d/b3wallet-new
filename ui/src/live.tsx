@@ -3,12 +3,17 @@ import { createClient } from "@ic-reactor/core"
 import { ReactorProvider } from "@ic-reactor/react"
 import { AuthClient } from "@icp-sdk/auth/client"
 import { createPortal } from "react-dom"
+import { AccountPage } from "./account.tsx"
 import { Approvals } from "./approvals.tsx"
 import { Claim } from "./claim.tsx"
 import { Home } from "./home.tsx"
 import { where } from "./host.ts"
 import type { Page } from "./page.ts"
+import { MembersPage } from "./members.tsx"
+import { NotificationsPage } from "./notifications-page.tsx"
+import { Receive } from "./receive.tsx"
 import { Send } from "./send.tsx"
+import { Settings } from "./settings.tsx"
 import { Account } from "./session.tsx"
 
 /**
@@ -47,12 +52,16 @@ export function Live({
         })
       }
     >
-      {account && createPortal(<Account />, account)}
+      {account && createPortal(<Account wallet={here.wallet} />, account)}
       <Wallet page={page} wallet={here.wallet} local={here.local} />
     </ReactorProvider>
   )
 }
 
+/**
+ * The page's own part. `local` is for the settings page only, whose read of
+ * the IC's certified state needs the local network's root key.
+ */
 function Wallet({
   page,
   wallet,
@@ -64,9 +73,19 @@ function Wallet({
 }) {
   switch (page) {
     case "home":
-      return <Home wallet={wallet} local={local} />
+      return <Home wallet={wallet} />
     case "send":
       return <Send wallet={wallet} />
+    case "receive":
+      return <Receive wallet={wallet} />
+    case "account":
+      return <AccountPage wallet={wallet} />
+    case "members":
+      return <MembersPage wallet={wallet} />
+    case "notifications":
+      return <NotificationsPage wallet={wallet} />
+    case "settings":
+      return <Settings wallet={wallet} local={local} />
     case "approvals":
       return <Approvals wallet={wallet} />
     case "claim":

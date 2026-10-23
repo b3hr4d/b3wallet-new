@@ -1,29 +1,31 @@
 //! Firmware of a self-owned chain-key wallet canister.
 //!
-//! Steps 1 to 11 of `docs/plan-v0.md`: the install arguments, `status`, state
-//! in stable memory, the claim, members, the policy with its pending actions,
-//! the audit log, the certified pages, ICP and ICRC accounts, Bitcoin
-//! accounts signed with threshold ECDSA, with their balances and transfers,
-//! and the self-upgrade to a signed release. The interface test lists the
-//! methods of `candid/wallet.did` not implemented yet.
+//! The install arguments, `status`, state in stable memory, the claim,
+//! members, the policy with its pending actions, the audit log, the
+//! certified pages, the accounts of each kind with their balances and
+//! transfers, and the self-upgrade to a signed release. The interface test
+//! lists the methods of `candid/wallet.did` not implemented yet.
 
 mod access;
 mod accounts;
 mod actions;
+mod assets;
 mod bitcoin_canister;
 mod btc;
 mod calls;
 mod channel;
 mod claim;
 mod ed25519;
+mod evm;
+mod evm_rpc;
 mod governance;
 mod http;
-mod ledger;
+mod icrc;
+mod keys;
 mod management;
 mod policy;
-mod signer;
+mod sending;
 mod storage;
-mod transfers;
 mod types;
 mod upgrade;
 
@@ -34,43 +36,56 @@ pub use upgrade::{FIRST_RESEND_NS, MAX_INSTALL_SENDS, cycles_to_upgrade};
 
 use accounts::StoredAccount;
 use actions::{
-    APPROVAL_WINDOW_NS, BitcoinTx, JOIN_WINDOW_NS, MAX_OPEN_ACTIONS, MAX_OPEN_BY_PROPOSER,
+    APPROVAL_WINDOW_NS, JOIN_WINDOW_NS, MAX_OPEN_ACTIONS, MAX_OPEN_BY_PROPOSER,
     MAX_OPEN_JOIN_REQUESTS, StoredPending,
 };
+use calls::CallFailure;
 use candid::{Nat, Principal};
-use policy::{DAY_NS, Spend};
+use policy::Spend;
 use release::ReleaseManifest;
 use serde_bytes::ByteBuf;
-use storage::{StoredAuditEntry, StoredMember, StoredTransfer};
-use transfers::CallFailure;
+use std::cell::Cell;
+use storage::{StoredAuditEntry, StoredMember};
 
 #[ic_cdk::init]
 fn init(arg: WalletArg) {
     let WalletArg::Init(args) = arg else {
         ic_cdk::trap("install needs WalletArg::Init");
     };
-    if let Err(reason) = args.validate(ic_cdk::api::time()) {
+    let now = ic_cdk::api::time();
+    if let Err(reason) = args.validate(now) {
         ic_cdk::trap(format!("invalid InitArgs: {reason}"));
     }
     storage::set_config(args.into());
     storage::set_policy(policy::default_policy());
+    storage::set_tracked(assets::initial(storage::bitcoin_network()));
+    add_defaults_now(now);
     http::certify();
+    schedule_timer(now);
 }
 
 // A trap here makes the IC keep the running version: an upgrade either reads
 // all of the state or does not happen.
 #[ic_cdk::post_upgrade]
 fn post_upgrade(arg: WalletArg) {
-    if !matches!(arg, WalletArg::Upgrade) {
+    let WalletArg::Upgrade(args) = arg else {
         ic_cdk::trap("an upgrade needs WalletArg::Upgrade");
+    };
+    let network = args.and_then(|args| args.bitcoin_network);
+    if let Some(fixed) = storage::fixed_bitcoin_network()
+        && network.is_some_and(|asked| asked != fixed)
+    {
+        ic_cdk::trap(format!(
+            "the wallet's Bitcoin network is {fixed:?}, and its Bitcoin and EVM accounts keep it"
+        ));
     }
-    storage::migrate();
-    if let Err(reason) = storage::check() {
+    if let Err(reason) = storage::migrate(network).and_then(|()| storage::check()) {
         ic_cdk::trap(format!("the upgrade cannot read the state: {reason}"));
     }
+    let now = ic_cdk::api::time();
+    add_defaults_now(now);
     http::certify();
     // This version runs, so an install the wallet sent itself ran.
-    let now = ic_cdk::api::time();
     let mut upgrade = storage::upgrade();
     if let Some((id, version)) = upgrade.installed() {
         storage::set_upgrade(upgrade);
@@ -145,163 +160,263 @@ fn accounts() -> Result<Vec<Account>, WalletError> {
     let wallet = ic_cdk::api::canister_self();
     Ok(storage::accounts()
         .into_iter()
+        .filter(|(_, account)| account.is_listed())
         .map(|(id, account)| account.view(id, wallet))
         .collect())
 }
 
-/// Adds an account: the next index on its chain, held by the wallet. Adding
-/// one moves nothing, so it needs no approval. A Bitcoin account asks the
-/// management canister for the public key of its derivation path first.
+/// Adds an account: the next index of its kind, held by the wallet. Adding
+/// one moves nothing, so it needs no approval. A Bitcoin or EVM account asks
+/// the management canister for the public key of its derivation path first.
 #[ic_cdk::update(guard = "access::owner")]
 async fn add_account(args: AddAccountArgs) -> Result<Account, WalletError> {
     let caller = ic_cdk::api::msg_caller();
     check_not_installing(ic_cdk::api::time())?;
     let index = accounts::check_new(&args, storage::accounts().iter().map(|(_, a)| a))?;
-    let public_key = match args.chain {
-        Chain::Bitcoin(network) => {
-            let key = signer::public_key(network, index)
-                .await
-                .map_err(WalletError::ChainError)?;
-            btc::address(&key, network).map_err(WalletError::ChainError)?;
-            // Other calls ran meanwhile.
-            if storage::member(caller).map(|member| member.role) != Some(Role::Owner) {
-                return Err(WalletError::Forbidden(
-                    "the caller is no longer an owner".to_string(),
-                ));
-            }
-            let again = accounts::check_new(&args, storage::accounts().iter().map(|(_, a)| a))?;
-            if again != index {
-                return Err(WalletError::InvalidArgument(
-                    "another account on this chain was added meanwhile; add this one again"
-                        .to_string(),
-                ));
-            }
-            Some(ByteBuf::from(key))
+    let public_key = account_key(args.kind, index).await?;
+    if public_key.is_some() {
+        // Other calls ran meanwhile.
+        if storage::member(caller).map(|member| member.role) != Some(Role::Owner) {
+            return Err(WalletError::Forbidden(
+                "the caller is no longer an owner".to_string(),
+            ));
         }
-        _ => None,
-    };
+        let again = accounts::check_new(&args, storage::accounts().iter().map(|(_, a)| a))?;
+        if again != index {
+            return Err(WalletError::InvalidArgument(
+                "another account of this kind was added meanwhile; add this one again".to_string(),
+            ));
+        }
+    }
     let now = ic_cdk::api::time();
-    let account = StoredAccount {
-        chain: args.chain,
-        label: args.label,
-        index,
-        holder: AccountHolder::Wallet,
-        added_at_ns: now,
-        added_by: caller,
-        public_key,
-    };
+    let account = StoredAccount::new(args.kind, args.label, index, public_key, Some(caller), now);
     let id = storage::add_account(account.clone());
     audit(caller, AuditEvent::AccountAdded(id), now);
     Ok(account.view(id, ic_cdk::api::canister_self()))
 }
 
-/// An account's balance, as its ledger or the Bitcoin canister answers it
-/// now. A Bitcoin balance counts outputs with at least one confirmation.
-#[ic_cdk::update(guard = "access::member")]
-async fn balance(id: AccountId) -> Result<Balance, WalletError> {
-    check_not_installing(ic_cdk::api::time())?;
-    let account =
-        storage::account(id).ok_or_else(|| WalletError::NotFound(format!("account {id}")))?;
-    let amount = match &account.chain {
-        Chain::Bitcoin(network) => {
-            let address = account.bitcoin_address()?.to_string();
-            bitcoin_canister::balance(*network, address)
-                .await
-                .map(Nat::from)
-        }
-        chain => {
-            let ledger = accounts::ledger(chain)?;
-            ledger::balance_of(ledger, account.ledger_account(ic_cdk::api::canister_self())).await
+/// The public key of account `index` of `kind`, checked to make an
+/// address; an Internet Computer account has none. An EVM account's key is
+/// under the subnet key of the wallet's network.
+async fn account_key(kind: AccountKind, index: u32) -> Result<Option<Vec<u8>>, WalletError> {
+    let path = match kind {
+        AccountKind::InternetComputer => return Ok(None),
+        AccountKind::Bitcoin(network) => keys::bitcoin(network, index),
+        AccountKind::Evm => keys::evm(storage::bitcoin_network(), index),
+    };
+    let key = keys::public_key(&path)
+        .await
+        .map_err(WalletError::ChainError)?;
+    let checked = match kind {
+        AccountKind::Bitcoin(network) => btc::address(&key, network).map(drop),
+        _ => evm::address(&key).map(drop),
+    };
+    checked.map_err(WalletError::ChainError)?;
+    Ok(Some(key))
+}
+
+thread_local! {
+    /// Whether the wallet has account 0 of each kind. On the heap: a new
+    /// version checks again.
+    static DEFAULTS_DONE: Cell<bool> = const { Cell::new(false) };
+    /// Whether the timer is adding a default account now.
+    static ADDING_DEFAULTS: Cell<bool> = const { Cell::new(false) };
+    /// When the timer next tries to add a default account, and how long it
+    /// waited last.
+    static DEFAULTS_RETRY: Cell<(u64, u64)> = const { Cell::new((0, 0)) };
+}
+
+/// How long the timer first waits to try a default account again; each
+/// later wait doubles, up to a day.
+const DEFAULTS_FIRST_WAIT_NS: u64 = 60 * 1_000_000_000;
+
+/// The default accounts the wallet lacks: account 0 of each kind, held by
+/// the wallet. The heap remembers once there are none.
+fn missing_defaults() -> Vec<AccountKind> {
+    if DEFAULTS_DONE.get() {
+        return Vec::new();
+    }
+    let accounts = storage::accounts();
+    let missing =
+        accounts::missing_defaults(storage::bitcoin_network(), accounts.iter().map(|(_, a)| a));
+    DEFAULTS_DONE.set(missing.is_empty());
+    missing
+}
+
+/// Stores default account `kind`, made by the wallet, unless another
+/// account of that kind took index 0 meanwhile. The audit log has no entry
+/// for it: every wallet has its default accounts, and nobody chose them.
+fn add_default(kind: AccountKind, public_key: Option<Vec<u8>>, now: u64) {
+    let accounts = storage::accounts();
+    if accounts::next_index(kind, accounts.iter().map(|(_, a)| a)) != 0 {
+        return;
+    }
+    let account = StoredAccount::new(
+        kind,
+        accounts::DEFAULT_LABEL.to_string(),
+        0,
+        public_key,
+        None,
+        now,
+    );
+    storage::add_account(account);
+}
+
+/// Adds the default accounts that need no call: the Internet Computer one.
+fn add_defaults_now(now: u64) {
+    if missing_defaults().contains(&AccountKind::InternetComputer) {
+        add_default(AccountKind::InternetComputer, None, now);
+    }
+}
+
+/// When the timer next tries to add a default account.
+fn defaults_at() -> Option<u64> {
+    if ADDING_DEFAULTS.get() || missing_defaults().is_empty() {
+        return None;
+    }
+    Some(DEFAULTS_RETRY.get().0)
+}
+
+/// Adds the default Bitcoin and EVM accounts, which need their public keys
+/// from the management canister. A failure waits, longer each time, and
+/// tries again; the keys come from the same subnet, so the others wait too.
+async fn add_defaults() {
+    if ADDING_DEFAULTS.replace(true) {
+        return;
+    }
+    struct Adding;
+    impl Drop for Adding {
+        fn drop(&mut self) {
+            ADDING_DEFAULTS.set(false);
+            schedule_timer(ic_cdk::api::time());
         }
     }
-    .map_err(WalletError::ChainError)?;
+    let _adding = Adding;
+    add_defaults_now(ic_cdk::api::time());
+    for kind in missing_defaults() {
+        if kind == AccountKind::InternetComputer {
+            continue;
+        }
+        let key = account_key(kind, 0).await;
+        let now = ic_cdk::api::time();
+        match key {
+            Ok(key) if missing_defaults().contains(&kind) => add_default(kind, key, now),
+            Ok(_) => {}
+            Err(_) => {
+                let (_, waited) = DEFAULTS_RETRY.get();
+                let wait = waited
+                    .saturating_mul(2)
+                    .clamp(DEFAULTS_FIRST_WAIT_NS, policy::DAY_NS);
+                DEFAULTS_RETRY.set((now.saturating_add(wait), wait));
+                break;
+            }
+        }
+    }
+}
+
+/// What an account holds of an asset, as its ledger, the Bitcoin canister or
+/// an EVM chain's providers answer it now: `asset`, or ICP, or the account's
+/// bitcoin. A ledger asset or EVM chain must be tracked, so no member makes
+/// the wallet call a canister the owners did not choose. A Bitcoin balance
+/// counts outputs with at least one confirmation, less what the wallet's
+/// transactions spend, plus their change. An EVM balance is the chain's at
+/// its latest block, in wei.
+#[ic_cdk::update(guard = "access::member")]
+async fn balance(id: AccountId, asset: Option<Chain>) -> Result<Balance, WalletError> {
+    check_not_installing(ic_cdk::api::time())?;
+    let (id, account) = storage::listed_account(id)
+        .ok_or_else(|| WalletError::NotFound(format!("account {id}")))?;
+    let asset = assets::resolve(account.kind(), asset.as_ref(), &storage::tracked())?;
+    let amount = match (account.kind(), assets::ledger(&asset)) {
+        (AccountKind::InternetComputer, Some(ledger)) => {
+            let owner = account.ledger_account(ic_cdk::api::canister_self());
+            icrc::balance_of(ledger, owner)
+                .await
+                .map_err(WalletError::ChainError)?
+        }
+        (AccountKind::Bitcoin(network), _) => {
+            Nat::from(sending::bitcoin_balance(id, &account, network).await?)
+        }
+        (AccountKind::Evm, _) => {
+            let Chain::Evm(chain) = asset else {
+                unreachable!("an EVM account holds EVM chains");
+            };
+            evm_rpc::balance(chain, &account.evm_address()?)
+                .await
+                .map_err(WalletError::ChainError)?
+        }
+        (kind, _) => {
+            return Err(WalletError::InvalidArgument(format!(
+                "a {kind:?} account has no balance of {asset:?} yet"
+            )));
+        }
+    };
     Ok(Balance {
         account: id,
+        asset,
         amount,
         as_of_ns: ic_cdk::api::time(),
     })
 }
 
-/// Checks a transfer from `account`, the stored account `request.from`
-/// names, and returns what it spends against its chain's daily limit: the
-/// amount, and for Bitcoin the fee the proposer fixed.
-fn check_transfer(
-    request: &TransferRequest,
-    account: Option<&StoredAccount>,
-) -> Result<Nat, WalletError> {
-    match account.map(|account| &account.chain) {
-        Some(Chain::Bitcoin(network)) => {
-            let checked = btc::check(request, *network)?;
-            Ok(Nat::from(checked.amount + checked.fee.unwrap_or(0)))
-        }
-        _ => transfers::check(request, account).map(|_| request.amount.clone()),
-    }
+/// The assets the accounts show, ICP first.
+#[ic_cdk::query(guard = "access::member")]
+fn assets() -> Result<Vec<Chain>, WalletError> {
+    Ok(storage::tracked())
 }
 
-/// What an open transfer on `chain` may still spend: the amount, and for
-/// Bitcoin the fee of its transaction once built, or the one its proposer
-/// fixed.
-fn committed(pending: &StoredPending, request: &TransferRequest, chain: &Chain) -> Nat {
-    match chain {
-        Chain::Bitcoin(_) => {
-            let fee = pending
-                .bitcoin_tx()
-                .map(|tx| Nat::from(tx.fee))
-                .or_else(|| request.fee.clone())
-                .unwrap_or_default();
-            request.amount.clone() + fee
+/// Tracks an ICRC-1 ledger, once it answers as one, or an EVM chain the
+/// wallet's network holds. Tracking moves nothing, so it needs no approval.
+#[ic_cdk::update(guard = "access::owner")]
+async fn track_asset(asset: Chain) -> Result<Vec<Chain>, WalletError> {
+    let caller = ic_cdk::api::msg_caller();
+    check_not_installing(ic_cdk::api::time())?;
+    assets::check_track(&asset, &storage::tracked(), storage::bitcoin_network())?;
+    if let Some(ledger) = assets::ledger(&asset) {
+        icrc::check_ledger(ledger)
+            .await
+            .map_err(WalletError::ChainError)?;
+        // Other calls ran meanwhile.
+        if storage::member(caller).map(|member| member.role) != Some(Role::Owner) {
+            return Err(WalletError::Forbidden(
+                "the caller is no longer an owner".to_string(),
+            ));
         }
-        _ => request.amount.clone(),
     }
+    let mut tracked = storage::tracked();
+    assets::check_track(&asset, &tracked, storage::bitcoin_network())?;
+    tracked.push(asset.clone());
+    storage::set_tracked(tracked.clone());
+    audit(caller, AuditEvent::AssetTracked(asset), ic_cdk::api::time());
+    Ok(tracked)
 }
 
-/// What `chain` sent in the last 24 hours, and what its open transfers under
-/// the daily limit may still send, apart from the action `except`.
-fn spent(chain: &Chain, now: u64, except: Option<ActionId>) -> Nat {
-    let mut spent = storage::sent_since(chain, now.saturating_sub(DAY_NS));
-    for (id, pending) in storage::open_actions(now) {
-        if Some(id) == except || pending.daily_limit != Some(true) {
-            continue;
-        }
-        if let Action::Transfer(request) = &pending.action
-            && storage::account(request.from).is_some_and(|account| &account.chain == chain)
-        {
-            spent += committed(&pending, request, chain);
-        }
-    }
-    spent
-}
-
-/// Checks that action `id`, a transfer the daily limit released, still fits
-/// its chain's limit when it spends `amount`.
-fn fits_daily_limit(
-    id: ActionId,
-    chain: &Chain,
-    amount: &Nat,
-    now: u64,
-) -> Result<(), WalletError> {
-    let spent = spent(chain, now, Some(id));
-    let spend = Spend {
-        chain,
-        amount,
-        spent: &spent,
-    };
-    let terms = policy::terms(&storage::policy(), ActionKind::Transfer, Some(&spend));
-    if terms.quorum > 1 || terms.timelock_ns > 0 {
-        return Err(WalletError::PolicyViolation(
-            "the transfer no longer fits its chain's daily limit; propose it again".to_string(),
-        ));
-    }
-    Ok(())
+/// Stops showing an ICRC-1 token or an EVM chain. Its tokens stay where they
+/// are, and its open transfers still run.
+#[ic_cdk::update(guard = "access::owner")]
+fn untrack_asset(asset: Chain) -> Result<Vec<Chain>, WalletError> {
+    let caller = ic_cdk::api::msg_caller();
+    let mut tracked = storage::tracked();
+    assets::check_untrack(&asset, &tracked)?;
+    tracked.retain(|tracked| *tracked != asset);
+    storage::set_tracked(tracked.clone());
+    audit(
+        caller,
+        AuditEvent::AssetUntracked(asset),
+        ic_cdk::api::time(),
+    );
+    Ok(tracked)
 }
 
 /// Proposes an action. An owner's approval counts toward its quorum, so
 /// with a quorum of one it is ready at once. A transfer that keeps its
-/// chain's spending within the daily limit is ready at once too. A proposer
+/// asset's spending within the daily limit is ready at once too. A proposer
 /// proposes only transfers, and its approval never counts: each one waits
-/// for an owner or an approver.
+/// for an owner or an approver. A transfer is stored with the asset it
+/// sends, and the listed account it sends from.
 #[ic_cdk::update(guard = "access::proposer")]
 fn propose(action: Action) -> Result<Pending, WalletError> {
+    let mut action = action;
     let (caller, now) = (ic_cdk::api::msg_caller(), ic_cdk::api::time());
     let governance = storage::governance();
     let approves = governance.can_approve(&caller);
@@ -310,11 +425,16 @@ fn propose(action: Action) -> Result<Pending, WalletError> {
             "a proposer proposes only transfers".to_string(),
         ));
     }
-    let spend = match &action {
+    let spend = match &mut action {
         Action::Transfer(request) => {
-            let account = storage::account(request.from);
-            let amount = check_transfer(request, account.as_ref())?;
-            account.map(|account| (account.chain, amount))
+            let (from, account) = storage::listed_account(request.from)
+                .ok_or_else(|| WalletError::NotFound(format!("account {}", request.from)))?;
+            let asset =
+                assets::resolve(account.kind(), request.asset.as_ref(), &storage::tracked())?;
+            request.from = from;
+            request.asset = Some(asset.clone());
+            let amount = sending::check_transfer(request, &account)?;
+            Some((asset, amount))
         }
         Action::Upgrade {
             version,
@@ -351,10 +471,10 @@ fn propose(action: Action) -> Result<Pending, WalletError> {
         )));
     }
     let terms = match &spend {
-        Some((chain, amount)) => {
-            let spent = spent(chain, now, None);
+        Some((asset, amount)) => {
+            let spent = sending::spent(asset, now, None);
             let spend = Spend {
-                chain,
+                chain: asset,
                 amount,
                 spent: &spent,
             };
@@ -482,15 +602,8 @@ async fn execute(id: ActionId) -> Result<Pending, WalletError> {
         .await;
     }
     if let Action::Transfer(request) = pending.action.clone() {
-        // Accounts are never deleted, so the account it was proposed from is
-        // still there.
-        let account = storage::account(request.from);
-        return match account.as_ref().map(|account| &account.chain) {
-            Some(Chain::Bitcoin(network)) => {
-                send_bitcoin(id, pending, request, account.clone(), *network, now).await
-            }
-            _ => send(id, pending, request, now).await,
-        };
+        let caller = ic_cdk::api::msg_caller();
+        return sending::execute(id, pending, request, Some(caller), now).await;
     }
     let mut governance = storage::governance();
     // The first approval is the proposer's, or for a join request the first
@@ -526,81 +639,6 @@ async fn execute(id: ActionId) -> Result<Pending, WalletError> {
     Ok(pending.view(id, now))
 }
 
-/// Executes a transfer with one ledger call, and one call at a time. A
-/// transfer under the daily limit is checked against it again, unless a
-/// call that may have run is being retried: that one only finds out.
-async fn send(
-    id: ActionId,
-    mut pending: StoredPending,
-    request: TransferRequest,
-    now: u64,
-) -> Result<Pending, WalletError> {
-    let caller = ic_cdk::api::msg_caller();
-    let retry = match pending.transfer_retry(id, now) {
-        Ok(retry) => retry,
-        Err(error) => {
-            storage::set_action(id, pending);
-            return Err(error);
-        }
-    };
-    // Accounts are never deleted, so the account it was proposed from is
-    // still there.
-    let account = storage::account(request.from);
-    let checked = transfers::check(&request, account.as_ref()).and_then(|to| {
-        let account = account.clone().expect("a checked transfer has its account");
-        if !retry && pending.daily_limit == Some(true) {
-            fits_daily_limit(id, &account.chain, &request.amount, now)?;
-        }
-        Ok((account, to))
-    });
-    let (account, to) = match checked {
-        Ok(checked) => checked,
-        Err(error) => {
-            pending.finish(Err(reason(&error)));
-            storage::set_action(id, pending.clone());
-            audit(caller, AuditEvent::Executed(id), now);
-            return Ok(pending.view(id, now));
-        }
-    };
-    let ledger = accounts::ledger(&account.chain)?;
-    let created_at_ns = pending.begin_transfer(now, || storage::transfer_time(now));
-    storage::set_action(id, pending);
-    let in_flight = InFlight {
-        id: Some(id),
-        execution: None,
-    };
-    let arg = transfers::ledger_arg(&request, &account, to, created_at_ns);
-    let result = ledger::transfer(ledger, arg).await;
-
-    // Other calls ran meanwhile; none of them changes an action in flight.
-    let now = ic_cdk::api::time();
-    let mut pending = stored_action(id)?;
-    let ended = pending.end_transfer(
-        transfers::read_reply(result),
-        request.from,
-        account.chain.clone(),
-        now,
-    );
-    if let Ok(Some(block)) = &ended {
-        storage::add_transfer(StoredTransfer {
-            account: request.from,
-            chain: account.chain,
-            to: request.to,
-            amount: request.amount,
-            tx_id: block.0.to_str_radix(10),
-            at_ns: now,
-            action: id,
-            fee: None,
-        });
-    }
-    storage::set_action(id, pending.clone());
-    if !matches!(pending.state, ActionState::Waiting | ActionState::Ready) {
-        audit(caller, AuditEvent::Executed(id), now);
-    }
-    in_flight.returned();
-    ended.map(|_| pending.view(id, now))
-}
-
 /// How a step of a Bitcoin transfer or an upgrade failed.
 enum Step {
     /// The action cannot run: it ends `Failed` with this reason.
@@ -617,243 +655,6 @@ impl From<WalletError> for Step {
 
 fn chain_error(reason: String) -> Step {
     Step::Stops(WalletError::ChainError(reason))
-}
-
-/// Executes a Bitcoin transfer: builds its transaction once, signs it, and
-/// hands it to the Bitcoin canister, one execution at a time. Until the
-/// transaction may have been sent, the transfer is checked again, against
-/// the daily limit too, and the daily limit once more just before the send.
-async fn send_bitcoin(
-    id: ActionId,
-    mut pending: StoredPending,
-    request: TransferRequest,
-    account: Option<StoredAccount>,
-    network: BitcoinNetwork,
-    now: u64,
-) -> Result<Pending, WalletError> {
-    let caller = ic_cdk::api::msg_caller();
-    let account = account.expect("a Bitcoin transfer has its account");
-    let execution = match pending.begin_bitcoin(id, now) {
-        Ok(execution) => execution,
-        Err(error) => {
-            storage::set_action(id, pending);
-            return Err(error);
-        }
-    };
-    if !pending.may_have_sent() {
-        let checked = check_transfer(&request, Some(&account)).and_then(|spend| {
-            let spend = match pending.bitcoin_tx() {
-                Some(tx) => request.amount.clone() + tx.fee,
-                None => spend,
-            };
-            if pending.daily_limit == Some(true) {
-                fits_daily_limit(id, &account.chain, &spend, now)?;
-            }
-            Ok(())
-        });
-        if let Err(error) = checked {
-            pending.end_bitcoin_call();
-            pending.finish(Err(reason(&error)));
-            storage::set_action(id, pending.clone());
-            audit(caller, AuditEvent::Executed(id), now);
-            return Ok(pending.view(id, now));
-        }
-    }
-    storage::set_action(id, pending);
-    let in_flight = InFlight {
-        id: Some(id),
-        execution: Some(execution),
-    };
-    let result = bitcoin_steps(id, execution, &request, &account, network).await;
-
-    let now = ic_cdk::api::time();
-    let mut pending = stored_action(id)?;
-    let ours = pending.owns_bitcoin(execution);
-    let result = match result {
-        // The steps recorded it `Executed`.
-        Ok(()) => Ok(()),
-        // Nothing awaited since the step that failed, so the action is
-        // still open and this execution's.
-        Err(Step::Fails(reason)) if ours => {
-            pending.finish(Err(reason));
-            Ok(())
-        }
-        Err(Step::Fails(reason)) => Err(WalletError::ChainError(reason)),
-        Err(Step::Stops(error)) => Err(error),
-    };
-    if ours {
-        pending.end_bitcoin_call();
-        storage::set_action(id, pending.clone());
-    }
-    if result.is_ok() {
-        audit(caller, AuditEvent::Executed(id), now);
-    }
-    in_flight.returned();
-    result.map(|()| pending.view(id, now))
-}
-
-/// Re-reads action `id` after a call and goes on with `execution`, if it
-/// still owns the transfer.
-fn resume(id: ActionId, execution: u64) -> Result<StoredPending, Step> {
-    let now = ic_cdk::api::time();
-    let mut pending = stored_action(id)?;
-    pending.resume_bitcoin(id, execution, now)?;
-    storage::set_action(id, pending.clone());
-    Ok(pending)
-}
-
-/// The steps of execution `execution` that call out: building the
-/// transaction if it is not built yet, signing it if it is not signed, and
-/// sending it. A transaction that was sent is recorded `Executed` here.
-async fn bitcoin_steps(
-    id: ActionId,
-    execution: u64,
-    request: &TransferRequest,
-    account: &StoredAccount,
-    network: BitcoinNetwork,
-) -> Result<(), Step> {
-    let address = account.bitcoin_address()?;
-    let own = address.script_pubkey();
-    let mut pending = resume(id, execution)?;
-    if pending.bitcoin_tx().is_none() {
-        let checked = btc::check(request, network)?;
-        let to = checked.to.script_pubkey();
-        let fee = match checked.fee {
-            Some(total) => btc::Fee::Total(total),
-            None => {
-                let percentiles = bitcoin_canister::fee_percentiles(network)
-                    .await
-                    .map_err(chain_error)?;
-                btc::Fee::Rate(btc::fee_rate(&percentiles))
-            }
-        };
-        let coins = bitcoin_canister::coins(network, address.to_string())
-            .await
-            .map_err(chain_error)?;
-        pending = resume(id, execution)?;
-        let now = ic_cdk::api::time();
-        // Expired actions release the outputs they reserved.
-        storage::close_expired(now);
-        let coins = coins
-            .into_iter()
-            .filter(|coin| !storage::is_reserved(&coin.key()))
-            .collect();
-        let plan = btc::plan(coins, checked.amount, &to, &own, fee).map_err(Step::Fails)?;
-        if pending.daily_limit == Some(true) {
-            let spend = Nat::from(checked.amount + plan.fee);
-            fits_daily_limit(id, &account.chain, &spend, now)
-                .map_err(|error| Step::Fails(reason(&error)))?;
-        }
-        let tx = btc::unsigned(&plan, checked.amount, &to, &own);
-        storage::reserve(&btc::spent_keys(&tx), id);
-        pending.bitcoin_built(BitcoinTx {
-            unsigned: ByteBuf::from(btc::to_bytes(&tx)),
-            values: plan.inputs.iter().map(|coin| coin.value).collect(),
-            fee: plan.fee,
-            signed: None,
-            sent: false,
-        });
-        storage::set_action(id, pending.clone());
-    }
-    let tx = pending
-        .bitcoin_tx()
-        .cloned()
-        .expect("the transaction is built");
-    let unsigned = btc::from_bytes(&tx.unsigned).map_err(chain_error)?;
-    let signed = match &tx.signed {
-        Some(signed) => btc::from_bytes(signed).map_err(chain_error)?,
-        None => {
-            let hashes = btc::sighashes(&unsigned, &tx.values, &own).map_err(chain_error)?;
-            let mut signatures = Vec::with_capacity(hashes.len());
-            for hash in &hashes {
-                let signature = signer::sign(network, account.index, *hash)
-                    .await
-                    .map_err(chain_error)?;
-                signatures.push(signature);
-                pending = resume(id, execution)?;
-            }
-            let public_key = account
-                .public_key
-                .as_ref()
-                .map_or(&[][..], |key| key.as_slice());
-            let signed = btc::signed(unsigned.clone(), &hashes, &signatures, public_key)
-                .map_err(chain_error)?;
-            pending.bitcoin_signed(btc::to_bytes(&signed));
-            storage::set_action(id, pending.clone());
-            signed
-        }
-    };
-    // A policy that changed while the transaction was signed applies, unless
-    // it may have been sent already: then only the same one can go.
-    if !pending.may_have_sent() && pending.daily_limit == Some(true) {
-        let spend = request.amount.clone() + tx.fee;
-        fits_daily_limit(id, &account.chain, &spend, ic_cdk::api::time())
-            .map_err(|error| Step::Fails(reason(&error)))?;
-    }
-    pending.bitcoin_sending();
-    storage::set_action(id, pending);
-    let result = bitcoin_canister::send(network, btc::to_bytes(&signed)).await;
-
-    let now = ic_cdk::api::time();
-    let mut pending = stored_action(id)?;
-    if !pending.owns_bitcoin(execution) {
-        // A later execution sends the same transaction.
-        return Err(Step::Stops(WalletError::InvalidArgument(format!(
-            "another execution of action {id} took over"
-        ))));
-    }
-    let tx_id = btc::txid(&signed);
-    let ended = pending.end_bitcoin_send(
-        result,
-        request.from,
-        account.chain.clone(),
-        tx_id.clone(),
-        now,
-    );
-    if ended.is_ok() {
-        storage::add_transfer(StoredTransfer {
-            account: request.from,
-            chain: account.chain.clone(),
-            to: request.to.clone(),
-            amount: request.amount.clone(),
-            tx_id,
-            at_ns: now,
-            action: id,
-            fee: Some(Nat::from(tx.fee)),
-        });
-    }
-    storage::set_action(id, pending);
-    ended.map_err(Step::Stops)
-}
-
-/// Marks a transfer's ledger call as one that may have run unseen, or a
-/// Bitcoin execution as one that will not go on, unless the code after its
-/// calls returns: when that code traps, ic-cdk drops the call's future, and
-/// with it this guard, and keeps what the guard writes.
-struct InFlight {
-    id: Option<ActionId>,
-    /// The execution of a Bitcoin transfer.
-    execution: Option<u64>,
-}
-
-impl InFlight {
-    fn returned(mut self) {
-        self.id = None;
-    }
-}
-
-impl Drop for InFlight {
-    fn drop(&mut self) {
-        if let Some(id) = self.id
-            && let Some(mut pending) = storage::action(id)
-        {
-            match self.execution {
-                Some(execution) => pending.lose_bitcoin_call(execution),
-                None => pending.lose_transfer_call(),
-            }
-            storage::set_action(id, pending);
-        }
-    }
 }
 
 /// The release the channel published last, when the wallet would install
@@ -1137,7 +938,7 @@ thread_local! {
     /// Whether a `HandOverControl` execution waits for an answer. On the
     /// heap: no install goes out while it waits, since its calls count as
     /// in flight.
-    static HANDING_OVER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static HANDING_OVER: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Marks a `HandOverControl` execution in flight until it returns, or until
@@ -1316,29 +1117,60 @@ impl Drop for Staging {
     }
 }
 
-/// Sets the IC's one timer for the next thing the upgrade waits for, or
-/// turns it off.
+thread_local! {
+    /// When the timer may next try to clear the chunk store.
+    static CLEAR_AT: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Sets the IC's one timer for the next thing the wallet waits for, or
+/// turns it off: the install it sent, clearing the chunk store, a default
+/// account, and settling the transfers whose outcome it does not know yet.
+/// While an install is on its way, the wallet makes no calls but those.
 fn schedule_timer(now: u64) {
-    let at = storage::upgrade().wake_at(now).unwrap_or(0);
-    ic_cdk::api::global_timer_set(at);
+    let upgrade = storage::upgrade();
+    let calls = !upgrade.is_installing();
+    let upgrade_at = match upgrade.wake_at(now) {
+        // It wakes only to clear the chunk store.
+        Some(at) if calls => Some(at.max(CLEAR_AT.get())),
+        at => at,
+    };
+    let at = [
+        upgrade_at,
+        calls.then(defaults_at).flatten(),
+        calls.then(sending::settle_at).flatten(),
+    ]
+    .into_iter()
+    .flatten()
+    .min();
+    // Zero turns the timer off; any time not after now fires it at once.
+    ic_cdk::api::global_timer_set(at.map_or(0, |at| at.max(1)));
 }
 
 /// How often the timer tries again to clear the chunk store.
 const CLEAR_RETRY_NS: u64 = 60 * 1_000_000_000;
 
 /// Ends an install past its deadline, sends one again when its turn comes,
-/// and clears the chunk store once no release needs it.
+/// clears the chunk store once no release needs it, adds the default
+/// accounts the wallet lacks, and settles transfers, each when it is due.
 fn on_timer(now: u64) {
     settle_upgrade(now);
     resend_install(now);
     let mut upgrade = storage::upgrade();
-    if upgrade.may_clear_store() {
-        if management::clear_chunk_store_oneway().is_err() {
-            ic_cdk::api::global_timer_set(now.saturating_add(CLEAR_RETRY_NS));
-            return;
+    if upgrade.may_clear_store() && now >= CLEAR_AT.get() {
+        if management::clear_chunk_store_oneway().is_ok() {
+            upgrade.clear_store = false;
+            storage::set_upgrade(upgrade.clone());
+        } else {
+            CLEAR_AT.set(now.saturating_add(CLEAR_RETRY_NS));
         }
-        upgrade.clear_store = false;
-        storage::set_upgrade(upgrade);
+    }
+    if !upgrade.is_installing() {
+        if defaults_at().is_some_and(|at| now >= at) {
+            ic_cdk::futures::spawn(add_defaults());
+        }
+        if sending::settle_at().is_some_and(|at| now >= at) {
+            ic_cdk::futures::spawn(sending::settle(now));
+        }
     }
     schedule_timer(now);
 }
@@ -1388,18 +1220,20 @@ const MAX_AUDIT_PAGE: usize = 100;
 /// entry for it; a refused call writes none. An expiry is no one's act and is
 /// not logged: the action itself shows it.
 fn audit(by: Principal, event: AuditEvent, now: u64) {
-    storage::append_audit(StoredAuditEntry {
-        at_ns: now,
-        by: Some(by),
-        event,
-    });
+    log(Some(by), event, now);
 }
 
-/// Records a change the wallet made itself: how an upgrade ended.
+/// Records a change the wallet made itself: how an upgrade ended, a default
+/// account, or a transfer it settled.
 fn audit_by_wallet(event: AuditEvent, now: u64) {
+    log(None, event, now);
+}
+
+/// Records a change made by `by`, or by the wallet itself.
+fn log(by: Option<Principal>, event: AuditEvent, now: u64) {
     storage::append_audit(StoredAuditEntry {
         at_ns: now,
-        by: None,
+        by,
         event,
     });
 }
@@ -1443,6 +1277,7 @@ fn status() -> Status {
         cycles: Nat::from(ic_cdk::api::canister_cycle_balance()),
         upgrade: storage::upgrade().view(ic_cdk::api::time()),
         release_channel: config.release_channel,
+        bitcoin_network: storage::bitcoin_network(),
     }
 }
 

@@ -1,6 +1,6 @@
-//! Transfers of ICP and ICRC tokens: what `propose` checks in a `Transfer`,
-//! the ledger call `execute` makes, and how it reads the ledger's answer.
-//! Pure: `ledger` makes the call and `actions` records how it ended.
+//! ICRC-1 ledgers, the ICP ledger among them: what `propose` checks in a
+//! transfer from an Internet Computer account, the `icrc1_transfer` call
+//! `execute` makes, how it reads the answer, and the calls themselves.
 //!
 //! A ledger finds a repeated transfer by its `created_at_time` for 24 hours
 //! and answers it with the block of the first. So when the wallet cannot tell
@@ -8,12 +8,13 @@
 //! `created_at_time`, and the ledger sends the tokens at most once.
 
 use crate::accounts::{self, StoredAccount};
+use crate::calls::{self, CallFailure, call, call_without_args};
 use crate::policy::{DAY_NS, HOUR_NS};
 use crate::{TransferRequest, WalletError};
-use candid::{Nat, Principal};
-use ic_cdk::call::RejectCode;
+use candid::{CandidType, Nat, Principal};
 use icrc_ledger_types::icrc1::account::Account as LedgerAccount;
 use icrc_ledger_types::icrc1::transfer::{Memo, TransferArg, TransferError};
+use serde::Deserialize;
 use std::str::FromStr;
 
 /// The longest memo, in bytes: the ICRC-1 ledgers' default.
@@ -25,16 +26,9 @@ pub const DEDUP_WINDOW_NS: u64 = DAY_NS;
 /// wallet's code, since a bounded-wait call answers within 300 seconds.
 pub const STALE_CALL_NS: u64 = HOUR_NS;
 
-/// Checks a transfer from `account`, the stored account `request.from`
-/// names, and returns the ledger account it goes to.
-pub fn check(
-    request: &TransferRequest,
-    account: Option<&StoredAccount>,
-) -> Result<LedgerAccount, WalletError> {
-    let Some(account) = account else {
-        return Err(WalletError::NotFound(format!("account {}", request.from)));
-    };
-    accounts::ledger(&account.chain)?;
+/// Checks a transfer from an Internet Computer account and returns the
+/// ledger account it goes to.
+pub fn check(request: &TransferRequest) -> Result<LedgerAccount, WalletError> {
     let to = LedgerAccount::from_str(&request.to).map_err(|error| {
         WalletError::InvalidArgument(format!("`to` is not an ICRC-1 account: {error}"))
     })?;
@@ -74,33 +68,6 @@ pub fn ledger_arg(
         created_at_time: Some(created_at_ns),
         memo: request.memo.clone().map(Memo::from),
         amount: request.amount.clone(),
-    }
-}
-
-/// How a call to the ledger failed before it could answer.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CallFailure {
-    /// The ledger did not run the call: it was never sent, or it was
-    /// rejected or trapped, which rolls the ledger back.
-    NotRun(String),
-    /// The call may or may not have run: it timed out, or the answer did not
-    /// decode.
-    Unknown(String),
-}
-
-/// How a ledger call the IC rejected failed, by its reject code (`None` for
-/// a code the wallet does not know). Only a reject by the system before the
-/// ledger ran the call proves it did not run. A ledger that committed a
-/// transfer and then trapped after an await of its own rejects with
-/// `CanisterError`, and one that rejects explicitly may also do so after
-/// committing, so those, like a bounded wait that ran out, leave it open.
-pub fn rejected(code: Option<RejectCode>, reason: String) -> CallFailure {
-    match code {
-        Some(RejectCode::SysFatal | RejectCode::SysTransient | RejectCode::DestinationInvalid) => {
-            CallFailure::NotRun(reason)
-        }
-        Some(RejectCode::CanisterReject | RejectCode::CanisterError | RejectCode::SysUnknown)
-        | None => CallFailure::Unknown(reason),
     }
 }
 
@@ -162,22 +129,61 @@ pub fn read_reply(result: Result<Result<Nat, TransferError>, CallFailure>) -> Re
     }
 }
 
+fn who(ledger: Principal) -> String {
+    format!("the ledger {ledger}")
+}
+
+/// The balance of `account`, from `icrc1_balance_of`.
+pub async fn balance_of(ledger: Principal, account: LedgerAccount) -> Result<Nat, String> {
+    call(ledger, who(ledger), "icrc1_balance_of", account, 0)
+        .await
+        .map_err(calls::reason)
+}
+
+/// Sends `arg` with `icrc1_transfer`.
+pub async fn transfer(
+    ledger: Principal,
+    arg: TransferArg,
+) -> Result<Result<Nat, TransferError>, CallFailure> {
+    call(ledger, who(ledger), "icrc1_transfer", arg, 0).await
+}
+
+#[derive(CandidType, Deserialize)]
+struct Standard {
+    name: String,
+    #[allow(dead_code)]
+    url: String,
+}
+
+/// Checks that `ledger` answers as an ICRC-1 ledger: it lists the ICRC-1
+/// standard among the ones it supports, as every ICRC-1 ledger must.
+pub async fn check_ledger(ledger: Principal) -> Result<(), String> {
+    let standards: Vec<Standard> =
+        call_without_args(ledger, who(ledger), "icrc1_supported_standards")
+            .await
+            .map_err(calls::reason)?;
+    if standards.iter().any(|standard| standard.name == "ICRC-1") {
+        Ok(())
+    } else {
+        Err(format!("{} does not support ICRC-1", who(ledger)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AccountHolder, Chain};
+    use crate::AccountKind;
     use serde_bytes::ByteBuf;
 
     fn account(index: u32) -> StoredAccount {
-        StoredAccount {
-            chain: Chain::Icp,
-            label: "main".to_string(),
+        StoredAccount::new(
+            AccountKind::InternetComputer,
+            "main".to_string(),
             index,
-            holder: AccountHolder::Wallet,
-            added_at_ns: 0,
-            added_by: Principal::self_authenticating([1; 32]),
-            public_key: None,
-        }
+            None,
+            None,
+            0,
+        )
     }
 
     fn to() -> LedgerAccount {
@@ -187,6 +193,7 @@ mod tests {
     fn request(to: &str, amount: u64, memo: Option<Vec<u8>>) -> TransferRequest {
         TransferRequest {
             from: 1,
+            asset: None,
             to: to.to_string(),
             amount: Nat::from(amount),
             fee: None,
@@ -195,14 +202,10 @@ mod tests {
     }
 
     #[test]
-    fn a_transfer_needs_an_account_a_recipient_an_amount_and_a_short_memo() {
+    fn a_transfer_needs_a_recipient_an_amount_and_a_short_memo() {
         let to_text = to().to_string();
         let good = request(&to_text, 5, Some(vec![7; MAX_MEMO_BYTES]));
-        assert_eq!(check(&good, Some(&account(0))), Ok(to()));
-        assert!(matches!(
-            check(&good, None),
-            Err(WalletError::NotFound(reason)) if reason == "account 1"
-        ));
+        assert_eq!(check(&good), Ok(to()));
 
         let anonymous = Principal::anonymous().to_text();
         let refused = [
@@ -214,22 +217,10 @@ mod tests {
         ];
         for request in refused {
             assert!(
-                matches!(
-                    check(&request, Some(&account(0))),
-                    Err(WalletError::InvalidArgument(_))
-                ),
+                matches!(check(&request), Err(WalletError::InvalidArgument(_))),
                 "{request:?}"
             );
         }
-
-        let evm = StoredAccount {
-            chain: Chain::Evm(1),
-            ..account(0)
-        };
-        assert!(matches!(
-            check(&good, Some(&evm)),
-            Err(WalletError::InvalidArgument(reason)) if reason.contains("cannot hold")
-        ));
     }
 
     #[test]
@@ -299,32 +290,5 @@ mod tests {
             read_reply(Err(CallFailure::Unknown("timeout".to_string()))),
             Reply::Unknown("timeout".to_string())
         );
-    }
-
-    #[test]
-    fn only_a_reject_by_the_system_proves_a_call_did_not_run() {
-        for code in [
-            RejectCode::SysFatal,
-            RejectCode::SysTransient,
-            RejectCode::DestinationInvalid,
-        ] {
-            assert_eq!(
-                rejected(Some(code), "r".to_string()),
-                CallFailure::NotRun("r".to_string())
-            );
-        }
-        // The ledger may have committed the transfer before it trapped or
-        // rejected; a bounded wait may have run out after it ran.
-        for code in [
-            Some(RejectCode::CanisterReject),
-            Some(RejectCode::CanisterError),
-            Some(RejectCode::SysUnknown),
-            None,
-        ] {
-            assert_eq!(
-                rejected(code, "r".to_string()),
-                CallFailure::Unknown("r".to_string())
-            );
-        }
     }
 }

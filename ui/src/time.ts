@@ -40,3 +40,17 @@ export function agoText(ns: bigint, nowNs: bigint): string {
   }
   return "just now"
 }
+
+/**
+ * How long is left until `endNs` at `nowNs`, in the largest whole unit:
+ * `7 hours left`; `under a minute left` at the end, and `ended` once past it.
+ */
+export function leftText(endNs: bigint, nowNs: bigint): string {
+  const left = endNs - nowNs
+  if (left <= 0n) return "ended"
+  for (const [size, unit] of UNITS.slice(0, 3)) {
+    const count = left / size
+    if (count > 0n) return `${count} ${unit}${count === 1n ? "" : "s"} left`
+  }
+  return "under a minute left"
+}

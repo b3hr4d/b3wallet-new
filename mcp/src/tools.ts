@@ -2,11 +2,13 @@
 // and propose transfers. None approves, runs or rejects anything, and the
 // wallet would refuse a proposer that tried: every transfer the agent
 // proposes waits for an owner or an approver on the wallet's Approvals page.
+import { isPrincipal, principal } from "@candid-core/schema"
 import { formatUnits, isReactorError, parseUnits, type Client } from "@ic-reactor/core"
 import { actor as ledgerActor, type Actor as Ledger } from "./generated/icrc1.ts"
 import {
   actor as walletActor,
   type Account,
+  type AccountKind,
   type Action,
   type Actor as Wallet,
   type AuditEvent,
@@ -23,6 +25,18 @@ const ICP_LEDGER = "ryjl3-tyaaa-aaaaa-aaaba-cai"
 const MAX_MEMO_BYTES = 32
 
 type Token = { symbol: string; decimals: number }
+
+/**
+ * The EVM chains a wallet holds, those the EVM RPC canister has providers
+ * of, by chain id: their names, and their native token's symbol.
+ */
+const EVM_CHAINS: ReadonlyArray<{ id: bigint; name: string; symbol: string }> = [
+  { id: 1n, name: "Ethereum", symbol: "ETH" },
+  { id: 11_155_111n, name: "Sepolia", symbol: "Sepolia ETH" },
+  { id: 42_161n, name: "Arbitrum One", symbol: "ETH on Arbitrum One" },
+  { id: 8_453n, name: "Base", symbol: "ETH on Base" },
+  { id: 10n, name: "Optimism", symbol: "ETH on Optimism" },
+]
 
 /** JSON for the model: bigints as decimal text, two spaces of indent. */
 function json(value: unknown): string {
@@ -47,7 +61,78 @@ export function chainText(chain: Chain): string {
     case "Bitcoin":
       return chain.value.tag === "Mainnet" ? "Bitcoin" : `Bitcoin ${chain.value.tag.toLowerCase()}`
     case "Evm":
-      return `EVM chain ${chain.value}`
+      return (
+        EVM_CHAINS.find((known) => known.id === chain.value)?.name ?? `EVM chain ${chain.value}`
+      )
+  }
+}
+
+/** An account's kind, in a few words. */
+export function kindText(kind: AccountKind): string {
+  switch (kind.tag) {
+    case "InternetComputer":
+      return "Internet Computer: ICP and the tracked ICRC-1 tokens"
+    case "Bitcoin":
+      return chainText({ tag: "Bitcoin", value: kind.value })
+    case "Evm":
+      return "EVM: the native token of each tracked EVM chain, at one address"
+  }
+}
+
+/**
+ * What an account of `kind` sends and reads when no asset is named. An EVM
+ * transfer names its chain.
+ */
+function defaultAsset(kind: AccountKind): Chain | undefined {
+  switch (kind.tag) {
+    case "InternetComputer":
+      return { tag: "Icp" }
+    case "Bitcoin":
+      return { tag: "Bitcoin", value: kind.value }
+    case "Evm":
+      return undefined
+  }
+}
+
+/**
+ * The asset a tool argument names for `account`: for an EVM account, a chain
+ * by its name or chain id; otherwise ICP, an ICRC-1 ledger by its canister
+ * id, or when absent the account's own default.
+ */
+export function assetArg(named: string | undefined, account: Account): Chain {
+  if (account.kind.tag === "Evm") {
+    const chain = EVM_CHAINS.find(
+      (known) => known.name.toLowerCase() === named?.toLowerCase() || String(known.id) === named,
+    )
+    if (chain === undefined) {
+      const names = EVM_CHAINS.map((known) => known.name).join(", ")
+      throw new InvalidArguments(
+        `asset: an EVM account needs its chain, one of ${names}, by name or chain id`,
+      )
+    }
+    return { tag: "Evm", value: chain.id }
+  }
+  if (named === undefined || named === "") {
+    const asset = defaultAsset(account.kind)
+    if (asset === undefined) {
+      throw new InvalidArguments(`this server cannot use a ${kindText(account.kind)} account`)
+    }
+    return asset
+  }
+  if (named.toUpperCase() === "ICP") return { tag: "Icp" }
+  if (isPrincipal(named)) return { tag: "Icrc", value: principal(named) }
+  throw new InvalidArguments(`asset: “${named}” is neither ICP nor a ledger's canister id`)
+}
+
+/** The tracked assets an account of `kind` holds, its default first. */
+function heldBy(kind: AccountKind, tracked: readonly Chain[]): Chain[] {
+  switch (kind.tag) {
+    case "InternetComputer":
+      return tracked.filter((asset) => asset.tag === "Icp" || asset.tag === "Icrc")
+    case "Bitcoin":
+      return [{ tag: "Bitcoin", value: kind.value }]
+    case "Evm":
+      return tracked.filter((asset) => asset.tag === "Evm")
   }
 }
 
@@ -73,6 +158,10 @@ export function eventText(event: AuditEvent): string {
       return "asked to join"
     case "AccountAdded":
       return `added account ${event.value}`
+    case "AssetTracked":
+      return `tracked ${event.value.tag === "Evm" ? "" : "the "}${chainText(event.value)}`
+    case "AssetUntracked":
+      return `stopped tracking ${event.value.tag === "Evm" ? "" : "the "}${chainText(event.value)}`
     case "Proposed":
     case "Approved":
     case "Rejected":
@@ -119,6 +208,13 @@ export function walletTools(client: Client, config: Config): Tool[] {
   }))
 }
 
+/** The `asset` argument of the tools that read or send one. */
+const ASSET = {
+  type: "string" as const,
+  description:
+    "From an Internet Computer account: “ICP”, or a tracked ICRC-1 token's ledger canister id from wallet_accounts. From an EVM account: a tracked chain from wallet_accounts, by name or chain id, such as “Base” or “8453”. Leave it out for ICP, or for a Bitcoin account's bitcoin.",
+}
+
 function tools(client: Client, config: Config): Tool[] {
   const wallet = client.canister<Wallet>(walletActor, { id: config.wallet, certified: true })
   const approvals = `${config.pages}/approvals`
@@ -133,7 +229,12 @@ function tools(client: Client, config: Config): Tool[] {
           decimals: 8,
         })
       case "Evm":
-        return Promise.resolve(undefined)
+        return Promise.resolve({
+          symbol:
+            EVM_CHAINS.find((known) => known.id === chain.value)?.symbol ??
+            `ETH on chain ${chain.value}`,
+          decimals: 18,
+        })
       case "Icp":
       case "Icrc": {
         const id = chain.tag === "Icp" ? ICP_LEDGER : chain.value
@@ -170,12 +271,17 @@ function tools(client: Client, config: Config): Tool[] {
   const describe = async (action: Action, accounts: readonly Account[]): Promise<string> => {
     switch (action.tag) {
       case "Transfer": {
-        const { from, to, amount, fee, memo } = action.value
+        const { from, asset, to, amount, fee, memo } = action.value
         const account = accounts.find((account) => account.id === from)
-        const token = account && (await tokenOf(account.chain).catch(() => undefined))
+        const sent = asset ?? (account && defaultAsset(account.kind))
+        const token = sent && (await tokenOf(sent).catch(() => undefined))
         const source = account ? `account ${from} (“${account.label}”)` : `account ${from}`
         const extras = [
-          fee === null ? "" : `, fee ${amountText(fee, token)}`,
+          fee === null
+            ? ""
+            : sent?.tag === "Evm"
+              ? `, at most ${amountText(fee, token)} in fees`
+              : `, fee ${amountText(fee, token)}`,
           memo === null ? "" : `, memo ${Buffer.from(memo).toString("hex")}`,
         ].join("")
         return `Send ${amountText(amount, token)} from ${source} to ${to}${extras}`
@@ -271,20 +377,36 @@ function tools(client: Client, config: Config): Tool[] {
       name: "wallet_accounts",
       title: "The wallet's accounts",
       description:
-        "The wallet's accounts: each one's id, label, chain, address and token. Transfers name the account they send from by its id.",
+        "The wallet's accounts: each one's id, label, kind, address and the assets it holds. An Internet Computer account holds ICP and every ICRC-1 token the owners track, each named by its ledger's canister id; a Bitcoin account holds bitcoin; an EVM account holds the native token of every EVM chain the owners track, each named by its chain, at one address. Transfers name the account they send from by its id, and the asset unless it is ICP or the account's bitcoin.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       readOnly: true,
       run: async () => {
-        const accounts = await wallet.accounts()
+        const [accounts, tracked] = await Promise.all([wallet.accounts(), wallet.assets()])
+        const assetView = async (asset: Chain) => ({
+          asset:
+            asset.tag === "Icrc"
+              ? asset.value
+              : asset.tag === "Icp"
+                ? "ICP"
+                : asset.tag === "Evm"
+                  ? chainText(asset)
+                  : null,
+          name: chainText(asset),
+          token: (await tokenOf(asset).catch(() => undefined)) ?? null,
+        })
         return json(
           await Promise.all(
-            accounts.map(async (account) => ({
-              id: account.id,
-              label: account.label,
-              chain: chainText(account.chain),
-              address: account.address,
-              token: (await tokenOf(account.chain).catch(() => undefined)) ?? null,
-            })),
+            accounts.map(async (account) => {
+              const held = heldBy(account.kind, tracked)
+              return {
+                id: account.id,
+                label: account.label,
+                kind: kindText(account.kind),
+                address: account.address,
+                icp_account_id: account.icp_account_id,
+                assets: await Promise.all(held.map(assetView)),
+              }
+            }),
           ),
         )
       },
@@ -292,7 +414,8 @@ function tools(client: Client, config: Config): Tool[] {
     {
       name: "wallet_balance",
       title: "An account's balance",
-      description: "What one of the wallet's accounts holds now, as its chain reports it.",
+      description:
+        "What one of the wallet's accounts holds of an asset now, as its ledger, the Bitcoin network or an EVM chain's providers report it.",
       inputSchema: {
         type: "object",
         properties: {
@@ -302,6 +425,7 @@ function tools(client: Client, config: Config): Tool[] {
             minimum: 0,
             maximum: 2 ** 32 - 1,
           },
+          asset: ASSET,
         },
         required: ["account"],
         additionalProperties: false,
@@ -309,13 +433,15 @@ function tools(client: Client, config: Config): Tool[] {
       readOnly: true,
       run: async (args) => {
         const account = await accountOf(integer(args, "account") ?? 0)
+        const asset = assetArg(text(args, "asset"), account)
         const [balance, token] = await Promise.all([
-          wallet.balance(account.id),
-          tokenOf(account.chain),
+          wallet.balance(account.id, asset),
+          tokenOf(asset),
         ])
         return json({
           account: account.id,
           label: account.label,
+          asset: chainText(balance.asset),
           amount: amountText(balance.amount, token),
           base_units: balance.amount,
           as_of: dateOf(balance.as_of_ns),
@@ -387,19 +513,20 @@ function tools(client: Client, config: Config): Tool[] {
             minimum: 0,
             maximum: 2 ** 32 - 1,
           },
+          asset: ASSET,
           to: {
             type: "string",
             description:
-              "For ICP and ICRC-1 tokens, an ICRC-1 account in its text form (a principal is one); for Bitcoin, an address of the account's network.",
+              "For ICP and ICRC-1 tokens, an ICRC-1 account in its text form (a principal is one); for Bitcoin, an address of the account's network; for an EVM chain, an address: 0x and 40 hex digits.",
           },
           amount: {
             type: "string",
             description:
-              "The amount in the token's own units as decimal text, such as “1.5” for 1.5 ICP. The ledger's fee comes on top.",
+              "The amount in the token's own units as decimal text, such as “1.5” for 1.5 ICP. The ledger's or the chain's fee comes on top.",
           },
           memo: {
             type: "string",
-            description: `A note of at most ${MAX_MEMO_BYTES} bytes of UTF-8 that the ledger records. Not for Bitcoin.`,
+            description: `A note of at most ${MAX_MEMO_BYTES} bytes of UTF-8 that the ledger records. Not for Bitcoin or an EVM chain.`,
           },
         },
         required: ["from", "to", "amount"],
@@ -408,11 +535,10 @@ function tools(client: Client, config: Config): Tool[] {
       readOnly: false,
       run: async (args) => {
         const account = await accountOf(integer(args, "from") ?? 0)
-        const token = await tokenOf(account.chain)
+        const asset = assetArg(text(args, "asset"), account)
+        const token = await tokenOf(asset)
         if (token === undefined) {
-          throw new InvalidArguments(
-            `this server cannot send from a ${chainText(account.chain)} account`,
-          )
+          throw new InvalidArguments(`this server cannot send the ${chainText(asset)}`)
         }
         const to = text(args, "to") ?? ""
         if (!to) throw new InvalidArguments("to is empty")
@@ -434,7 +560,7 @@ function tools(client: Client, config: Config): Tool[] {
         }
         const pending = await wallet.propose({
           tag: "Transfer",
-          value: { from: account.id, to, amount, fee: null, memo },
+          value: { from: account.id, asset, to, amount, fee: null, memo },
         })
         return json({
           ...(await pendingView(pending, [account])),

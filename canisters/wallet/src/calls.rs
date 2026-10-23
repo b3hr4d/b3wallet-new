@@ -6,9 +6,8 @@
 //! would run a callback whose state went with the old heap.
 
 use crate::storage;
-use crate::transfers::{self, CallFailure};
 use candid::{CandidType, Principal};
-use ic_cdk::call::{Call, CallFailed};
+use ic_cdk::call::{Call, CallFailed, RejectCode};
 use serde::de::DeserializeOwned;
 use std::cell::Cell;
 use std::fmt::Display;
@@ -52,7 +51,7 @@ pub async fn call<R: CandidType + DeserializeOwned>(
     cycles: u128,
 ) -> Result<R, CallFailure> {
     let arg = candid::encode_one(arg).expect("a call argument encodes");
-    send(canister, who, method, arg, cycles).await
+    call_encoded(canister, who, method, arg, cycles).await
 }
 
 /// Calls `method` of `canister`, which takes no arguments.
@@ -62,10 +61,11 @@ pub async fn call_without_args<R: CandidType + DeserializeOwned>(
     method: &str,
 ) -> Result<R, CallFailure> {
     let args = candid::encode_args(()).expect("no arguments encode");
-    send(canister, who, method, args, 0).await
+    call_encoded(canister, who, method, args, 0).await
 }
 
-async fn send<R: CandidType + DeserializeOwned>(
+/// Calls `method` of `canister` with its arguments encoded.
+pub async fn call_encoded<R: CandidType + DeserializeOwned>(
     canister: Principal,
     who: impl Display,
     method: &str,
@@ -89,7 +89,7 @@ async fn send<R: CandidType + DeserializeOwned>(
                     rejected.raw_reject_code(),
                     rejected.reject_message()
                 );
-                transfers::rejected(rejected.reject_code().ok(), reason)
+                rejected_with(rejected.reject_code().ok(), reason)
             }
             other => CallFailure::NotRun(format!("cannot call {who}: {other}")),
         });
@@ -103,9 +103,68 @@ async fn send<R: CandidType + DeserializeOwned>(
     })
 }
 
+/// How a call failed before it could answer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CallFailure {
+    /// The callee did not run the call: it was never sent, or it was
+    /// rejected or trapped, which rolls the callee back.
+    NotRun(String),
+    /// The call may or may not have run: it timed out, or the answer did not
+    /// decode.
+    Unknown(String),
+}
+
+/// How a call the IC rejected failed, by its reject code (`None` for a code
+/// the wallet does not know). Only a reject by the system before the callee
+/// ran the call proves it did not run. A callee that committed a change and
+/// then trapped after an await of its own rejects with `CanisterError`, and
+/// one that rejects explicitly may also do so after committing, so those,
+/// like a bounded wait that ran out, leave it open.
+pub fn rejected_with(code: Option<RejectCode>, reason: String) -> CallFailure {
+    match code {
+        Some(RejectCode::SysFatal | RejectCode::SysTransient | RejectCode::DestinationInvalid) => {
+            CallFailure::NotRun(reason)
+        }
+        Some(RejectCode::CanisterReject | RejectCode::CanisterError | RejectCode::SysUnknown)
+        | None => CallFailure::Unknown(reason),
+    }
+}
+
 /// The reason of a failed call whose outcome changes nothing: a read.
 pub fn reason(failure: CallFailure) -> String {
     match failure {
         CallFailure::NotRun(reason) | CallFailure::Unknown(reason) => reason,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_reject_by_the_system_proves_a_call_did_not_run() {
+        for code in [
+            RejectCode::SysFatal,
+            RejectCode::SysTransient,
+            RejectCode::DestinationInvalid,
+        ] {
+            assert_eq!(
+                rejected_with(Some(code), "r".to_string()),
+                CallFailure::NotRun("r".to_string())
+            );
+        }
+        // The callee may have committed before it trapped or rejected; a
+        // bounded wait may have run out after it ran.
+        for code in [
+            Some(RejectCode::CanisterReject),
+            Some(RejectCode::CanisterError),
+            Some(RejectCode::SysUnknown),
+            None,
+        ] {
+            assert_eq!(
+                rejected_with(code, "r".to_string()),
+                CallFailure::Unknown("r".to_string())
+            );
+        }
     }
 }

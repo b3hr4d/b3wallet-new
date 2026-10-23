@@ -405,7 +405,7 @@ fn an_install_argument_can_be_candid_text_of_the_wallets_interface() {
     let file = dir.write("install.did", &output.stdout);
     let shown = stdout(&succeeds(&["show", "--interface", interface, &file]));
     assert!(
-        shown.contains("Install argument: (variant { Upgrade })"),
+        shown.contains("Install argument: (variant { Upgrade = null })"),
         "{shown}"
     );
     args[4] = "(variant { Downgrade })";
