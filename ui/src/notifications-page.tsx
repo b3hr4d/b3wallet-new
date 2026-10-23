@@ -1,56 +1,31 @@
 import type { Principal } from "@candid-core/schema"
-import { useAuth } from "@ic-reactor/react"
 import { skipToken, useQuery } from "@tanstack/react-query"
-import { useEffect, useState, useSyncExternalStore } from "react"
-import { EventItem, NEWEST } from "./activity.tsx"
+import { useEffect, useState } from "react"
+import { EventItem } from "./activity.tsx"
 import { useWallet } from "./canister.ts"
-import { CheckList } from "./checks.tsx"
 import { failureText } from "./describe.ts"
 import type { Member } from "./generated/wallet.ts"
-import { healthOf } from "./health.ts"
-import { AsMember, Reading, useMe } from "./member.tsx"
-import { newestOf, readSeen, seenKey, subscribeSeen, unreadOf, writeSeen } from "./notifications.ts"
+import { AsMember, Reading } from "./member.tsx"
+import { newestOf, readSeen, seenKey, unreadOf, writeSeen } from "./notifications.ts"
 import { useNowNs } from "./now.ts"
+import { NeedsYou } from "./rail.tsx"
 
 /** How many audit entries the page shows at a time. */
 const PAGE = 20
 
 /**
- * The entries of the newest page `me` has not seen, for the dot in the bar.
- * It reads what the start page's activity reads, so there it costs no call.
- * On a first visit nothing is new: it remembers the newest entry as seen.
- */
-export function useUnread(id: Principal, me: Member | undefined) {
-  const { client, wallet } = useWallet(id)
-  const log = useQuery(client.queryOptions(wallet, "audit_log", me ? NEWEST : skipToken))
-  const key = seenKey(id, me?.id ?? "")
-  const seen = useSyncExternalStore(
-    subscribeSeen,
-    () => readSeen(key),
-    () => undefined,
-  )
-  useEffect(() => {
-    if (me && log.data && seen === undefined) writeSeen(key, newestOf(log.data))
-  }, [me, log.data, seen, key])
-  const unread = me && log.data ? unreadOf(log.data, seen, me.id) : []
-  // The newest page is all new: there may be more than it holds.
-  return { count: unread.length, more: unread.length === NEWEST.limit }
-}
-
-/**
- * The notifications page: what needs you now, from the same checks as the
- * health dot, and what happened in the wallet, with what is new since you
- * last looked marked. Opening it marks everything as seen.
+ * The inbox: what needs you, with the same tickets as the rail, and what
+ * happened in the wallet, with what is new since you last looked marked.
+ * Opening it marks everything as seen. On a phone it is where requests and
+ * notifications live.
  */
 export function NotificationsPage({ wallet }: { wallet: Principal }) {
   return (
     <section className="column">
-      <p className="back">
-        <a href="/">Overview</a>
-      </p>
       <div className="page-head">
-        <h1>Notifications</h1>
-        <p className="quiet">What needs you, and what happened in this wallet.</p>
+        <p className="eyebrow">Requests and notifications</p>
+        <h1>Inbox</h1>
+        <p className="quiet">What needs you, and everything that happened in this wallet.</p>
       </div>
       <AsMember wallet={wallet}>{(me) => <Inbox wallet={wallet} me={me} />}</AsMember>
     </section>
@@ -58,25 +33,10 @@ export function NotificationsPage({ wallet }: { wallet: Principal }) {
 }
 
 function Inbox({ wallet: id, me }: { wallet: Principal; me: Member }) {
-  const auth = useAuth()
-  const { status } = useMe(id)
   const { client, wallet } = useWallet(id)
-  const pending = useQuery(client.queryOptions(wallet, "pending"))
   const members = useQuery(client.queryOptions(wallet, "members"))
   const accounts = useQuery(client.queryOptions(wallet, "accounts"))
   const nowNs = useNowNs()
-  const health = healthOf({
-    status: status.data,
-    statusFailure: status.isError ? failureText(status.error) : undefined,
-    me,
-    pending: pending.data,
-    sessionEndsNs:
-      auth.status === "signed-in" && auth.expiresAt !== undefined
-        ? BigInt(auth.expiresAt) * 1_000_000n
-        : undefined,
-    nowNs,
-  })
-  const needs = health.checks.filter((check) => check.level !== "ok")
 
   const key = seenKey(id, me.id)
   // What was seen before this visit, so what is new stays marked while you read.
@@ -97,22 +57,7 @@ function Inbox({ wallet: id, me }: { wallet: Principal; me: Member }) {
 
   return (
     <div className="stack">
-      <section className="card">
-        <div className="card-head">
-          <h2>Needs you</h2>
-          {status.data !== undefined && <span className="count">{needs.length}</span>}
-        </div>
-        {status.data === undefined && !status.isError ? (
-          <Reading>Checking the wallet…</Reading>
-        ) : needs.length === 0 ? (
-          <p className="all-good">
-            <span className="health-mark ok" aria-hidden="true" />
-            Nothing needs you.
-          </p>
-        ) : (
-          <CheckList checks={needs} />
-        )}
-      </section>
+      <NeedsYou wallet={id} me={me} />
 
       <section className="card">
         <div className="card-head">

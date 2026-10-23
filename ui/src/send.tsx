@@ -28,6 +28,7 @@ export function Send({ wallet }: { wallet: Principal }) {
   return (
     <section className="column">
       <div className="page-head">
+        <p className="eyebrow">Move funds</p>
         <h1>Send</h1>
         <p className="quiet">
           An owner or a proposer proposes a transfer. An owner&apos;s runs at once within the daily

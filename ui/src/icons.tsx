@@ -48,6 +48,13 @@ export const ReceiveIcon = () => (
   </Icon>
 )
 
+export const InboxIcon = () => (
+  <Icon>
+    <path d="M4 13.5 6.6 5.5h10.8l2.6 8V18.5H4Z" />
+    <path d="M4 13.5h4.6l1.2 2.2h4.4l1.2-2.2H20" />
+  </Icon>
+)
+
 export const GearIcon = () => (
   <Icon>
     <circle cx="12" cy="12" r="3" />

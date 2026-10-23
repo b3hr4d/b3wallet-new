@@ -32,6 +32,7 @@ export function Settings({ wallet, local }: { wallet: Principal; local: boolean 
         <a href="/">Overview</a>
       </p>
       <div className="page-head">
+        <p className="eyebrow">Setup and security</p>
         <h1>Settings</h1>
         <p className="quiet">How this wallet is set up, and what protects it.</p>
       </div>

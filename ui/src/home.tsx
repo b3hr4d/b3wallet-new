@@ -4,18 +4,19 @@ import { useQueries, useQuery, type UseQueryResult } from "@tanstack/react-query
 import type { ReactNode } from "react"
 import { Accounts, Holdings, type BalanceRead } from "./accounts.tsx"
 import { Activity } from "./activity.tsx"
+import { Loader } from "./brand.tsx"
 import { useWallet } from "./canister.ts"
 import { CopyButton } from "./copy.tsx"
-import { actionText, failureText, isJoinRequest, stateText, waitsFor } from "./describe.ts"
-import type { Member, Pending, Status, UpgradeState } from "./generated/wallet.ts"
-import { Loader } from "./brand.tsx"
+import { failureText, waitsFor } from "./describe.ts"
+import type { Member, Pending, Status } from "./generated/wallet.ts"
 import {
-  AlertIcon,
   ApproveIcon,
-  ArrowIcon,
   BoltIcon,
+  LayersIcon,
+  PeopleIcon,
   ReceiveIcon,
   SendIcon,
+  ShieldIcon,
   WalletMark,
 } from "./icons.tsx"
 import { JoinRequest } from "./join.tsx"
@@ -23,23 +24,26 @@ import { hueClass } from "./mark.ts"
 import { Reading, useMe } from "./member.tsx"
 import { useNowNs } from "./now.ts"
 import { HomeOutline } from "./outline.tsx"
-import { Release } from "./release.tsx"
+import { HealthPane, NeedsYou } from "./rail.tsx"
+import { ReleaseCheck } from "./release.tsx"
 import { SignIn } from "./sign-in.tsx"
-import { dateOf } from "./time.ts"
+import { dateOf, durationText } from "./time.ts"
 import { assetsOf, ICP_ONLY, LOW_CYCLES } from "./tokens.ts"
 
 /**
- * The wallet's start page: what it runs and who you are to it, then for a
- * member a dashboard of its holdings, open actions, accounts and activity
- * (members, policy and the rest live on the settings page), and for anyone
- * else signed in a request to join.
+ * The wallet's start page. For a member it is the whole wallet at a glance:
+ * what it holds, with Send and Receive; its instruments (open approvals,
+ * cycles, the policy, the members, the version); what needs you; and its
+ * accounts. On a wide screen what needs you and what happened sit in the
+ * rail beside it; narrower, they are on the page. Anyone else reads what the
+ * wallet runs, and signs in or asks to join.
  */
 export function Home({ wallet: id }: { wallet: Principal }) {
   const { auth, status, claimed, me } = useMe(id)
 
   if (status.isError) {
     return (
-      <div className="dashboard">
+      <div className="overview">
         <Hero id={id} />
         <p className="card error">{failureText(status.error)}</p>
       </div>
@@ -86,17 +90,19 @@ export function Home({ wallet: id }: { wallet: Principal }) {
     body = <JoinRequest wallet={id} />
   }
   return (
-    <div className="dashboard">
-      <Hero id={id} status={status.data}>
-        <div className="facts-row">
+    <div className="overview">
+      <Hero id={id}>
+        <p className="chips">
           <span className="chip">Version {status.data.version}</span>
           <span className="chip">
             {formatUnits(status.data.cycles, 12, { maxFractionDigits: 2 })}T cycles
           </span>
-        </div>
+        </p>
       </Hero>
-      <Notices wallet={id} status={status.data} />
       {body}
+      <div className="rail-twin">
+        <HealthPane wallet={id} />
+      </div>
     </div>
   )
 }
@@ -121,29 +127,33 @@ function Dashboard({ wallet: id, me, status }: { wallet: Principal; me: Member; 
     return read ? [{ ...holding, read }] : []
   })
   const now = useNowNs()
+  const sends = me.role.tag === "Owner" || me.role.tag === "Proposer"
   return (
-    <div className="dashboard">
-      <Hero id={id} status={status} me={me}>
-        <Holdings accounts={accounts} balances={balances} />
-        <div className="hero-actions">
-          {(me.role.tag === "Owner" || me.role.tag === "Proposer") && (
-            <a className="button primary" href="/send">
-              <SendIcon />
-              Send
+    <div className="overview">
+      <Hero
+        id={id}
+        me={me}
+        actions={
+          <>
+            {sends && (
+              <a className="button primary" href="/send">
+                <SendIcon />
+                Send
+              </a>
+            )}
+            <a className="button" href="/receive">
+              <ReceiveIcon />
+              Receive
             </a>
-          )}
-          <a className="button" href="/receive">
-            <ReceiveIcon />
-            Receive
-          </a>
-        </div>
+          </>
+        }
+      >
+        <Holdings accounts={accounts} balances={balances} />
       </Hero>
-      <Notices wallet={id} status={status} pending={pending.data} now={now} />
-      <div className="tiles">
-        <ActionsTile pending={pending} me={me} now={now} />
-        <CyclesTile cycles={status.cycles} />
-        <Release wallet={id} me={me} version={status.version} />
+      <div className="rail-twin">
+        <NeedsYou wallet={id} me={me} />
       </div>
+      <Instruments wallet={id} me={me} status={status} pending={pending} members={members} />
       <Accounts
         wallet={id}
         me={me}
@@ -152,228 +162,184 @@ function Dashboard({ wallet: id, me, status }: { wallet: Principal; me: Member; 
         assets={assets}
         balances={balances}
       />
-      <Activity wallet={id} me={me} members={members.data} accounts={accounts.data} now={now} />
+      <div className="rail-twin">
+        <Activity wallet={id} me={me} members={members.data} accounts={accounts.data} now={now} />
+      </div>
     </div>
   )
 }
 
-/** The wallet's name, id and mark, with who you are to it and what it shows below. */
+/** The wallet's mark, name and id, who you are to it, its actions, and what it holds. */
 function Hero({
   id,
-  status,
   me,
+  actions,
   children,
 }: {
   id: Principal
-  status?: Status
   me?: Member
+  actions?: ReactNode
   children?: ReactNode
 }) {
   return (
-    <section className={`card hero ${hueClass(id)}`}>
-      <div className="hero-top">
+    <section className={`hero ${hueClass(id)}`}>
+      <div className="hero-head">
         <WalletMark id={id} />
         <div className="hero-name">
+          <p className="eyebrow">
+            {me ? `${me.role.tag}${me.label ? ` · ${me.label}` : ""}` : "B3Wallet"}
+          </p>
           <h1>{me ? "Your wallet" : "Wallet"}</h1>
           <p className="hero-id">
             <code className="principal">{id}</code>
             <CopyButton text={id} label="Copy the wallet's id" />
           </p>
         </div>
-        {me && (
-          <p className="hero-chips">
-            <span className="chip accent">
-              {me.role.tag}
-              {me.label ? ` · ${me.label}` : ""}
-            </span>
-          </p>
-        )}
+        {actions && <div className="hero-actions">{actions}</div>}
       </div>
-      {status !== undefined && children}
+      {children}
     </section>
-  )
-}
-
-/**
- * What a visitor should not miss: an upgrade under way or failed, a wallet
- * low on cycles, and for members every open action that is not a transfer,
- * since those change who controls the wallet or what it runs.
- */
-function Notices({
-  wallet: id,
-  status,
-  pending,
-  now,
-}: {
-  wallet: Principal
-  status: Status
-  pending?: Pending[] | undefined
-  now?: bigint
-}) {
-  const changes = (pending ?? []).filter(
-    (action) => action.action.tag !== "Transfer" && !isJoinRequest(action),
-  )
-  const upgrade = upgradeNotice(status.upgrade)
-  const low = status.cycles < LOW_CYCLES
-  if (!upgrade && !low && changes.length === 0) return null
-  return (
-    <div className="notices">
-      {upgrade}
-      {low && (
-        <Notice tone="warn" title="The wallet is low on cycles">
-          <p>
-            It has {formatUnits(status.cycles, 12, { maxFractionDigits: 2 })}T. An upgrade needs
-            about 0.35T to spare. Anyone can top it up:
-          </p>
-          <p className="command">
-            <code>icp canister top-up --amount 1t {id}</code>
-            <CopyButton text={`icp canister top-up --amount 1t ${id}`} label="Copy the command" />
-          </p>
-        </Notice>
-      )}
-      {changes.map((action) => (
-        <Notice
-          key={String(action.id)}
-          tone="warn"
-          title={`${actionText(action.action, undefined, undefined)}.`}
-          link={
-            <a className="button small" href="/approvals">
-              Review
-            </a>
-          }
-        >
-          <p>
-            Action {String(action.id)}. {now === undefined ? "" : stateText(action, now)} If you did
-            not expect it, an owner can reject it.
-          </p>
-        </Notice>
-      ))}
-    </div>
-  )
-}
-
-function upgradeNotice(upgrade: UpgradeState): ReactNode {
-  switch (upgrade.tag) {
-    case "Idle":
-      return null
-    case "Staging":
-      return (
-        <Notice tone="info" title={`Staging version ${upgrade.value.version}`}>
-          <p>
-            {upgrade.value.chunks_uploaded} of {upgrade.value.chunks_total} chunks uploaded.
-          </p>
-        </Notice>
-      )
-    case "Installing":
-      return (
-        <Notice tone="info" title={`Installing version ${upgrade.value.version}`}>
-          <p>The wallet answers again once the new version runs.</p>
-        </Notice>
-      )
-    case "Failed":
-      return (
-        <Notice tone="bad" title={`The upgrade to version ${upgrade.value.version} failed`}>
-          <p>
-            On {dateOf(upgrade.value.at_ns)}: {upgrade.value.reason}
-          </p>
-        </Notice>
-      )
-  }
-}
-
-function Notice({
-  tone,
-  title,
-  link,
-  children,
-}: {
-  tone: "info" | "warn" | "bad"
-  title: string
-  link?: ReactNode
-  children: ReactNode
-}) {
-  return (
-    <div className={`notice-card ${tone}`}>
-      <AlertIcon />
-      <div className="notice-body">
-        <p className="notice-title">{title}</p>
-        {children}
-      </div>
-      {link}
-    </div>
-  )
-}
-
-/** How many actions are open, and how many wait for you. */
-function ActionsTile({
-  pending,
-  me,
-  now,
-}: {
-  pending: UseQueryResult<Pending[]>
-  me: Member
-  now: bigint
-}) {
-  const open = pending.data
-  const mine = open?.filter((action) => waitsFor(action, me, now)).length ?? 0
-  let note: string
-  if (pending.isError) note = failureText(pending.error)
-  else if (open === undefined) note = "Reading the open actions…"
-  else if (open.length === 0) note = "Nothing waits for approval"
-  else if (mine === 0) note = "None waits for you"
-  else note = `${mine} wait${mine === 1 ? "s" : ""} for you`
-  return (
-    <a className="card tile tile-link" href="/approvals">
-      <p className="tile-label">
-        <ApproveIcon />
-        Approvals
-        <ArrowIcon />
-      </p>
-      <p className="tile-value">
-        {open === undefined ? <span className="skeleton" /> : open.length}
-        <span className="tile-unit">open</span>
-      </p>
-      <p
-        className={
-          mine > 0 ? "tile-note accent" : pending.isError ? "tile-note error" : "tile-note"
-        }
-      >
-        {mine > 0 && <Loader waiting />}
-        {note}
-      </p>
-    </a>
   )
 }
 
 /** Cycles drawn against the 5T a wallet is created with at least. */
 const FULL_CYCLES = 5_000_000_000_000n
 
-function CyclesTile({ cycles }: { cycles: bigint }) {
-  const low = cycles < LOW_CYCLES
-  const filled = Number(((cycles < FULL_CYCLES ? cycles : FULL_CYCLES) * 100n) / FULL_CYCLES)
+/** The cells of the cycles gauge. */
+const CELLS = 24
+
+/**
+ * The wallet's instruments, a cell each: the open approvals and how many
+ * wait for you, the cycles, what a transfer needs, the members and the
+ * version. Each that has a page of its own opens it.
+ */
+function Instruments({
+  wallet: id,
+  me,
+  status,
+  pending,
+  members,
+}: {
+  wallet: Principal
+  me: Member
+  status: Status
+  pending: UseQueryResult<Pending[]>
+  members: UseQueryResult<Member[]>
+}) {
+  const { client, wallet } = useWallet(id)
+  const policy = useQuery(client.queryOptions(wallet, "policy"))
+  const now = useNowNs()
+  const open = pending.data
+  const mine = open?.filter((action) => waitsFor(action, me, now)).length ?? 0
+  const low = status.cycles < LOW_CYCLES
+  const filled = Number(
+    ((status.cycles < FULL_CYCLES ? status.cycles : FULL_CYCLES) * BigInt(CELLS)) / FULL_CYCLES,
+  )
+  const floor = Number((LOW_CYCLES * BigInt(CELLS)) / FULL_CYCLES)
+  const roster = members.data ?? []
+  const approvers = roster.filter(
+    (member) => member.role.tag === "Owner" || member.role.tag === "Approver",
+  ).length
+  const owners = roster.filter((member) => member.role.tag === "Owner").length
+  const transfer = policy.data?.rules.find((rule) => rule.kind.tag === "Transfer")
   return (
-    <section className="card tile">
-      <p className="tile-label">
-        <BoltIcon />
-        Cycles
-      </p>
-      <p className="tile-value">
-        {formatUnits(cycles, 12, { maxFractionDigits: 2 })}
-        <span className="tile-unit">T</span>
-      </p>
-      <svg
-        className={low ? "gauge low" : "gauge"}
-        viewBox="0 0 100 6"
-        preserveAspectRatio="none"
-        aria-hidden="true"
-      >
-        <rect className="gauge-track" width="100" height="6" />
-        <rect className="gauge-fill" width={Math.max(filled, 2)} height="6" />
-        <rect className="gauge-mark" x="20" width="0.8" height="6" />
-      </svg>
-      <p className={low ? "tile-note warn" : "tile-note"}>
-        {low ? "Low: top it up before an upgrade" : "They pay for its calls and storage"}
-      </p>
+    <section className="instruments" aria-label="At a glance">
+      <a className={mine > 0 ? "instrument hot" : "instrument"} href="/approvals">
+        <p className="instrument-label">
+          <ApproveIcon />
+          Approvals
+        </p>
+        <p className="instrument-value">
+          {open === undefined ? <span className="skeleton" /> : open.length}
+          <span className="unit">open</span>
+        </p>
+        <p className="instrument-note">
+          {pending.isError ? (
+            failureText(pending.error)
+          ) : mine > 0 ? (
+            <>
+              <Loader waiting />
+              {mine} wait{mine === 1 ? "s" : ""} for you
+            </>
+          ) : open?.length === 0 ? (
+            "Nothing open"
+          ) : (
+            "None waits for you"
+          )}
+        </p>
+      </a>
+      <div className={low ? "instrument warn" : "instrument"}>
+        <p className="instrument-label">
+          <BoltIcon />
+          Cycles
+        </p>
+        <p className="instrument-value">
+          {formatUnits(status.cycles, 12, { maxFractionDigits: 2 })}
+          <span className="unit">T</span>
+        </p>
+        <svg
+          className="gauge"
+          viewBox={`0 0 ${CELLS * 4} 8`}
+          preserveAspectRatio="none"
+          aria-hidden="true"
+        >
+          {Array.from({ length: CELLS }, (_, cell) => (
+            <rect
+              key={cell}
+              x={cell * 4}
+              width="3"
+              height="8"
+              className={cell < Math.max(filled, 1) ? "on" : cell < floor ? "floor" : undefined}
+            />
+          ))}
+        </svg>
+        <p className="instrument-note">
+          {low ? "Low: top it up before an upgrade" : "They pay for its calls and storage"}
+        </p>
+      </div>
+      <a className="instrument" href="/settings#security">
+        <p className="instrument-label">
+          <ShieldIcon />A transfer needs
+        </p>
+        <p className="instrument-value">
+          {transfer === undefined ? <span className="skeleton" /> : transfer.quorum}
+          <span className="unit">
+            {members.data === undefined ? "" : `of ${approvers}`} approval
+            {transfer?.quorum === 1 ? "" : "s"}
+          </span>
+        </p>
+        <p className="instrument-note">
+          {transfer === undefined
+            ? "Reading the policy…"
+            : transfer.timelock_ns === 0n
+              ? transfer.daily_limits.length > 0
+                ? "No wait, with daily limits"
+                : "No wait once approved"
+              : `Then waits ${durationText(transfer.timelock_ns)}`}
+        </p>
+      </a>
+      <a className="instrument" href="/members">
+        <p className="instrument-label">
+          <PeopleIcon />
+          Members
+        </p>
+        <p className="instrument-value">
+          {members.data === undefined ? <span className="skeleton" /> : roster.length}
+        </p>
+        <p className="instrument-note">
+          {members.data === undefined
+            ? "Reading the members…"
+            : `${owners} owner${owners === 1 ? "" : "s"}, ${approvers} approve`}
+        </p>
+      </a>
+      <div className="instrument">
+        <p className="instrument-label">
+          <LayersIcon />
+          Version
+        </p>
+        <p className="instrument-value">{status.version}</p>
+        <ReleaseCheck wallet={id} me={me} />
+      </div>
     </section>
   )
 }

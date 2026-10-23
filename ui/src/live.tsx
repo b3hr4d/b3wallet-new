@@ -11,24 +11,28 @@ import { where } from "./host.ts"
 import type { Page } from "./page.ts"
 import { MembersPage } from "./members.tsx"
 import { NotificationsPage } from "./notifications-page.tsx"
+import { ApprovalsCount, InboxCount, Rail } from "./rail.tsx"
 import { Receive } from "./receive.tsx"
 import { Send } from "./send.tsx"
 import { Settings } from "./settings.tsx"
 import { Account } from "./session.tsx"
 
-/**
- * The part of a page that calls the wallet, with the account it renders into
- * the bar's `account` element. Calls go to mainnet's API, or on icp-cli's
- * local network to the page's own origin, the only hosts the CSP lets the
- * page reach; the agent verifies every answer.
- */
-export function Live({
-  page,
-  account,
-}: {
-  page: Exclude<Page, "missing">
+/** The elements the frame leaves empty for what only the browser knows. */
+export type Slots = {
   account: HTMLElement | null
-}) {
+  rail: HTMLElement | null
+  approvals: HTMLElement | null
+  inbox: HTMLElement | null
+}
+
+/**
+ * The part of a page that calls the wallet, with what it renders into the
+ * frame's slots: the account, the counts beside Approvals and Inbox, and the
+ * rail. Calls go to mainnet's API, or on icp-cli's local network to the
+ * page's own origin, the only hosts the CSP lets the page reach; the agent
+ * verifies every answer.
+ */
+export function Live({ page, slots }: { page: Exclude<Page, "missing">; slots: Slots }) {
   const here = where(window.location.hostname)
   if (!here.ok) {
     return (
@@ -52,7 +56,10 @@ export function Live({
         })
       }
     >
-      {account && createPortal(<Account wallet={here.wallet} />, account)}
+      {slots.account && createPortal(<Account wallet={here.wallet} />, slots.account)}
+      {slots.approvals && createPortal(<ApprovalsCount wallet={here.wallet} />, slots.approvals)}
+      {slots.inbox && createPortal(<InboxCount wallet={here.wallet} />, slots.inbox)}
+      {slots.rail && createPortal(<Rail wallet={here.wallet} page={page} />, slots.rail)}
       <Wallet page={page} wallet={here.wallet} local={here.local} />
     </ReactorProvider>
   )

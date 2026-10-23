@@ -3,33 +3,8 @@ import { useMutation } from "@tanstack/react-query"
 import { useWallet } from "./canister.ts"
 import { failureText } from "./describe.ts"
 import type { Member, ReleaseManifest } from "./generated/wallet.ts"
-import { CheckIcon, LayersIcon } from "./icons.tsx"
+import { CheckIcon } from "./icons.tsx"
 import { dateOf } from "./time.ts"
-
-/**
- * The version the wallet runs, as a tile of the start page, with the check
- * for a new one.
- */
-export function Release({
-  wallet: id,
-  me,
-  version,
-}: {
-  wallet: Principal
-  me: Member
-  version: string
-}) {
-  return (
-    <section className="card tile">
-      <p className="tile-label">
-        <LayersIcon />
-        Version
-      </p>
-      <p className="tile-value">{version}</p>
-      <ReleaseCheck wallet={id} me={me} />
-    </section>
-  )
-}
 
 /**
  * A button that asks whether the wallet's release channel has a release it

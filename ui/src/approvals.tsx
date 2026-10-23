@@ -30,6 +30,7 @@ export function Approvals({ wallet }: { wallet: Principal }) {
   return (
     <section className="column">
       <div className="page-head">
+        <p className="eyebrow">Open actions</p>
         <h1>Approvals</h1>
         <p className="quiet">
           Every open action, with what your role lets you do. An action runs once it has its
@@ -42,13 +43,14 @@ export function Approvals({ wallet }: { wallet: Principal }) {
 }
 
 /** What the last button did, which stays once its action leaves the list. */
-type Outcome = { id: bigint; pending: Pending } | { id: bigint; error: unknown }
+export type Outcome = { id: bigint; pending: Pending } | { id: bigint; error: unknown }
 
-function OpenActions({ wallet: id, me }: { wallet: Principal; me: Member }) {
+/**
+ * The calls behind the approve, reject and run buttons, wherever they are,
+ * and what the last of them did.
+ */
+export function useDecide(id: Principal) {
   const { client, wallet } = useWallet(id)
-  const pending = useQuery(client.queryOptions(wallet, "pending"))
-  const accounts = useQuery(client.queryOptions(wallet, "accounts"))
-  const members = useQuery(client.queryOptions(wallet, "members"))
   const approve = useMutation(
     client.mutationOptions(wallet, "approve", { invalidates: [[wallet, "pending"]] }),
   )
@@ -59,25 +61,39 @@ function OpenActions({ wallet: id, me }: { wallet: Principal; me: Member }) {
   // the upgrade.
   const execute = useMutation(client.mutationOptions(wallet, "execute"))
   const [outcome, setOutcome] = useState<Outcome>()
-  const now = useNowNs()
   const busy = approve.isPending || reject.isPending || execute.isPending
-
-  const run = (call: typeof approve.mutate, actionId: bigint) => {
+  const run = (call: "approve" | "reject" | "execute", actionId: bigint) => {
     setOutcome(undefined)
-    call(actionId, {
+    const mutation = call === "approve" ? approve : call === "reject" ? reject : execute
+    mutation.mutate(actionId, {
       onSuccess: (result) => setOutcome({ id: actionId, pending: result }),
       onError: (error) => setOutcome({ id: actionId, error }),
     })
   }
+  return { busy, outcome, run }
+}
+
+/** What the last button did to an action. */
+export function OutcomeLine({ outcome, now }: { outcome: Outcome; now: bigint }) {
+  return (
+    <p className={"error" in outcome ? "error" : "notice"} role="status">
+      Action {String(outcome.id)}:{" "}
+      {"error" in outcome ? failureText(outcome.error) : stateText(outcome.pending, now)}
+    </p>
+  )
+}
+
+function OpenActions({ wallet: id, me }: { wallet: Principal; me: Member }) {
+  const { client, wallet } = useWallet(id)
+  const pending = useQuery(client.queryOptions(wallet, "pending"))
+  const accounts = useQuery(client.queryOptions(wallet, "accounts"))
+  const members = useQuery(client.queryOptions(wallet, "members"))
+  const { busy, outcome, run } = useDecide(id)
+  const now = useNowNs()
 
   return (
     <>
-      {outcome && (
-        <p className={"error" in outcome ? "error" : "notice"}>
-          Action {String(outcome.id)}:{" "}
-          {"error" in outcome ? failureText(outcome.error) : stateText(outcome.pending, now)}
-        </p>
-      )}
+      {outcome && <OutcomeLine outcome={outcome} now={now} />}
       {pending.isError ? (
         <p className="card error">{failureText(pending.error)}</p>
       ) : pending.data === undefined ? (
@@ -102,9 +118,9 @@ function OpenActions({ wallet: id, me }: { wallet: Principal; me: Member }) {
               me={me}
               now={now}
               busy={busy}
-              onApprove={() => run(approve.mutate, action.id)}
-              onReject={() => run(reject.mutate, action.id)}
-              onExecute={() => run(execute.mutate, action.id)}
+              onApprove={() => run("approve", action.id)}
+              onReject={() => run("reject", action.id)}
+              onExecute={() => run("execute", action.id)}
             />
           ))}
         </ul>
@@ -223,7 +239,7 @@ export function StateChip({ pending, now }: { pending: Pending; now: bigint }) {
 }
 
 /** An action's approvals, a dot each for as many as its quorum. */
-function ApprovalDots({ pending }: { pending: Pending }) {
+export function ApprovalDots({ pending }: { pending: Pending }) {
   const count = pending.approvals.length
   return (
     <span className="dots" title={`${count} of ${pending.quorum} approvals`}>
@@ -241,7 +257,7 @@ function ApprovalDots({ pending }: { pending: Pending }) {
  * Who proposed an action: you, or a member by label and role, so a proposer
  * such as an AI agent stands out. A member who has left shows as a principal.
  */
-function proposerText(id: Principal, me: Member, members: Member[] | undefined): string {
+export function proposerText(id: Principal, me: Member, members: Member[] | undefined): string {
   if (id === me.id) return "you"
   const member = members?.find((member) => member.id === id)
   return member ? `“${member.label}”, ${roleText(member.role)} (${id})` : id

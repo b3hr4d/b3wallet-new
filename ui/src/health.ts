@@ -7,8 +7,11 @@ import { LOW_CYCLES } from "./tokens.ts"
 /** All good; something needs you or is worth watching; something is wrong. */
 export type Level = "ok" | "attention" | "problem"
 
+/** What a check is about, so a page can leave out one it shows otherwise. */
+export type CheckKey = "status" | "cycles" | "version" | "waiting" | "changes" | "session"
+
 /** One thing the dot in the bar checks, said as a title and a line. */
-export type Check = { level: Level; title: string; text: string; href?: string }
+export type Check = { key?: CheckKey; level: Level; title: string; text: string; href?: string }
 
 /** How the wallet is doing: the worst level of its checks, and that check's title. */
 export type Health = { level: Level; summary: string; checks: Check[] }
@@ -42,23 +45,35 @@ export function healthOf({
 }): Health {
   const checks: Check[] = []
   if (statusFailure !== undefined) {
-    checks.push({ level: "problem", title: "The wallet does not answer", text: statusFailure })
+    checks.push({
+      key: "status",
+      level: "problem",
+      title: "The wallet does not answer",
+      text: statusFailure,
+    })
   }
   if (status !== undefined) {
     const cycles = `${formatUnits(status.cycles, 12, { maxFractionDigits: 2 })}T`
     checks.push(
       status.cycles < LOW_CYCLES
         ? {
+            key: "cycles",
             level: "attention",
             title: "Low on cycles",
-            text: `${cycles} left. An upgrade needs about 0.32T to spare, and anyone can top it up.`,
+            text: `${cycles} left. An upgrade needs about 0.35T to spare, and anyone can top it up.`,
           }
-        : { level: "ok", title: "Cycles", text: `${cycles} to pay for its calls and storage.` },
+        : {
+            key: "cycles",
+            level: "ok",
+            title: "Cycles",
+            text: `${cycles} to pay for its calls and storage.`,
+          },
     )
     const upgrade = status.upgrade
     switch (upgrade.tag) {
       case "Idle":
         checks.push({
+          key: "version",
           level: "ok",
           title: `Version ${status.version}`,
           text: "No upgrade under way.",
@@ -66,6 +81,7 @@ export function healthOf({
         break
       case "Staging":
         checks.push({
+          key: "version",
           level: "attention",
           title: `Staging version ${upgrade.value.version}`,
           text: `${upgrade.value.chunks_uploaded} of ${upgrade.value.chunks_total} chunks uploaded.`,
@@ -73,6 +89,7 @@ export function healthOf({
         break
       case "Installing":
         checks.push({
+          key: "version",
           level: "attention",
           title: `Installing version ${upgrade.value.version}`,
           text: "The wallet answers again once the new version runs.",
@@ -80,6 +97,7 @@ export function healthOf({
         break
       case "Failed":
         checks.push({
+          key: "version",
           level: "problem",
           title: `The upgrade to version ${upgrade.value.version} failed`,
           text: upgrade.value.reason,
@@ -92,12 +110,18 @@ export function healthOf({
     checks.push(
       mine > 0
         ? {
+            key: "waiting",
             level: "attention",
             title: `${mine} wait${mine === 1 ? "s" : ""} for you`,
             text: "Approve or run them on the Approvals page.",
             href: "/approvals",
           }
-        : { level: "ok", title: "Nothing waits for you", text: "No open action needs you." },
+        : {
+            key: "waiting",
+            level: "ok",
+            title: "Nothing waits for you",
+            text: "No open action needs you.",
+          },
     )
     const changes = pending.filter(
       (action) => action.action.tag !== "Transfer" && !isJoinRequest(action),
@@ -106,6 +130,7 @@ export function healthOf({
     if (first !== undefined) {
       const more = changes.length > 1 ? `, and ${changes.length - 1} more` : ""
       checks.push({
+        key: "changes",
         level: "attention",
         title: `${changes.length} change${changes.length === 1 ? "" : "s"} open`,
         text: `${actionText(first.action, undefined, undefined)}${more}. If you did not expect it, an owner can reject it.`,
@@ -117,8 +142,14 @@ export function healthOf({
     const left = sessionEndsNs - nowNs
     checks.push(
       left <= 0n
-        ? { level: "problem", title: "Your session ended", text: "Sign in again to act." }
+        ? {
+            key: "session",
+            level: "problem",
+            title: "Your session ended",
+            text: "Sign in again to act.",
+          }
         : {
+            key: "session",
             level: left < SOON_NS ? "attention" : "ok",
             title: left < SOON_NS ? "Your session ends soon" : "Signed in",
             text: `Internet Identity session, ${leftText(sessionEndsNs, nowNs)}.`,
