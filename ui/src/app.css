@@ -1839,6 +1839,13 @@ a.instrument.hot:hover {
   overflow-wrap: anywhere;
 }
 
+.ticket .details {
+  margin-top: 10px;
+  padding: 8px 10px;
+  font-size: 12.5px;
+  line-height: 17px;
+}
+
 .ticket-code {
   display: grid;
   gap: 4px;
@@ -2490,6 +2497,7 @@ button.who[aria-expanded="true"] {
   font-size: 13px;
   line-height: 18px;
   list-style: none;
+  overflow-wrap: anywhere;
 }
 
 /* ---- Approvals, send, claim and join ------------------------------------------------- */

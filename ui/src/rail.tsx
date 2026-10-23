@@ -8,6 +8,7 @@ import { useWallet } from "./canister.ts"
 import { CheckList } from "./checks.tsx"
 import { CopyButton } from "./copy.tsx"
 import {
+  actionDetails,
   actionText,
   canRun,
   failureText,
@@ -204,9 +205,10 @@ function kindOf(pending: Pending): string {
 }
 
 /**
- * One action that waits for you: what it does, in full, with who proposed it
- * and how many approvals it has, and the buttons your role allows. A join
- * request shows the code the asking device must show.
+ * One action that waits for you: what it does, in full and with every
+ * detail the approvals page shows, who proposed it and how many approvals
+ * it has, and the buttons your role allows. A join request shows the code
+ * the asking device must show.
  */
 function Ticket({
   pending,
@@ -233,6 +235,9 @@ function Ticket({
   const from = sourceOf(action, accounts)
   const { token } = useToken(transferAsset(action, from))
   const join = isJoinRequest(pending)
+  // What the approvals page shows under an action, before its buttons: the
+  // rules a policy change sets, what an extension is granted, a module's hash.
+  const details = actionDetails(action)
   const ready = canRun(pending, now)
   const approved = pending.approvals.includes(me.id)
   const tone = join || action.tag !== "Transfer" ? "ticket watch" : "ticket"
@@ -246,6 +251,13 @@ function Ticket({
       <p className="ticket-text">
         {join ? joinRequestText(pending) : actionText(action, from, token)}.
       </p>
+      {details.length > 0 && (
+        <ul className="details">
+          {details.map((line, index) => (
+            <li key={index}>{line}</li>
+          ))}
+        </ul>
+      )}
       {join && (
         <div className="ticket-code">
           <p>Approve only if the device that asks shows</p>
