@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { createPrivateKey, createPublicKey, sign, verify } from "node:crypto"
 import { test } from "node:test"
-import { claimKeyOf, claimLinkFragment, claimPublicKey, signClaim } from "../src/claim-key.ts"
+import { claimKeyOf, claimLinkFragment, claimPublicKey, signClaim } from "../src/logic/claim-key.ts"
 
 const seed = Uint8Array.from({ length: 32 }, (_, i) => i * 7 + 1)
 const wallet = "efadq-gl777-77774-aaaba-cai"

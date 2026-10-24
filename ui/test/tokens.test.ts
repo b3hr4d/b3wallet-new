@@ -19,7 +19,7 @@ import {
   readAmount,
   tokenOf,
   transferAsset,
-} from "../src/tokens.ts"
+} from "../src/logic/tokens.ts"
 
 test("a typed amount is exactly its base units", () => {
   assert.deepEqual(readAmount("1.5", 8), { amount: 150_000_000n })

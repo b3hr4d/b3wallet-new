@@ -13,6 +13,9 @@ use std::cell::RefCell;
 /// scripts, styles, images and fonts come only from the wallet's own origin,
 /// calls go only to it and to the IC API hosts the agent uses, and nothing may
 /// frame the wallet, be framed by it, post a form or change its base URL.
+/// Trusted Types are required and no policy may make them, so a browser that
+/// enforces them refuses every string written as markup or script, and every
+/// `javascript:` URL.
 pub const CONTENT_SECURITY_POLICY: &str = "default-src 'none'; \
     script-src 'self'; \
     style-src 'self'; \
@@ -24,6 +27,8 @@ pub const CONTENT_SECURITY_POLICY: &str = "default-src 'none'; \
     object-src 'none'; \
     base-uri 'none'; \
     form-action 'none'; \
+    require-trusted-types-for 'script'; \
+    trusted-types 'none'; \
     upgrade-insecure-requests";
 
 // Built by `ui/` (`npm run build`), which prerenders the pages and bundles
