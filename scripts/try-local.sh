@@ -7,7 +7,9 @@
 # it in a browser with the local Internet Identity, and stops there.
 #
 # With --upgrade it upgrades the wallet it installed last to this checkout,
-# in place: the wallet keeps its owners, accounts, balances and history.
+# in place: the wallet keeps its owners, accounts, balances and history. That
+# needs the local network that holds it still running, since icp-cli starts a
+# stopped network empty.
 #
 # Needs icp-cli and ic-wasm, Node, the Rust toolchain of rust-toolchain.toml,
 # and a clang that compiles to WebAssembly (on a Mac, Homebrew's LLVM).
@@ -41,15 +43,19 @@ need ic-wasm "npm install -g @icp-sdk/ic-wasm"
 need node "https://nodejs.org"
 need cargo "https://rustup.rs"
 # secp256k1's C code, under the bitcoin crate, needs a clang that compiles to
-# WebAssembly. Apple's cannot, so on a Mac the build uses Homebrew's LLVM.
+# WebAssembly and an ar that archives what it compiles. Apple's ar writes an
+# empty archive of Wasm objects, even where Apple's clang compiles them, so on
+# a Mac the build uses Homebrew's LLVM for both.
 compiles_wasm() { echo 'int x;' | "$1" --target=wasm32-unknown-unknown -x c -c - -o /dev/null 2>/dev/null; }
-if ! compiles_wasm "${CC_wasm32_unknown_unknown:-clang}"; then
+if [ -z "${CC_wasm32_unknown_unknown:-}" ] && { [ "$(uname)" = Darwin ] || ! compiles_wasm clang; }; then
   llvm=$(brew --prefix llvm 2>/dev/null)/bin || llvm=
-  if [ -z "${CC_wasm32_unknown_unknown:-}" ] && [ -n "$llvm" ] && compiles_wasm "$llvm/clang"; then
+  if [ -n "$llvm" ] && compiles_wasm "$llvm/clang"; then
     export CC_wasm32_unknown_unknown=$llvm/clang AR_wasm32_unknown_unknown=$llvm/llvm-ar
   else
-    missing+=("  a clang that compiles to WebAssembly (Apple's cannot): brew install llvm")
+    missing+=("  a clang and an ar that build WebAssembly (Apple's cannot): brew install llvm")
   fi
+elif ! compiles_wasm "${CC_wasm32_unknown_unknown:-clang}"; then
+  missing+=("  a clang that compiles to WebAssembly: brew install llvm")
 fi
 # The script's calls name the interface file, which icp-cli 0.3.2 added.
 if command -v icp >/dev/null 2>&1; then
@@ -101,11 +107,18 @@ ed25519() {
 
 # icp.yaml pins the network launcher. ICP_CLI_NETWORK_LAUNCHER_PATH would run
 # another one in its place, and icp-cli cannot read canister settings from an
-# older one, so the script drops it and stops a network it may have started.
+# older one, so the script drops it. A new install also stops a network the
+# other launcher may have started; an upgrade does not, since icp-cli starts
+# a stopped network empty and the wallet would go with it.
 if [ -n "${ICP_CLI_NETWORK_LAUNCHER_PATH:-}" ]; then
   echo "Ignoring ICP_CLI_NETWORK_LAUNCHER_PATH: this runs the network launcher icp.yaml pins."
   unset ICP_CLI_NETWORK_LAUNCHER_PATH
-  icp network stop >/dev/null 2>&1 || true
+  $upgrade || icp network stop >/dev/null 2>&1 || true
+fi
+if $upgrade && ! icp network status >/dev/null 2>&1; then
+  echo "The local network is not running, and icp-cli starts it empty, so the wallet" >&2
+  echo "it held is gone. Run $0 to install a new one." >&2
+  exit 1
 fi
 
 mkdir -p "$state/bitcoin"
