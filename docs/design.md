@@ -396,13 +396,17 @@ The Content-Security-Policy, pinned by a test:
 default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:;
 font-src 'self'; connect-src 'self' https://icp-api.io https://icp0.io;
 frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'none';
-form-action 'none'; upgrade-insecure-requests
+form-action 'none'; require-trusted-types-for 'script'; trusted-types 'none';
+upgrade-insecure-requests
 ```
 
 The files come from `ui/`, a React app built with a pinned Node, esbuild and
 lockfile ([decision 0006](decisions/0006-client-library.md) chose its client
-library). The build renders each page to HTML in Node, with what is the same
-for every visitor, and bundles the app that hydrates it; the HTML holds no
+library), which bundles Preact in React's place
+([decision 0011](decisions/0011-preact-compat.md)), laid out and checked as
+[ui-standard.md](ui-standard.md) says. The build renders each
+page to HTML in Node, with what is the same for every visitor, and bundles
+the app that hydrates it; the HTML holds no
 inline script or style and loads only `/app.js` and `/app.css`. In the
 browser, the app works only at the wallet's own address
 (`https://<wallet id>.icp0.io`, or `http://<wallet id>.localhost` on

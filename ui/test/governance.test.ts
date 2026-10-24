@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import type { Member, Policy, Role } from "../src/generated/wallet.ts"
-import { changeRefusal, labelRefusal } from "../src/governance.ts"
+import { changeRefusal, labelRefusal } from "../src/logic/governance.ts"
 
 const member = (id: string, role: Role["tag"]): Member => ({
   id: id as never,

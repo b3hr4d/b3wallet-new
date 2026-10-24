@@ -1355,7 +1355,8 @@ const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; \
     img-src 'self' data:; font-src 'self'; \
     connect-src 'self' https://icp-api.io https://icp0.io; frame-src 'none'; \
     frame-ancestors 'none'; object-src 'none'; base-uri 'none'; \
-    form-action 'none'; upgrade-insecure-requests";
+    form-action 'none'; require-trusted-types-for 'script'; \
+    trusted-types 'none'; upgrade-insecure-requests";
 
 /// The headers every page, the script and the styles carry, certified.
 const PAGE_HEADERS: &[(&str, &str)] = &[

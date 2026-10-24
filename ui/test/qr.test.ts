@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import jsQR from "jsqr"
-import { qrOf } from "../src/qr.ts"
+import { qrOf } from "../src/logic/qr.ts"
 
 /**
  * What a camera would read: the QR code drawn at four pixels a module, dark
