@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { numberParam, where } from "../src/host.ts"
+import { numberParam, where } from "../src/logic/host.ts"
 
 const id = "efadq-gl777-77774-aaaba-cai"
 

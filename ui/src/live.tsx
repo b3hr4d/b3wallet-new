@@ -1,21 +1,20 @@
 import type { Principal } from "@candid-core/schema"
-import { createClient } from "@ic-reactor/core"
 import { ReactorProvider } from "@ic-reactor/react"
-import { AuthClient } from "@icp-sdk/auth/client"
 import { createPortal } from "react-dom"
-import { AccountPage } from "./account.tsx"
-import { Approvals } from "./approvals.tsx"
-import { Claim } from "./claim.tsx"
-import { Home } from "./home.tsx"
-import { where } from "./host.ts"
-import type { Page } from "./page.ts"
-import { MembersPage } from "./members.tsx"
-import { NotificationsPage } from "./notifications-page.tsx"
-import { ApprovalsCount, InboxCount, Rail } from "./rail.tsx"
-import { Receive } from "./receive.tsx"
-import { Send } from "./send.tsx"
-import { Settings } from "./settings.tsx"
-import { Account } from "./session.tsx"
+import { walletClient } from "./ic/client.ts"
+import { where } from "./logic/host.ts"
+import type { Page } from "./logic/page.ts"
+import { AccountPage } from "./pages/account.tsx"
+import { Approvals } from "./pages/approvals.tsx"
+import { Claim } from "./pages/claim.tsx"
+import { Home } from "./pages/home.tsx"
+import { MembersPage } from "./pages/members.tsx"
+import { NotificationsPage } from "./pages/notifications.tsx"
+import { Receive } from "./pages/receive.tsx"
+import { Send } from "./pages/send.tsx"
+import { Settings } from "./pages/settings.tsx"
+import { ApprovalsCount, InboxCount, Rail } from "./parts/rail.tsx"
+import { Account } from "./parts/session.tsx"
 
 /** The elements the frame leaves empty for what only the browser knows. */
 export type Slots = {
@@ -28,9 +27,8 @@ export type Slots = {
 /**
  * The part of a page that calls the wallet, with what it renders into the
  * frame's slots: the account, the counts beside Approvals and Inbox, and the
- * rail. Calls go to mainnet's API, or on icp-cli's local network to the
- * page's own origin, the only hosts the CSP lets the page reach; the agent
- * verifies every answer.
+ * rail. `walletClient` picks where calls go; the agent verifies every
+ * answer.
  */
 export function Live({ page, slots }: { page: Exclude<Page, "missing">; slots: Slots }) {
   const here = where(window.location.hostname)
@@ -48,14 +46,7 @@ export function Live({ page, slots }: { page: Exclude<Page, "missing">; slots: S
     )
   }
   return (
-    <ReactorProvider
-      client={() =>
-        createClient({
-          network: here.local ? { host: window.location.origin } : "ic",
-          auth: (network) => new AuthClient(network),
-        })
-      }
-    >
+    <ReactorProvider client={() => walletClient(here.local)}>
       {slots.account && createPortal(<Account wallet={here.wallet} />, slots.account)}
       {slots.approvals && createPortal(<ApprovalsCount wallet={here.wallet} />, slots.approvals)}
       {slots.inbox && createPortal(<InboxCount wallet={here.wallet} />, slots.inbox)}

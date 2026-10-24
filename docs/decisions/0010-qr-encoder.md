@@ -19,7 +19,7 @@ dependency of the UI.
 
 How the page uses it, and what checks it:
 
-- `ui/src/qr.ts` encodes the address text as given, at medium error
+- `ui/src/logic/qr.ts` encodes the address text as given, at medium error
   correction with the four-module quiet zone, and turns the modules into a
   single SVG path. The page draws it dark on light in both themes, since
   scanners read that way round, with no style attribute and no new file.

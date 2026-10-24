@@ -1,8 +1,8 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import type { Member, Pending, Status } from "../src/generated/wallet.ts"
-import { healthOf } from "../src/health.ts"
-import { leftText } from "../src/time.ts"
+import { healthOf } from "../src/logic/health.ts"
+import { leftText } from "../src/logic/time.ts"
 
 const owner = "fvski-cdv2h-g6ldz-eacds-4wfcf-px5sn-yfwv7-bwtxb-wvytu-cm3qa-sae" as never
 const phone = "gxhcg-wz6ja-zbwh7-s6ha4-nnlhc-ya5hh-2dv23-dwksw-ujozj-ymkcv-tae" as never

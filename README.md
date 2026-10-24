@@ -86,6 +86,7 @@ design, in [docs/design.md](docs/design.md).
 | --- | --- |
 | `docs/design.md` | System design: architecture, flows, data model, security model, open decisions |
 | `docs/plan-v0.md` | The v0 build, one small verified step per pull request |
+| `docs/ui-standard.md` | How `ui/` is laid out, and the rules that keep its pages safe and fast, each with the check that enforces it |
 | `candid/` | The target Candid interfaces of the wallet, release channel, factory and extensions |
 | `canisters/wallet/` | The wallet canister; `pages/` holds the UI build it embeds |
 | `ui/` | The wallet's UI: React pages prerendered at build, and the app that hydrates them, built on Preact |

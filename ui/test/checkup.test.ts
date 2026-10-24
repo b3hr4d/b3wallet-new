@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { checkupOf } from "../src/checkup.ts"
+import { checkupOf } from "../src/logic/checkup.ts"
 import type { Member, Policy, PolicyRule } from "../src/generated/wallet.ts"
 
 const DAY = 86_400_000_000_000n

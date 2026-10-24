@@ -2,8 +2,9 @@ import { createHash } from "node:crypto"
 
 /**
  * The code the wallet's Approvals page shows for a join request: eight digits
- * from the SHA-256 of the asking principal's text, as ui/src/join-code.ts
- * makes them. The owner approves the request whose code the agent reports.
+ * from the SHA-256 of the asking principal's text, as
+ * ui/src/logic/join-code.ts makes them. The owner approves the request whose
+ * code the agent reports.
  */
 export function joinCode(principal: string): string {
   const hash = createHash("sha256").update(principal).digest()
