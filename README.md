@@ -13,8 +13,10 @@ members. Members change members and the policy through actions that wait for
 their quorum and timelock, a new device can ask to join, and every change
 leaves one entry in an append-only audit log. It serves its own UI, certified
 and with a strict Content-Security-Policy: a React app from `ui/`, prerendered
-at build. On every page a rail beside it, or the page itself on a narrower
-screen, shows members what needs them: what is wrong or worth watching, with
+at build and shipped on Preact
+([decision 0011](docs/decisions/0011-preact-compat.md)). On every page a rail
+beside it, or the page itself on a narrower screen, shows members what needs
+them: what is wrong or worth watching, with
 a notice for every open action that is not a transfer, and each action they
 may approve or run, with its buttons, then the newest audit entries. Its
 start page shows the wallet's version and who you are to it, and shows
@@ -86,7 +88,7 @@ design, in [docs/design.md](docs/design.md).
 | `docs/plan-v0.md` | The v0 build, one small verified step per pull request |
 | `candid/` | The target Candid interfaces of the wallet, release channel, factory and extensions |
 | `canisters/wallet/` | The wallet canister; `pages/` holds the UI build it embeds |
-| `ui/` | The wallet's UI: React pages prerendered at build, and the app that hydrates them |
+| `ui/` | The wallet's UI: React pages prerendered at build, and the app that hydrates them, built on Preact |
 | `mcp/` | An MCP server that lets an AI agent read a wallet and propose transfers, as a proposer whose transfers wait for an owner |
 | `canisters/release_channel/` | The release channel canister |
 | `canisters/factory/` | The factory canister, which creates wallets |

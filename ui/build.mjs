@@ -38,8 +38,24 @@ execFileSync(
   { stdio: ["ignore", "ignore", "inherit"] },
 )
 
+// The pages are written against React, and ship on Preact: every import of
+// React, including ic-reactor's React bindings' and TanStack Query's, is
+// preact/compat, which keeps React's semantics (onChange on every keystroke,
+// className, portals, useSyncExternalStore) at a tenth of react-dom's size.
+// React itself stays installed for its types and as those packages' peer, and
+// is never bundled. Decision 0011 has the comparison behind it.
+const alias = {
+  react: "preact/compat",
+  "react-dom": "preact/compat",
+  "react-dom/client": "preact/compat/client",
+  "react-dom/server": "preact/compat/server",
+  "react/jsx-runtime": "preact/compat/jsx-runtime",
+  "react/jsx-dev-runtime": "preact/compat/jsx-runtime",
+}
+
 const shared = {
   absWorkingDir: ui,
+  alias,
   bundle: true,
   charset: "utf8",
   define: { "process.env.NODE_ENV": '"production"' },
@@ -63,7 +79,9 @@ const browser = await esbuild.build({
   write: false,
 })
 
-// The same App, rendered in Node to the HTML each page starts from.
+// The same App, rendered in Node to the HTML each page starts from. Its
+// packages are bundled too, so the aliases reach the React that ic-reactor's
+// and TanStack Query's React packages import, and one Preact renders it all.
 const scratch = join(ui, ".build")
 await rm(scratch, { recursive: true, force: true })
 await esbuild.build({
@@ -71,7 +89,6 @@ await esbuild.build({
   entryPoints: ["src/prerender.tsx"],
   format: "esm",
   outfile: join(scratch, "prerender.mjs"),
-  packages: "external",
   platform: "node",
   target: "node22",
 })

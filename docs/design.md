@@ -401,8 +401,10 @@ form-action 'none'; upgrade-insecure-requests
 
 The files come from `ui/`, a React app built with a pinned Node, esbuild and
 lockfile ([decision 0006](decisions/0006-client-library.md) chose its client
-library). The build renders each page to HTML in Node, with what is the same
-for every visitor, and bundles the app that hydrates it; the HTML holds no
+library), which bundles Preact in React's place
+([decision 0011](decisions/0011-preact-compat.md)). The build renders each
+page to HTML in Node, with what is the same for every visitor, and bundles
+the app that hydrates it; the HTML holds no
 inline script or style and loads only `/app.js` and `/app.css`. In the
 browser, the app works only at the wallet's own address
 (`https://<wallet id>.icp0.io`, or `http://<wallet id>.localhost` on
