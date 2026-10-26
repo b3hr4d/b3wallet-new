@@ -47,6 +47,11 @@ What it does and does not do:
    - the pending transfer as stored (with its asset);
    - the listed accounts, their labels and addresses;
    - the proposer's member label and the memo, both run through the keyword list.
+6. **The wallet's own names** (candid-profile decision D-045, added 2026-10-27): before the model reads the request,
+   each listed account's label in it is swapped for a label the model was trained on, and the spans are mapped back
+   (`Guard::answer_named`). The model then reads "my BTC Savings" as a label, not as a second asset. The comparator
+   still resolves the label from the owner's own words. A label that is an address, an asset or chain word, or a
+   token symbol is never swapped.
 
 Checked:
 
@@ -58,7 +63,13 @@ Checked:
   - without the file it answers nothing, refuses a file other than the pinned one, refuses proposers, and refuses to
     run as an update;
   - with `GUARD_BIN` set, it matches a correct transfer, flags another amount and an added memo, and is loaded again
-    after an upgrade.
+    after an upgrade;
+  - with `GUARD_BIN` set, "Send 1.5 ICP to my BTC Savings" matches a transfer to that account and flags one to any
+    other address (without the swap, the guard abstains on it).
+- **Names** (candid-profile `guard/names-dev.json`, dev data only): on requests whose labels hold a token or chain
+  word, the swap takes the share of amount, asset and to checked from 13 to 15% to 80 to 86%, and misses from 24 to
+  2. On ordinary requests it checks 3 to 4 points more, with no new miss. The swap equals the Python on 608 cases
+  (`tests/data/names.jsonl`).
 - **Locally, end to end** (candid-profile `guard/canister/try/local.sh --in-wallet`): 20 transfers proposed by an
   agent through `propose`.
   - 0 false flags on the 7 honest ones;

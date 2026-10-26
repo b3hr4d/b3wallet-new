@@ -19,6 +19,49 @@ const PLACEHOLDERS: [&str; 5] = [
     "[unused5]",
 ];
 
+/// `names.STAND_INS`: training labels, one vocabulary word each, for the first, second, ... name a request uses.
+const STAND_INS: [&str; 8] = [
+    "Vault", "Stash", "Primary", "Joint", "Bills", "Savings", "Trading", "Business",
+];
+/// `names.WORDS`: the comparator's asset and chain words; a name that is one of them is never swapped.
+const NAME_WORDS: [&str; 20] = [
+    "icp",
+    "btc",
+    "bitcoin",
+    "eth",
+    "ether",
+    "ethereum",
+    "internet computer",
+    "mainnet",
+    "bitcoin mainnet",
+    "testnet",
+    "bitcoin testnet",
+    "regtest",
+    "bitcoin regtest",
+    "ethereum mainnet",
+    "sepolia",
+    "arbitrum",
+    "arbitrum one",
+    "base",
+    "optimism",
+    "op mainnet",
+];
+
+/// A request with the wallet's names swapped (candid-profile `guard/names.py`, decision D-045 there): the text the
+/// model reads and, for each of its characters, where a span starting or ending there starts or ends in the
+/// person's words.
+pub struct Swap {
+    pub text: Vec<char>,
+    starts: Vec<usize>,
+    ends: Vec<usize>,
+}
+
+impl Swap {
+    pub fn back(&self, (a, b): (usize, usize)) -> (usize, usize) {
+        (self.starts[a], self.ends[b - 1])
+    }
+}
+
 /// `tokenizer-tables.json`: code point ranges and the fold of each character that folds.
 pub struct Tables {
     whitespace: Vec<(u32, u32)>,
@@ -301,6 +344,113 @@ impl Tokenizer {
             self.wordpiece(&word, &src, &mut pieces);
         }
         pieces
+    }
+
+    /// `names.words`: (folded word, start, end) of every word of `text`; an identifier is one word None.
+    fn all_words(&self, text: &[char]) -> Vec<(Option<Vec<char>>, usize, usize)> {
+        let mut out = Vec::new();
+        let mut cursor = 0;
+        let plain = |out: &mut Vec<_>, a, b| {
+            out.extend(
+                self.words(text, a, b)
+                    .into_iter()
+                    .map(|(w, src)| (Some(w), src[0], src[src.len() - 1] + 1)),
+            );
+        };
+        for (start, end, _) in self.identifiers(text) {
+            plain(&mut out, cursor, start);
+            out.push((None, start, end));
+            cursor = end;
+        }
+        plain(&mut out, cursor, text.len());
+        out
+    }
+
+    /// `names.swappable`: the folded words of a name, or None when it is never swapped: a name that is an
+    /// identifier (a value always wins), or one that is itself an asset or chain word or a token symbol.
+    fn swappable(&self, name: &str, symbols: &[String]) -> Option<Vec<Vec<char>>> {
+        let trimmed: Vec<char> = name.trim().chars().collect();
+        if identifier_kind(&trimmed).is_some() {
+            return None;
+        }
+        let joined = |text: &str| -> Option<Vec<Vec<char>>> {
+            let chars: Vec<char> = text.chars().collect();
+            self.all_words(&chars)
+                .into_iter()
+                .map(|(w, _, _)| w)
+                .collect()
+        };
+        let words = joined(name).filter(|w| !w.is_empty())?;
+        let key = |w: &[Vec<char>]| {
+            w.iter()
+                .map(|x| x.iter().collect::<String>())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let k = key(&words);
+        if NAME_WORDS.contains(&k.as_str())
+            || symbols
+                .iter()
+                .any(|s| joined(s).is_some_and(|w| key(&w) == k))
+        {
+            return None;
+        }
+        Some(words)
+    }
+
+    /// `names.rewrite`: `text` with each of the wallet's names it uses (whole words, case and accents folded,
+    /// longest first, then left to right) swapped for a training label the model reads well, and the map back.
+    pub fn swap_names(&self, text: &[char], names: &[String], symbols: &[String]) -> Swap {
+        let mut wanted: Vec<(Vec<Vec<char>>, usize)> = names
+            .iter()
+            .enumerate()
+            .filter_map(|(k, n)| Some((self.swappable(n, symbols)?, k)))
+            .collect();
+        wanted.sort_by_key(|(w, _)| std::cmp::Reverse(w.len())); // stable, as Python's sort
+        let have = self.all_words(text);
+        let (mut found, mut i) = (Vec::new(), 0);
+        while i < have.len() {
+            let hit = wanted.iter().find(|(w, _)| {
+                have.len() - i >= w.len()
+                    && w.iter()
+                        .zip(&have[i..])
+                        .all(|(x, (y, _, _))| y.as_ref() == Some(x))
+            });
+            match hit {
+                Some((w, k)) => {
+                    found.push((have[i].1, have[i + w.len() - 1].2, *k));
+                    i += w.len();
+                }
+                None => i += 1,
+            }
+        }
+        let mut order: Vec<usize> = Vec::new();
+        let mut swap = Swap {
+            text: Vec::new(),
+            starts: Vec::new(),
+            ends: Vec::new(),
+        };
+        let keep = |swap: &mut Swap, a: usize, b: usize| {
+            swap.text.extend(&text[a..b]);
+            swap.starts.extend(a..b);
+            swap.ends.extend(a + 1..b + 1);
+        };
+        let mut cursor = 0;
+        for (start, end, k) in found {
+            keep(&mut swap, cursor, start);
+            if !order.contains(&k) {
+                order.push(k);
+            }
+            let stand_in =
+                STAND_INS[order.iter().position(|&x| x == k).unwrap_or(0) % STAND_INS.len()];
+            swap.text.extend(stand_in.chars());
+            swap.starts
+                .extend(std::iter::repeat_n(start, stand_in.len()));
+            swap.ends.extend(std::iter::repeat_n(end, stand_in.len()));
+            cursor = end;
+        }
+        keep(&mut swap, cursor, text.len());
+        swap
     }
 
     /// [CLS] pieces [SEP] and the pieces, or None when that is more than MAX_POSITIONS positions (the request is

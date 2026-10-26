@@ -4405,6 +4405,22 @@ fn the_guard_loads_only_its_pinned_file() {
 /// With the round-9 file (GUARD_BIN; 44 MB, not in the repository, so the test passes without checking anything
 /// when it is unset): the guard matches the transfer the owner asked for, flags one with another amount or a memo
 /// they never mentioned, and is loaded again after an upgrade.
+/// Uploads and loads the guard file as an owner.
+fn load_guard(pic: &PocketIc, id: Principal, owner: Principal, file: &[u8]) {
+    for (k, chunk) in file.chunks(wallet::GUARD_MAX_CHUNK).enumerate() {
+        guard_upload(pic, id, owner, (k * wallet::GUARD_MAX_CHUNK) as u64, chunk)
+            .unwrap()
+            .unwrap();
+    }
+    let loaded =
+        update::<Result<wallet::GuardStatus, WalletError>>(pic, id, owner, "guard_load", &())
+            .unwrap();
+    assert_eq!(
+        (loaded.loaded, loaded.release.as_deref()),
+        (true, Some("release-round9"))
+    );
+}
+
 #[test]
 fn the_guard_checks_a_proposed_transfer() {
     let Ok(path) = std::env::var("GUARD_BIN") else {
@@ -4414,18 +4430,7 @@ fn the_guard_checks_a_proposed_transfer() {
     let file = std::fs::read(&path).unwrap();
     let pic = PocketIc::new();
     let (id, owner) = claimed_wallet(&pic);
-    for (k, chunk) in file.chunks(wallet::GUARD_MAX_CHUNK).enumerate() {
-        guard_upload(&pic, id, owner, (k * wallet::GUARD_MAX_CHUNK) as u64, chunk)
-            .unwrap()
-            .unwrap();
-    }
-    let loaded =
-        update::<Result<wallet::GuardStatus, WalletError>>(&pic, id, owner, "guard_load", &())
-            .unwrap();
-    assert_eq!(
-        (loaded.loaded, loaded.release.as_deref()),
-        (true, Some("release-round9"))
-    );
+    load_guard(&pic, id, owner, &file);
     assert_eq!(
         audit(&pic, id, owner).last(),
         Some(&(
@@ -4481,5 +4486,65 @@ fn the_guard_checks_a_proposed_transfer() {
     assert_eq!(
         overall(transfer_action(1, friend, 150_000_000)),
         (wallet::GuardOverall::Matches, vec![])
+    );
+}
+
+#[test]
+fn the_guard_reads_the_wallets_own_account_names() {
+    let Ok(path) = std::env::var("GUARD_BIN") else {
+        eprintln!("skipped: GUARD_BIN names the guard file");
+        return;
+    };
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    load_guard(&pic, id, owner, &std::fs::read(&path).unwrap());
+    // An ICP account whose label holds a token word: the model alone reads "BTC" as a second asset.
+    let savings = add_account(
+        &pic,
+        id,
+        owner,
+        AccountKind::InternetComputer,
+        "BTC Savings",
+    )
+    .unwrap();
+    let agent = user(30);
+    run_at_once(
+        &pic,
+        id,
+        owner,
+        add_member_action_labelled(agent, Role::Proposer, "Claude on my Mac"),
+    );
+    let words = "Send 1.5 ICP to my BTC Savings";
+    let report = |to: String| {
+        let request = ask(&pic, id, owner, words).unwrap().unwrap();
+        let action = Action::Transfer(TransferRequest {
+            from: 1,
+            asset: None,
+            to,
+            amount: 150_000_000u64.into(),
+            fee: None,
+            memo: None,
+        });
+        let proposed = propose_for(&pic, id, agent, request.id, action).unwrap();
+        guard_check(&pic, id, owner, proposed.id, false)
+            .unwrap()
+            .unwrap()
+    };
+    let right = report(savings.address.clone());
+    assert_eq!(right.overall, wallet::GuardOverall::Matches, "{right:?}");
+    let to: Vec<&str> = right
+        .spans
+        .iter()
+        .filter(|s| s.slot == "to")
+        .map(|s| s.text.as_str())
+        .collect();
+    assert_eq!(to, ["BTC Savings"]);
+    let elsewhere = report(LedgerAccount::from(user(20)).to_string());
+    assert_eq!(elsewhere.overall, wallet::GuardOverall::Differs);
+    assert!(
+        elsewhere
+            .fields
+            .iter()
+            .any(|f| f.field == "to" && f.verdict == wallet::GuardVerdict::Differs)
     );
 }

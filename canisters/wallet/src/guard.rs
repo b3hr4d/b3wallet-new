@@ -192,7 +192,14 @@ pub fn check(id: ActionId) -> Result<GuardReport, WalletError> {
         let g = g
             .as_ref()
             .ok_or_else(|| WalletError::NotFound("the guard model is not loaded".to_string()))?;
-        let answer = g.answer(&request).map_err(WalletError::InvalidArgument)?;
+        // The wallet's own account labels are swapped before the model reads (candid-profile D-045), so a label such
+        // as "BTC Savings" reads as a label, not as a second asset; the comparator resolves it from the owner's words.
+        let ctx = context();
+        let names: Vec<String> = ctx.accounts.iter().map(|a| a.label.clone()).collect();
+        let symbols: Vec<String> = ctx.tokens.iter().map(|t| t.symbol.clone()).collect();
+        let answer = g
+            .answer_named(&request, &names, &symbols)
+            .map_err(WalletError::InvalidArgument)?;
         let proposal = ::guard::Proposal {
             from: t.from,
             asset: t.asset.as_ref().map(chain),
@@ -201,7 +208,7 @@ pub fn check(id: ActionId) -> Result<GuardReport, WalletError> {
             fee: t.fee.as_ref().map(|f| f.0.to_string()),
             memo: t.memo.as_ref().map(|m| m.to_vec()).unwrap_or_default(),
         };
-        let checked = g.compare(&answer, &request, &context(), &proposal);
+        let checked = g.compare(&answer, &request, &ctx, &proposal);
         let mut texts = Vec::new();
         if let Some(member) = storage::member(pending.proposed_by) {
             texts.push(text("label", &member.label, g.manip(&member.label)));

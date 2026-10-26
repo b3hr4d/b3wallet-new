@@ -87,6 +87,15 @@ it against the owner's own words on the Approvals page
 ([decision 0011](../docs/decisions/0011-guard-in-wallet.md)); one that names no
 request is shown as not checked.
 
+Its `from` and `to` also take the label of one of the wallet's own accounts,
+by candid-profile's names rule (decision D-045 there): the label matches after
+Unicode NFKC, lowercase and collapsed spaces, and it must name exactly one
+account, among those that can send the asset for `from`. "Main" with ICP
+names the Internet Computer account; "Main" alone names two, so the server
+refuses and the agent asks the person. An address is always an address, and a
+label that spells one never names an account. The result lists what each name
+stood for.
+
 Every read is a replicated call, which the subnet certifies, as on the
 wallet's pages.
 

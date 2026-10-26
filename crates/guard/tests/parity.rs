@@ -8,10 +8,14 @@
 //! `model`: with GUARD_BIN (a guard.bin) and GUARD_PARITY (the release's parity.json, from PyTorch), the inputs,
 //! the logits (within 1e-3) and the answers of all its cases; skipped without them, since the weights (44 MB) are
 //! not in the repository.
+//!
+//! `names`: the swap of the wallet's names (`Tokenizer::swap_names`) against candid-profile's `guard/names.py` on
+//! `tests/data/names.jsonl` (`names_dev.py --fixtures`: 608 requests of round 6's dev split `.w`, as written and with
+//! token words in the labels), and with GUARD_BIN also the answers (`Guard::answer_named`).
 
 use guard::{
-    Account, Chain, Context, Guard, Manip, Overall, Piece, Proposal, RequestRule, Token, Verdict,
-    compare,
+    Account, Chain, Context, Guard, Manip, Overall, Piece, Proposal, RequestRule, Tables, Token,
+    Tokenizer, Verdict, compare,
 };
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -287,4 +291,95 @@ fn model() {
     eprintln!("{} cases, largest logit difference {max_diff}", cases.len());
     assert!(max_diff <= 1e-3, "logits differ by {max_diff}");
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn names() {
+    let vocab: Vec<String> = std::fs::read_to_string(data("vocab.txt"))
+        .expect("vocab.txt")
+        .split('\n')
+        .map(str::to_owned)
+        .collect();
+    let tables: Value = serde_json::from_str(
+        &std::fs::read_to_string(data("tokenizer-tables.json")).expect("tokenizer-tables.json"),
+    )
+    .expect("JSON");
+    let tok =
+        Tokenizer::new(&vocab, Tables::from_json(&tables).expect("tables")).expect("a tokenizer");
+    let guard = std::env::var("GUARD_BIN").ok().map(|bin| {
+        Guard::from_bytes(&std::fs::read(bin).expect("guard.bin")).expect("a guard file")
+    });
+    let strings = |v: &Value| -> Vec<String> {
+        v.as_array()
+            .expect("a list")
+            .iter()
+            .map(|s| s.as_str().expect("a string").to_owned())
+            .collect()
+    };
+    let text = std::fs::read_to_string(data("names.jsonl")).expect("names.jsonl");
+    let (mut n, mut swapped, mut wrong) = (0, 0, Vec::new());
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        let c: Value = serde_json::from_str(line).expect("a JSON line");
+        let request = c["request"].as_str().expect("a request");
+        let (names, symbols) = (strings(&c["names"]), strings(&c["symbols"]));
+        let chars: Vec<char> = request.chars().collect();
+        let read: String = tok
+            .swap_names(&chars, &names, &symbols)
+            .text
+            .iter()
+            .collect();
+        n += 1;
+        swapped += usize::from(read != request);
+        if read != c["read"].as_str().expect("read") {
+            wrong.push(format!(
+                "{request:?}: rust reads {read:?}, want {}",
+                c["read"]
+            ));
+        }
+        let Some(guard) = &guard else { continue };
+        let got = guard
+            .answer_named(request, &names, &symbols)
+            .expect("an answer");
+        let want = &c["answer"];
+        let spans: serde_json::Map<String, Value> = got
+            .spans
+            .iter()
+            .map(|(k, (a, b))| (k.clone(), json!([a, b])))
+            .collect();
+        if want["class"] != got.class.as_str()
+            || want["spans"] != Value::Object(spans)
+            || want["abstain"] != got.abstain
+            || (want["confidence"].as_f64().unwrap() - f64::from(got.confidence)).abs() > 1e-4
+        {
+            wrong.push(format!("{request:?}: rust {got:?}, want {want}"));
+        }
+    }
+    eprintln!(
+        "{n} requests, {swapped} with a name swapped, answers checked: {}",
+        guard.is_some()
+    );
+    assert!(n > 0 && swapped > 0);
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn a_label_with_a_token_word_is_read_as_a_label() {
+    let Ok(bin) = std::env::var("GUARD_BIN") else {
+        eprintln!("skipped: set GUARD_BIN to check the model");
+        return;
+    };
+    let guard = Guard::from_bytes(&std::fs::read(bin).expect("guard.bin")).expect("a guard file");
+    let request = "Send 0.5 ICP from Main to my BTC Savings";
+    let names = ["Main".to_owned(), "BTC Savings".to_owned()];
+    let span = |a: &guard::Answer, slot: &str| {
+        a.spans
+            .iter()
+            .find(|(s, _)| s == slot)
+            .map(|(_, (x, y))| request.chars().skip(*x).take(y - x).collect::<String>())
+    };
+    let named = guard.answer_named(request, &names, &[]).expect("an answer");
+    assert!(!named.abstain && named.class == "one_transfer", "{named:?}");
+    assert_eq!(span(&named, "asset").as_deref(), Some("ICP"));
+    assert_eq!(span(&named, "to").as_deref(), Some("BTC Savings"));
+    assert_eq!(span(&named, "from").as_deref(), Some("Main"));
 }

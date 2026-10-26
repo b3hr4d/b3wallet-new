@@ -24,7 +24,9 @@ pub use comparator::{
 };
 pub use manip::{Flags, Manip, Matched};
 pub use request_rule::RequestRule;
-pub use tokenizer::{MAX_POSITIONS, MAX_REQUEST_BYTES, Piece, Tokenizer, identifier_kind};
+pub use tokenizer::{
+    MAX_POSITIONS, MAX_REQUEST_BYTES, Piece, Swap, Tables, Tokenizer, identifier_kind,
+};
 
 use decode::{argmax, consistent, decode, snap, softmax};
 use model::Model;
@@ -193,11 +195,26 @@ impl Guard {
     /// The guard's answer for a request; Err for one over 280 bytes. A request over 128 positions is not cut (a cut
     /// could shorten an amount or an address): the guard abstains.
     pub fn answer(&self, request: &str) -> Result<Answer, String> {
+        self.answer_named(request, &[], &[])
+    }
+
+    /// The answer with the wallet's names swapped before the model reads (`Tokenizer::swap_names`: each of `names`
+    /// the request uses becomes a training label, except names that are addresses, asset or chain words or one of
+    /// `symbols`), its spans mapped back onto the request. The model reads "my BTC Savings" as a label, not as a
+    /// second asset; what a name means is still the comparator's to resolve, from the request's own words.
+    pub fn answer_named(
+        &self,
+        request: &str,
+        names: &[String],
+        symbols: &[String],
+    ) -> Result<Answer, String> {
         if request.len() > MAX_REQUEST_BYTES {
             return Err(format!("a request is at most {MAX_REQUEST_BYTES} bytes"));
         }
-        let text: Vec<char> = request.chars().collect();
-        let Some((ids, pieces)) = self.tokenizer.encode(&text) else {
+        let request: Vec<char> = request.chars().collect();
+        let swap = self.tokenizer.swap_names(&request, names, symbols);
+        let text = &swap.text;
+        let Some((ids, pieces)) = self.tokenizer.encode(text) else {
             return Ok(Answer {
                 class: "not_transfer".into(),
                 spans: Vec::new(),
@@ -207,7 +224,11 @@ impl Guard {
             });
         };
         let (class_logits, tag_logits) = self.model.forward(&ids, &vec![0; ids.len()]);
-        Ok(self.answer_from(&text, &pieces, &class_logits, &tag_logits))
+        let mut answer = self.answer_from(text, &pieces, &class_logits, &tag_logits);
+        for (_, span) in answer.spans.iter_mut() {
+            *span = swap.back(*span);
+        }
+        Ok(answer)
     }
 
     /// The request rule's flags: says_not_to, repeats.

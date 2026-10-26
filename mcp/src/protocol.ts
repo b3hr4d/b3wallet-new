@@ -11,13 +11,17 @@ import type { Readable, Writable } from "node:stream"
 /** Protocol versions this server speaks, newest first. */
 export const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
 
-/** A JSON Schema for a tool's arguments: an object of strings and integers. */
+/**
+ * A JSON Schema for a tool's arguments: an object of strings and integers, and
+ * of arguments that take either, such as an account by its id or its name.
+ */
 export type InputSchema = {
   type: "object"
   properties: Record<
     string,
     | { type: "string"; description: string }
     | { type: "integer"; description: string; minimum?: number; maximum?: number }
+    | { type: ["integer", "string"]; description: string }
   >
   required?: string[]
   additionalProperties: false
@@ -66,6 +70,13 @@ export function checkArguments(schema: InputSchema, args: unknown): Record<strin
     if (value === undefined) continue
     if (property.type === "string" && typeof value !== "string") {
       throw new InvalidArguments(`${name} is a string`)
+    }
+    if (
+      Array.isArray(property.type) &&
+      typeof value !== "string" &&
+      !(typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
+    ) {
+      throw new InvalidArguments(`${name} is an integer from 0, or a string`)
     }
     if (property.type === "integer") {
       if (typeof value !== "number" || !Number.isSafeInteger(value)) {
