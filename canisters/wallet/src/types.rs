@@ -82,6 +82,7 @@ pub enum AccountKind {
 
 pub type AccountId = u32;
 pub type ActionId = u64;
+pub type RequestId = u64;
 
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum AccountHolder {
@@ -241,6 +242,21 @@ pub struct Pending {
     pub executable_after_ns: u64,
     pub expires_at_ns: u64,
     pub state: ActionState,
+    /// The owner's request a transfer answers (`propose_for`), whose words the guard checks it against.
+    pub request: Option<RequestId>,
+}
+
+/// What an owner asked their agent to do, in their own words (decision 0011): the agent reads it with `requests`
+/// and answers it with `propose_for`, and the guard checks the transfer against these words.
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct Request {
+    pub id: RequestId,
+    pub text: String,
+    pub asked_by: Principal,
+    pub asked_at_ns: u64,
+    pub open: bool,
+    /// The actions proposed for it, oldest first.
+    pub answers: Vec<ActionId>,
 }
 
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -262,6 +278,10 @@ pub enum AuditEvent {
     UpgradeInstalled(String),
     UpgradeFailed(String),
     CyclesLow(Nat),
+    Asked(RequestId),
+    RequestClosed(RequestId),
+    /// The guard file's model release, loaded by an owner.
+    GuardLoaded(String),
 }
 
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -393,13 +413,6 @@ pub struct GuardStatus {
     pub model_sha256: Option<String>,
 }
 
-#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
-pub struct GuardCheckArgs {
-    pub action: ActionId,
-    /// The person's own words, as they asked the agent.
-    pub request: String,
-}
-
 /// Where the guard read a slot in the request: `[start, end)` in code points, and the words.
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct GuardSpan {
@@ -450,6 +463,8 @@ pub struct GuardText {
 
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq)]
 pub struct GuardReport {
+    /// The owner's words it checked: the request the transfer answers.
+    pub request: String,
     pub class: String,
     pub abstain: bool,
     pub confidence: f32,

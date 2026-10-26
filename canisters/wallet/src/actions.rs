@@ -26,7 +26,8 @@ use crate::calls::CallFailure;
 use crate::icrc::{DEDUP_WINDOW_NS, Reply, STALE_CALL_NS};
 use crate::policy::{DAY_NS, HOUR_NS, Terms};
 use crate::{
-    AccountId, Action, ActionId, ActionState, Chain, Outcome, Pending, TxReceipt, WalletError,
+    AccountId, Action, ActionId, ActionState, Chain, Outcome, Pending, RequestId, TxReceipt,
+    WalletError,
 };
 use crate::{btc, evm};
 use candid::{CandidType, Nat, Principal};
@@ -76,6 +77,8 @@ pub struct StoredPending {
     /// An EVM transfer's transaction and its executions, once `execute`
     /// started one. Absent from actions stored before step 17.
     pub evm: Option<Attempt<EvmTx>>,
+    /// The owner's request a transfer answers (`propose_for`, decision 0011).
+    pub request: Option<RequestId>,
 }
 
 /// What the wallet knows of a transfer's calls to the ledger.
@@ -433,6 +436,7 @@ impl StoredPending {
             bitcoin: None,
             upgrade_sent: None,
             evm: None,
+            request: None,
         };
         pending.release_at_quorum(now);
         pending
@@ -1035,6 +1039,7 @@ impl StoredPending {
             executable_after_ns: current.executable_after_ns,
             expires_at_ns,
             state: current.state,
+            request: current.request,
         }
     }
 }

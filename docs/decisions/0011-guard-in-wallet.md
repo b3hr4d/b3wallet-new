@@ -32,8 +32,17 @@ What it does and does not do:
    - `guard_check` refuses replicated execution, so it never charges the wallet. On the local network, 10 checks took
      the same cycles as 10 `guard_status` queries.
    - A proposer cannot call it, so an agent cannot use it to try out wordings before it proposes.
-4. **The person's words come from the caller.** The wallet does not store what the person asked the agent. The
-   approver gives `guard_check` the request, at most 280 bytes, and the action to check it against.
+4. **The words come from the owner, never from the agent** (added 2026-10-26: Behrad asked that no one paste the
+   request by hand). An owner writes what they ask their agent to do as a request in the wallet (`ask`, at most 280
+   bytes, 16 open at once; the Approvals page has the box), signed in as themselves. The agent reads the open requests
+   (`requests`; the MCP server's `wallet_requests`) and answers one with `propose_for`. `guard_check` takes only the
+   action and reads the words of the request it answers. A transfer that answers none is refused as "answers no
+   request of yours", and the page says the guard could not check it.
+   - A request has at most one answer that is open or ran, so an agent cannot propose it twice. After a rejection,
+     expiry or failure, another transfer may answer it.
+   - Owners close a request when no transfer should answer it any more (`close_request`).
+   - Writing and closing are in the audit log (`Asked`, `RequestClosed`), and so is loading the guard file
+     (`GuardLoaded`).
 5. **What it reads from the wallet:**
    - the pending transfer as stored (with its asset);
    - the listed accounts, their labels and addresses;
@@ -60,12 +69,9 @@ Checked:
 
 Open:
 
-- **The Approvals page.** Where the approver types or pastes the person's words, and how the flags are shown. Today
-  only the interface has them.
+- **The rail.** The Approvals page shows the guard's verdict on each ticket; the rail beside other pages does not yet.
 - **Tokens.** The wallet keeps no ICRC-1 ledger's symbol or decimals, so an ICRC-1 transfer's asset and amount are not
   checked. Storing them when a ledger is tracked would fix that.
-- **The audit log.** Loading the file is not logged yet. A `GuardLoaded` event needs the pages and the MCP server to
-  know it.
 - **Queries come from one replica.** A query's answer is not certified. A faulty replica could leave a flag out, as it
   could answer any query wrongly. A certified check would be an update, which the wallet pays for.
 - **Shipping the file.** For now the owners upload it. It could come with the release instead.

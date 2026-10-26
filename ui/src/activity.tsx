@@ -133,9 +133,13 @@ function look(event: AuditEvent): [string, ReactNode] {
     case "JoinRequested":
     case "AccountAdded":
     case "AssetTracked":
+    case "Asked":
       return ["accent", <PlusIcon key="icon" />]
+    case "GuardLoaded":
+      return ["accent", <LayersIcon key="icon" />]
     case "AssetUntracked":
     case "ExtensionCall":
+    case "RequestClosed":
       return ["", <DotIcon key="icon" />]
   }
 }

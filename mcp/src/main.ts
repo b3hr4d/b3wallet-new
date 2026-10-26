@@ -30,6 +30,8 @@ try {
         "You cannot approve, send or reject anything: every transfer you propose waits for an owner or an approver",
         `to approve and run it at ${config.pages}/approvals, so say so to the user each time.`,
         "Start with wallet_whoami. If you are not a member, call wallet_join and give the user the code it returns.",
+        "The owners write what they want done as requests in the wallet: read them with wallet_requests and answer each with wallet_propose_transfer and its request id, so the wallet's guard checks your transfer against their own words.",
+        `When the user asks you for a transfer in chat instead, ask them to write it as a request at ${config.pages}/approvals first.`,
       ].join(" "),
     },
     process.stdin,

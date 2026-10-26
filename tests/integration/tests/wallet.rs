@@ -489,9 +489,11 @@ fn before_the_claim_only_the_public_methods_answer() {
                 "accounts",
                 "add_account",
                 "approve",
+                "ask",
                 "assets",
                 "audit_log",
                 "balance",
+                "close_request",
                 "execute",
                 "guard_check",
                 "guard_load",
@@ -501,9 +503,11 @@ fn before_the_claim_only_the_public_methods_answer() {
                 "pending",
                 "policy",
                 "propose",
+                "propose_for",
                 "reject",
                 "release_available",
                 "request_join",
+                "requests",
                 "track_asset",
                 "untrack_asset",
                 "upgrade_status",
@@ -528,9 +532,11 @@ fn a_non_member_is_refused_by_every_method_for_members() {
                 "accounts",
                 "add_account",
                 "approve",
+                "ask",
                 "assets",
                 "audit_log",
                 "balance",
+                "close_request",
                 "execute",
                 "guard_check",
                 "guard_load",
@@ -540,8 +546,10 @@ fn a_non_member_is_refused_by_every_method_for_members() {
                 "pending",
                 "policy",
                 "propose",
+                "propose_for",
                 "reject",
                 "release_available",
+                "requests",
                 "track_asset",
                 "untrack_asset",
                 "upgrade_status"
@@ -4188,14 +4196,9 @@ fn guard_check(
     id: Principal,
     caller: Principal,
     action: ActionId,
-    request: &str,
     as_update: bool,
 ) -> Result<Result<wallet::GuardReport, WalletError>, RejectResponse> {
-    let args = encode_one(wallet::GuardCheckArgs {
-        action,
-        request: request.to_string(),
-    })
-    .unwrap();
+    let args = encode_one(action).unwrap();
     let reply = if as_update {
         pic.update_call(id, caller, "guard_check", args)
     } else {
@@ -4204,8 +4207,126 @@ fn guard_check(
     reply.map(|reply| decode_one(&reply).unwrap())
 }
 
+fn ask(
+    pic: &PocketIc,
+    id: Principal,
+    caller: Principal,
+    text: &str,
+) -> Result<Result<wallet::Request, WalletError>, RejectResponse> {
+    pic.update_call(id, caller, "ask", encode_one(text).unwrap())
+        .map(|reply| decode_one(&reply).unwrap())
+}
+
+fn propose_for(
+    pic: &PocketIc,
+    id: Principal,
+    caller: Principal,
+    request: u64,
+    action: Action,
+) -> PendingResult {
+    let reply = pic
+        .update_call(
+            id,
+            caller,
+            "propose_for",
+            encode_args((request, action)).unwrap(),
+        )
+        .unwrap_or_else(|reject| panic!("propose_for answers: {reject}"));
+    decode_one(&reply).unwrap()
+}
+
+fn requests(pic: &PocketIc, id: Principal, caller: Principal) -> Vec<wallet::Request> {
+    query::<Result<Vec<wallet::Request>, WalletError>>(pic, id, caller, "requests").unwrap()
+}
+
+/// A request is the owner's own words: only owners write and close one, members read the open ones, and a
+/// transfer answers it through `propose_for`, at most one open or run at a time.
+#[test]
+fn requests_are_the_owners_words() {
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    let agent = user(30);
+    run_at_once(&pic, id, owner, add_member_action(agent, Role::Proposer));
+    let friend = LedgerAccount::from(user(20));
+    let before = audit(&pic, id, owner).len();
+
+    let refused = ask(&pic, id, agent, "send 1 ICP").unwrap_err();
+    assert!(refused.reject_message.contains(NOT_AN_OWNER), "{refused:?}");
+    for text in [" ", &"x".repeat(281)] {
+        let refused = ask(&pic, id, owner, text).unwrap();
+        assert!(
+            matches!(refused, Err(WalletError::InvalidArgument(_))),
+            "{refused:?}"
+        );
+    }
+    let words = format!("  Send 1 ICP to {friend} ");
+    let request = ask(&pic, id, owner, &words).unwrap().unwrap();
+    assert_eq!(
+        (request.text.as_str(), request.open, request.asked_by),
+        (words.trim(), true, owner)
+    );
+    assert_eq!(requests(&pic, id, agent), std::slice::from_ref(&request));
+
+    let first = propose_for(&pic, id, agent, request.id, transfer_action(1, friend, E8S)).unwrap();
+    assert_eq!(first.request, Some(request.id));
+    assert_eq!(requests(&pic, id, agent)[0].answers, [first.id]);
+    assert_eq!(
+        propose_for(&pic, id, agent, request.id, transfer_action(1, friend, E8S)),
+        Err(WalletError::Forbidden(format!(
+            "request {} already has action {}",
+            request.id, first.id
+        )))
+    );
+    act(&pic, id, owner, "reject", first.id).unwrap();
+    let second = propose_for(&pic, id, agent, request.id, transfer_action(1, friend, E8S)).unwrap();
+    assert_eq!(requests(&pic, id, agent)[0].answers, [first.id, second.id]);
+    assert_eq!(
+        propose_for(
+            &pic,
+            id,
+            owner,
+            request.id,
+            add_member_action(user(31), Role::Viewer)
+        ),
+        Err(WalletError::InvalidArgument(
+            "only a transfer answers a request".to_string()
+        ))
+    );
+    assert_eq!(
+        propose_for(&pic, id, agent, 99, transfer_action(1, friend, E8S)),
+        Err(WalletError::NotFound("request 99".to_string()))
+    );
+
+    let refused = pic
+        .update_call(id, agent, "close_request", encode_one(request.id).unwrap())
+        .unwrap_err();
+    assert!(refused.reject_message.contains(NOT_AN_OWNER), "{refused:?}");
+    let closed: Result<wallet::Request, WalletError> =
+        update(&pic, id, owner, "close_request", &request.id);
+    assert!(!closed.unwrap().open);
+    assert_eq!(requests(&pic, id, agent), []);
+    assert_eq!(
+        propose_for(&pic, id, agent, request.id, transfer_action(1, friend, E8S)),
+        Err(WalletError::Forbidden(format!(
+            "request {} is closed",
+            request.id
+        )))
+    );
+    assert_eq!(
+        audit_since(&pic, id, owner, before),
+        [
+            (Some(owner), AuditEvent::Asked(request.id)),
+            (Some(agent), AuditEvent::Proposed(first.id)),
+            (Some(owner), AuditEvent::Rejected(first.id)),
+            (Some(agent), AuditEvent::Proposed(second.id)),
+            (Some(owner), AuditEvent::RequestClosed(request.id)),
+        ]
+    );
+}
+
 /// Without its file the guard answers nothing, and it loads no file but the one the release pins. Only owners
-/// upload and load; only owners and approvers check, and only as a query, so a check never charges the wallet.
+/// upload and load; only owners and approvers check, and only as a query, so a check never charges the wallet. A
+/// transfer that answers no request of the owner's is never checked: the words come from the owner, not the agent.
 #[test]
 fn the_guard_loads_only_its_pinned_file() {
     let pic = PocketIc::new();
@@ -4213,7 +4334,17 @@ fn the_guard_loads_only_its_pinned_file() {
     let agent = user(30);
     run_at_once(&pic, id, owner, add_member_action(agent, Role::Proposer));
     let friend = LedgerAccount::from(user(20));
-    let transfer = propose(&pic, id, agent, transfer_action(1, friend, E8S)).unwrap();
+    let unasked = propose(&pic, id, agent, transfer_action(1, friend, E8S)).unwrap();
+    let request = ask(&pic, id, owner, "send 1 ICP").unwrap().unwrap();
+    let transfer =
+        propose_for(&pic, id, agent, request.id, transfer_action(1, friend, E8S)).unwrap();
+    assert_eq!(
+        guard_check(&pic, id, owner, unasked.id, false).unwrap(),
+        Err(WalletError::NotFound(format!(
+            "action {} answers no request of yours",
+            unasked.id
+        )))
+    );
 
     let status: wallet::GuardStatus = query(&pic, id, owner, "guard_status");
     assert_eq!(status.file_sha256.as_slice(), wallet::GUARD_FILE_SHA256);
@@ -4222,7 +4353,7 @@ fn the_guard_loads_only_its_pinned_file() {
         (wallet::GUARD_FILE_BYTES, false, None)
     );
     assert_eq!(
-        guard_check(&pic, id, owner, transfer.id, "send 1 ICP", false).unwrap(),
+        guard_check(&pic, id, owner, transfer.id, false).unwrap(),
         Err(WalletError::NotFound(
             "the guard model is not loaded".to_string()
         ))
@@ -4258,13 +4389,13 @@ fn the_guard_loads_only_its_pinned_file() {
         ))
     );
 
-    let refused = guard_check(&pic, id, agent, transfer.id, "send 1 ICP", false).unwrap_err();
+    let refused = guard_check(&pic, id, agent, transfer.id, false).unwrap_err();
     assert!(
         refused.reject_message.contains(NOT_AN_APPROVER),
         "{refused:?}"
     );
     assert_eq!(
-        guard_check(&pic, id, owner, transfer.id, "send 1 ICP", true).unwrap(),
+        guard_check(&pic, id, owner, transfer.id, true).unwrap(),
         Err(WalletError::Forbidden(
             "guard_check answers only as a query".to_string()
         ))
@@ -4272,8 +4403,8 @@ fn the_guard_loads_only_its_pinned_file() {
 }
 
 /// With the round-9 file (GUARD_BIN; 44 MB, not in the repository, so the test passes without checking anything
-/// when it is unset): the guard matches the transfer the person asked for, flags one with another amount or a
-/// memo they never mentioned, and is loaded again after an upgrade.
+/// when it is unset): the guard matches the transfer the owner asked for, flags one with another amount or a memo
+/// they never mentioned, and is loaded again after an upgrade.
 #[test]
 fn the_guard_checks_a_proposed_transfer() {
     let Ok(path) = std::env::var("GUARD_BIN") else {
@@ -4295,6 +4426,13 @@ fn the_guard_checks_a_proposed_transfer() {
         (loaded.loaded, loaded.release.as_deref()),
         (true, Some("release-round9"))
     );
+    assert_eq!(
+        audit(&pic, id, owner).last(),
+        Some(&(
+            Some(owner),
+            AuditEvent::GuardLoaded("release-round9".to_string())
+        ))
+    );
 
     let agent = user(30);
     run_at_once(
@@ -4304,12 +4442,14 @@ fn the_guard_checks_a_proposed_transfer() {
         add_member_action_labelled(agent, Role::Proposer, "Claude on my Mac"),
     );
     let friend = LedgerAccount::from(user(20));
-    let request = format!("Send 1.5 ICP to {friend}");
+    let words = format!("Send 1.5 ICP to {friend}");
     let overall = |action: Action| {
-        let proposed = propose(&pic, id, agent, action).unwrap();
-        let report = guard_check(&pic, id, owner, proposed.id, &request, false)
+        let request = ask(&pic, id, owner, &words).unwrap().unwrap();
+        let proposed = propose_for(&pic, id, agent, request.id, action).unwrap();
+        let report = guard_check(&pic, id, owner, proposed.id, false)
             .unwrap()
             .unwrap();
+        assert_eq!(report.request, words);
         let differs: Vec<String> = report
             .fields
             .iter()

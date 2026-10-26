@@ -130,6 +130,7 @@ type HistoryRequest = record {
 // ---- Actions, approvals and policy -------------------------------------------
 
 type ActionId = nat64;
+type RequestId = nat64;
 
 type TransferRequest = record {
   from : AccountId;
@@ -249,6 +250,22 @@ type Pending = record {
   // it, the wallet sends it again on its own until the network confirms it.
   expires_at_ns : nat64;
   state : ActionState;
+  // The owner's request a transfer answers (propose_for), whose words the
+  // guard checks it against.
+  request : opt RequestId;
+};
+
+// What an owner asked their agent to do, in their own words (decision
+// 0011): the agent reads it with `requests` and answers it with
+// `propose_for`, and the guard checks the transfer against these words.
+type Request = record {
+  id : RequestId;
+  text : text;
+  asked_by : principal;
+  asked_at_ns : nat64;
+  open : bool;
+  // The actions proposed for it, oldest first.
+  answers : vec ActionId;
 };
 
 // ---- Extensions -------------------------------------------------------------
@@ -339,6 +356,10 @@ type AuditEvent = variant {
   UpgradeInstalled : text;
   UpgradeFailed : text;
   CyclesLow : nat;
+  Asked : RequestId;
+  RequestClosed : RequestId;
+  // The guard file's model release, loaded by an owner.
+  GuardLoaded : text;
 };
 
 type AuditEntry = record {
@@ -397,12 +418,6 @@ type GuardStatus = record {
   model_sha256 : opt text;
 };
 
-type GuardCheckArgs = record {
-  action : ActionId;
-  // The person's own words, as they asked the agent; at most 280 bytes.
-  request : text;
-};
-
 // [start, end) in code points of the request, and the words there.
 type GuardSpan = record { slot : text; start : nat32; end : nat32; text : text };
 
@@ -429,6 +444,8 @@ type GuardText = record {
 };
 
 type GuardReport = record {
+  // The owner's words it checked: the request the transfer answers.
+  request : text;
   // one_transfer, not_transfer, several_transfers, relative_amount,
   // other_currency or incomplete; only one_transfer is compared, and not
   // when the guard abstains.
@@ -479,6 +496,8 @@ type ExtensionsResult = variant { Ok : vec Extension; Err : WalletError };
 type ExtResult = variant { Ok : ExtResponse; Err : WalletError };
 type ReleaseResult = variant { Ok : opt ReleaseManifest; Err : WalletError };
 type AuditResult = variant { Ok : vec AuditEntry; Err : WalletError };
+type RequestResult = variant { Ok : Request; Err : WalletError };
+type RequestsResult = variant { Ok : vec Request; Err : WalletError };
 type GuardUploadResult = variant { Ok : nat64; Err : WalletError };
 type GuardStatusResult = variant { Ok : GuardStatus; Err : WalletError };
 type GuardCheckResult = variant { Ok : GuardReport; Err : WalletError };
@@ -517,6 +536,9 @@ service : (WalletArg) -> {
 
   // Actions: every transfer, membership, extension, policy and upgrade change.
   propose : (Action) -> (PendingResult);
+  // A transfer that answers an owner's open request, which then has it among
+  // its answers. A request has at most one answer that is open or ran.
+  propose_for : (RequestId, Action) -> (PendingResult);
   approve : (ActionId) -> (PendingResult);
   reject : (ActionId) -> (PendingResult);
   // A transfer or an upgrade makes one call at a time; a second execute
@@ -529,14 +551,22 @@ service : (WalletArg) -> {
   extensions : () -> (ExtensionsResult) query;
   ext_request : (ExtRequest) -> (ExtResult);
 
+  // Requests (decision 0011). Owners write what they ask their agent to do,
+  // at most 280 bytes, 16 open at once; members read the open ones, oldest
+  // first; owners close one when no transfer should answer it any more.
+  ask : (text) -> (RequestResult);
+  requests : () -> (RequestsResult) query;
+  close_request : (RequestId) -> (RequestResult);
+
   // The guard. guard_upload and guard_load are for owners; guard_upload
   // returns where the bytes written end, and guard_load refuses a file
   // other than the one the release pins. guard_check is for owners and
-  // approvers, as a query only.
+  // approvers, as a query only: it checks a transfer against the words of
+  // the request it answers, and refuses one that answers none.
   guard_upload : (GuardUploadArgs) -> (GuardUploadResult);
   guard_load : () -> (GuardStatusResult);
   guard_status : () -> (GuardStatus) query;
-  guard_check : (GuardCheckArgs) -> (GuardCheckResult) query;
+  guard_check : (ActionId) -> (GuardCheckResult) query;
 
   // Upgrade. release_available is an update: it reads the release channel's
   // latest release and returns it if this wallet would install it (enough

@@ -67,7 +67,12 @@ function setUp(options: { member?: boolean } = {}) {
   const calls: string[] = []
   const proposals: Action[] = []
   const joins: unknown[][] = []
-  const pending = (id: bigint, action: Action, by: string): Pending => ({
+  const pending = (
+    id: bigint,
+    action: Action,
+    by: string,
+    request: bigint | null = null,
+  ): Pending => ({
     id,
     action,
     proposed_by: by as Pending["proposed_by"],
@@ -77,6 +82,7 @@ function setUp(options: { member?: boolean } = {}) {
     executable_after_ns: 0n,
     expires_at_ns: 1_800_604_800n * SECOND,
     state: { tag: "Waiting" },
+    request,
   })
   const record = <A extends unknown[], R>(name: string, run: (...args: A) => R) => {
     return (...args: A): R => {
@@ -164,6 +170,23 @@ function setUp(options: { member?: boolean } = {}) {
       proposals.push(action)
       return { tag: "Ok", value: pending(BigInt(proposals.length), action, ctx.caller) }
     }),
+    requests: record("requests", () => ({
+      tag: "Ok",
+      value: [
+        {
+          id: 3n,
+          text: `Send 1.5 ICP to ${FRIEND}`,
+          asked_by: OWNER as Pending["proposed_by"],
+          asked_at_ns: 1_800_000_000n * SECOND,
+          open: true,
+          answers: [],
+        },
+      ],
+    })),
+    propose_for: record("propose_for", (request, action, ctx) => {
+      proposals.push(action)
+      return { tag: "Ok", value: pending(BigInt(proposals.length), action, ctx.caller, request) }
+    }),
     approve: forbidden("approve"),
     execute: forbidden("execute"),
     reject: forbidden("reject"),
@@ -210,6 +233,7 @@ test("the tools read and propose, and none approves, runs or rejects", async () 
       "wallet_balance",
       "wallet_activity",
       "wallet_pending",
+      "wallet_requests",
       "wallet_propose_transfer",
     ],
   )
@@ -465,5 +489,27 @@ test("a refusal names the wallet's error", async () => {
   await assert.rejects(join.run({}), {
     message: "The wallet refused request_join: InvalidArgument: already a member",
   })
+  client.dispose()
+})
+
+test("a transfer answers the owner's request by its id, so the guard can check it", async () => {
+  const { client, run, calls } = setUp({ member: true })
+  const requests = JSON.parse(await run("wallet_requests"))
+  assert.deepEqual(requests, [
+    {
+      request: "3",
+      text: `Send 1.5 ICP to ${FRIEND}`,
+      asked_at: "2027-01-15T08:00:00.000Z",
+      answers: [],
+    },
+  ])
+  const result = JSON.parse(
+    await run("wallet_propose_transfer", { request: 3, from: 1, to: FRIEND, amount: "1.5" }),
+  )
+  assert.equal(result.request, "3")
+  assert.deepEqual(
+    calls.filter((name) => name.startsWith("propose")),
+    ["propose_for"],
+  )
   client.dispose()
 })

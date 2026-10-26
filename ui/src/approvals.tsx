@@ -14,6 +14,7 @@ import {
   stateText,
 } from "./describe.ts"
 import type { Account, Member, Pending } from "./generated/wallet.ts"
+import { GuardLine, Requests } from "./guard.tsx"
 import { joinCode } from "./join-code.ts"
 import { CheckIcon } from "./icons.tsx"
 import { AsMember, Reading } from "./member.tsx"
@@ -37,7 +38,14 @@ export function Approvals({ wallet }: { wallet: Principal }) {
           approvals and its wait is over.
         </p>
       </div>
-      <AsMember wallet={wallet}>{(me) => <OpenActions wallet={wallet} me={me} />}</AsMember>
+      <AsMember wallet={wallet}>
+        {(me) => (
+          <>
+            <Requests wallet={wallet} me={me} />
+            <OpenActions wallet={wallet} me={me} />
+          </>
+        )}
+      </AsMember>
     </section>
   )
 }
@@ -112,6 +120,7 @@ function OpenActions({ wallet: id, me }: { wallet: Principal; me: Member }) {
           {pending.data.map((action) => (
             <OpenAction
               key={String(action.id)}
+              wallet={id}
               pending={action}
               accounts={accounts.data}
               members={members.data}
@@ -130,6 +139,7 @@ function OpenActions({ wallet: id, me }: { wallet: Principal; me: Member }) {
 }
 
 function OpenAction({
+  wallet,
   pending,
   accounts,
   members,
@@ -140,6 +150,7 @@ function OpenAction({
   onReject,
   onExecute,
 }: {
+  wallet: Principal
   pending: Pending
   accounts: Account[] | undefined
   members: Member[] | undefined
@@ -173,6 +184,7 @@ function OpenAction({
           ))}
         </ul>
       )}
+      {approves && <GuardLine wallet={wallet} pending={pending} me={me} />}
       {join && (
         <>
           <p className="quiet">Approve it only if the device that asks shows this code:</p>

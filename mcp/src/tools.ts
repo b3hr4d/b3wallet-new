@@ -180,6 +180,12 @@ export function eventText(event: AuditEvent): string {
       return `the upgrade failed: ${event.value}`
     case "CyclesLow":
       return `cycles ran low: ${event.value}`
+    case "Asked":
+      return `wrote request ${event.value}`
+    case "RequestClosed":
+      return `closed request ${event.value}`
+    case "GuardLoaded":
+      return `loaded the guard model ${event.value}`
   }
 }
 
@@ -311,6 +317,7 @@ function tools(client: Client, config: Config): Tool[] {
     proposed_by: pending.proposed_by === client.caller() ? "you" : pending.proposed_by,
     proposed_at: dateOf(pending.proposed_at_ns),
     open_until: dateOf(pending.expires_at_ns),
+    request: pending.request,
   })
 
   return [
@@ -500,13 +507,36 @@ function tools(client: Client, config: Config): Tool[] {
       },
     },
     {
+      name: "wallet_requests",
+      title: "The owners' requests",
+      description:
+        "What the owners ask you to do, in their own words, oldest first: each open request's id, text and the actions already proposed for it. Answer one with wallet_propose_transfer and its request id, so the wallet's guard checks your transfer against the owner's words.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      readOnly: true,
+      run: async () =>
+        json(
+          (await wallet.requests()).map((request) => ({
+            request: request.id,
+            text: request.text,
+            asked_at: dateOf(request.asked_at_ns),
+            answers: request.answers,
+          })),
+        ),
+    },
+    {
       name: "wallet_propose_transfer",
       title: "Propose a transfer",
       description:
-        "Proposes sending an amount from one of the wallet's accounts. It sends nothing: the transfer waits until an owner or an approver approves and runs it on the wallet's Approvals page, and expires after seven days. You can have at most 8 actions open at once.",
+        "Proposes sending an amount from one of the wallet's accounts. It sends nothing: the transfer waits until an owner or an approver approves and runs it on the wallet's Approvals page, and expires after seven days. You can have at most 8 actions open at once. Name the owner's request it answers, from wallet_requests: the wallet's guard then checks it against the owner's own words, and without one it cannot.",
       inputSchema: {
         type: "object",
         properties: {
+          request: {
+            type: "integer",
+            description:
+              "The id of the owner's request this transfer answers, from wallet_requests. A request takes one transfer at a time.",
+            minimum: 0,
+          },
           from: {
             type: "integer",
             description: "The id of the account to send from, from wallet_accounts.",
@@ -558,10 +588,15 @@ function tools(client: Client, config: Config): Tool[] {
             `memo is ${memo.length} bytes, and at most ${MAX_MEMO_BYTES} fit`,
           )
         }
-        const pending = await wallet.propose({
+        const action: Action = {
           tag: "Transfer",
           value: { from: account.id, asset, to, amount, fee: null, memo },
-        })
+        }
+        const request = integer(args, "request")
+        const pending =
+          request === undefined
+            ? await wallet.propose(action)
+            : await wallet.propose_for(BigInt(request), action)
         return json({
           ...(await pendingView(pending, [account])),
           base_units: amount,

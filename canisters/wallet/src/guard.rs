@@ -13,7 +13,7 @@
 //! `check` is a query and refuses replicated execution, so it is free and never charges the wallet.
 
 use crate::{
-    AccountKind, Action, Chain, GuardCheckArgs, GuardField, GuardMatch, GuardOverall, GuardReport,
+    AccountKind, Action, ActionId, Chain, GuardField, GuardMatch, GuardOverall, GuardReport,
     GuardSpan, GuardStatus, GuardText, GuardUploadArgs, GuardVerdict, WalletError, storage,
 };
 use ic_stable_structures::Memory;
@@ -168,28 +168,31 @@ fn text(name: &str, text: &str, flags: ::guard::Flags) -> GuardText {
     }
 }
 
-/// The guard's report on pending transfer `args.action` against the person's words.
-pub fn check(args: &GuardCheckArgs) -> Result<GuardReport, WalletError> {
+/// The guard's report on transfer `id` against the words of the owner's request it answers.
+pub fn check(id: ActionId) -> Result<GuardReport, WalletError> {
     if ic_cdk::api::in_replicated_execution() {
         return Err(WalletError::Forbidden(
             "guard_check answers only as a query".to_string(),
         ));
     }
-    let pending = storage::action(args.action)
-        .ok_or_else(|| WalletError::NotFound(format!("action {}", args.action)))?;
+    let pending =
+        storage::action(id).ok_or_else(|| WalletError::NotFound(format!("action {id}")))?;
     let Action::Transfer(t) = &pending.action else {
         return Err(WalletError::InvalidArgument(format!(
-            "action {} is not a transfer",
-            args.action
+            "action {id} is not a transfer"
         )));
     };
+    // The words come from the owner's own request, never from the agent: a transfer that answers none is not checked.
+    let request = pending
+        .request
+        .and_then(storage::request)
+        .ok_or_else(|| WalletError::NotFound(format!("action {id} answers no request of yours")))?
+        .text;
     GUARD.with_borrow(|g| {
         let g = g
             .as_ref()
             .ok_or_else(|| WalletError::NotFound("the guard model is not loaded".to_string()))?;
-        let answer = g
-            .answer(&args.request)
-            .map_err(WalletError::InvalidArgument)?;
+        let answer = g.answer(&request).map_err(WalletError::InvalidArgument)?;
         let proposal = ::guard::Proposal {
             from: t.from,
             asset: t.asset.as_ref().map(chain),
@@ -198,7 +201,7 @@ pub fn check(args: &GuardCheckArgs) -> Result<GuardReport, WalletError> {
             fee: t.fee.as_ref().map(|f| f.0.to_string()),
             memo: t.memo.as_ref().map(|m| m.to_vec()).unwrap_or_default(),
         };
-        let checked = g.compare(&answer, &args.request, &context(), &proposal);
+        let checked = g.compare(&answer, &request, &context(), &proposal);
         let mut texts = Vec::new();
         if let Some(member) = storage::member(pending.proposed_by) {
             texts.push(text("label", &member.label, g.manip(&member.label)));
@@ -206,8 +209,9 @@ pub fn check(args: &GuardCheckArgs) -> Result<GuardReport, WalletError> {
         if let Some(memo) = t.memo.as_ref().and_then(|m| std::str::from_utf8(m).ok()) {
             texts.push(text("memo", memo, g.manip(memo)));
         }
-        let chars: Vec<char> = args.request.chars().collect();
+        let chars: Vec<char> = request.chars().collect();
         Ok(GuardReport {
+            request: request.clone(),
             class: answer.class.clone(),
             abstain: answer.abstain,
             confidence: answer.confidence,
