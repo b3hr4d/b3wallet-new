@@ -77,6 +77,9 @@ Checked:
   - none of the 5 misread requests passed as a match;
   - the same answers as the Python and PyTorch guard on all 20;
   - 175M to 299M instructions per check.
+  - with the names swap (2026-10-27), the same 20 answers again, and 10 more around ICP accounts named "BTC Savings"
+    and "Rent ETH": the 5 honest ones match, all 4 planted changes are caught and a "don't send" request is
+    flagged, where the model alone abstains on all 9 transfers (candid-profile `try/results-names.json`).
 
 Open:
 
