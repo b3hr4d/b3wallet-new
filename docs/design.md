@@ -461,6 +461,7 @@ is never reused or renumbered, even after its store goes away; the audit log's
 | 12 | Reserved Bitcoin outputs | an outpoint to the transfer whose transaction spends it; released if that transfer ends unsent, or once its transaction has spent it for 6 blocks | `StableBTreeMap` | Kept |
 | 13 | Tracked assets | the assets the accounts show and send: ICP, then the ICRC-1 ledgers the owners track | `StableCell` | Kept |
 | 14 | Unsettled transfers | the ids of the transfers whose outcome the timer still settles | `StableBTreeMap` | Kept |
+| 15 | Guard file | the guard model's file (decision 0011) as owners uploaded it, at its offsets | raw virtual memory | Kept; `post_upgrade` loads it again if it is the file the release pins |
 
 Every stored value is Candid with optional new fields, so a release can add
 fields without a migration. A store a release adds is filled in by

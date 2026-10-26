@@ -43,6 +43,7 @@ const TRANSFER_CLOCK_MEMORY: MemoryId = MemoryId::new(11);
 const RESERVED_MEMORY: MemoryId = MemoryId::new(12);
 const TRACKED_MEMORY: MemoryId = MemoryId::new(13);
 const UNSETTLED_MEMORY: MemoryId = MemoryId::new(14);
+const GUARD_MEMORY: MemoryId = MemoryId::new(15);
 
 /// What the wallet was installed with.
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -237,6 +238,11 @@ thread_local! {
 
 fn memory(id: MemoryId) -> Memory {
     MEMORY_MANAGER.with(|manager| manager.get(id))
+}
+
+/// The guard file's bytes, at their offsets (`guard.rs`): raw, not a structure.
+pub fn guard_file() -> Memory {
+    memory(GUARD_MEMORY)
 }
 
 /// Stores the configuration at install.

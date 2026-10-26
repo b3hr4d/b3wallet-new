@@ -11,6 +11,8 @@ crate-type = ["cdylib", "rlib"]
 bitcoin.workspace = true
 candid.workspace = true
 ed25519-dalek.workspace = true
+# The guard model and its checks (decision 0011).
+guard = { path = "../../crates/guard" }
 ic-asset-certification.workspace = true
 ic-cdk.workspace = true
 ic-cdk-bitcoin-canister.workspace = true

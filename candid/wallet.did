@@ -375,6 +375,75 @@ type HttpResponse = record {
   body : blob;
 };
 
+// ---- Guard ------------------------------------------------------------------
+
+// The guard (decision 0011) reads the person's own words, marks where the
+// amount, asset, recipient and the rest are, and checks a pending transfer
+// against them field by field; it also runs a keyword list over the
+// proposer's label and the memo. It only adds flags for a person to read:
+// it never approves or rejects, and NotChecked is never OK. The model is
+// one 44 MB file that owners upload; the wallet loads only the file whose
+// SHA-256 its release pins.
+
+// Bytes of the guard file written at `offset`, at most 1,900,000 at once.
+type GuardUploadArgs = record { offset : nat64; chunk : blob };
+
+type GuardStatus = record {
+  file_sha256 : blob;
+  file_bytes : nat64;
+  loaded : bool;
+  // From the loaded file: the model's release and its weights' SHA-256.
+  release : opt text;
+  model_sha256 : opt text;
+};
+
+type GuardCheckArgs = record {
+  action : ActionId;
+  // The person's own words, as they asked the agent; at most 280 bytes.
+  request : text;
+};
+
+// [start, end) in code points of the request, and the words there.
+type GuardSpan = record { slot : text; start : nat32; end : nat32; text : text };
+
+type GuardVerdict = variant { Same; Differs; NotChecked };
+
+// One of amount, asset, chain, from, to, memo, fee.
+type GuardField = record { field : text; verdict : GuardVerdict };
+
+// Differs: a field differs or the request raised a flag. Matches: amount,
+// asset and recipient are the same. Partial: nothing differs, but not all
+// three could be checked.
+type GuardOverall = variant { Differs; Matches; Partial };
+
+// A cue (urgency, authority, approved, instruction) and the words that
+// matched it.
+type GuardMatch = record { cue : text; start : nat32; end : nat32; text : text };
+
+// A text the approver reads: the proposer's label, the memo.
+type GuardText = record {
+  name : text;
+  text : text;
+  flags : vec text;
+  matched : vec GuardMatch;
+};
+
+type GuardReport = record {
+  // one_transfer, not_transfer, several_transfers, relative_amount,
+  // other_currency or incomplete; only one_transfer is compared, and not
+  // when the guard abstains.
+  class : text;
+  abstain : bool;
+  confidence : float32;
+  spans : vec GuardSpan;
+  fields : vec GuardField;
+  // says_not_to, repeats: the request's own words, whatever the guard read.
+  request_flags : vec text;
+  overall : GuardOverall;
+  texts : vec GuardText;
+  instructions : nat64;
+};
+
 // ---- Errors and results -----------------------------------------------------
 
 type WalletError = variant {
@@ -410,6 +479,9 @@ type ExtensionsResult = variant { Ok : vec Extension; Err : WalletError };
 type ExtResult = variant { Ok : ExtResponse; Err : WalletError };
 type ReleaseResult = variant { Ok : opt ReleaseManifest; Err : WalletError };
 type AuditResult = variant { Ok : vec AuditEntry; Err : WalletError };
+type GuardUploadResult = variant { Ok : nat64; Err : WalletError };
+type GuardStatusResult = variant { Ok : GuardStatus; Err : WalletError };
+type GuardCheckResult = variant { Ok : GuardReport; Err : WalletError };
 
 type SupportedStandard = record { name : text; url : text };
 
@@ -456,6 +528,15 @@ service : (WalletArg) -> {
   // Extensions. ext_request accepts only a registered extension canister as caller.
   extensions : () -> (ExtensionsResult) query;
   ext_request : (ExtRequest) -> (ExtResult);
+
+  // The guard. guard_upload and guard_load are for owners; guard_upload
+  // returns where the bytes written end, and guard_load refuses a file
+  // other than the one the release pins. guard_check is for owners and
+  // approvers, as a query only.
+  guard_upload : (GuardUploadArgs) -> (GuardUploadResult);
+  guard_load : () -> (GuardStatusResult);
+  guard_status : () -> (GuardStatus) query;
+  guard_check : (GuardCheckArgs) -> (GuardCheckResult) query;
 
   // Upgrade. release_available is an update: it reads the release channel's
   // latest release and returns it if this wallet would install it (enough

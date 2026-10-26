@@ -375,6 +375,92 @@ pub struct Status {
     pub bitcoin_network: BitcoinNetwork,
 }
 
+/// Bytes of the guard file (`guard::FILE_BYTES` long) written at `offset`.
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct GuardUploadArgs {
+    pub offset: u64,
+    pub chunk: ByteBuf,
+}
+
+/// The guard file this release pins, and what is loaded.
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct GuardStatus {
+    pub file_sha256: ByteBuf,
+    pub file_bytes: u64,
+    pub loaded: bool,
+    /// The model's release and the SHA-256 of its weights, from the loaded file.
+    pub release: Option<String>,
+    pub model_sha256: Option<String>,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct GuardCheckArgs {
+    pub action: ActionId,
+    /// The person's own words, as they asked the agent.
+    pub request: String,
+}
+
+/// Where the guard read a slot in the request: `[start, end)` in code points, and the words.
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct GuardSpan {
+    pub slot: String,
+    pub start: u32,
+    pub end: u32,
+    pub text: String,
+}
+
+#[derive(CandidType, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GuardVerdict {
+    Same,
+    Differs,
+    NotChecked,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct GuardField {
+    pub field: String,
+    pub verdict: GuardVerdict,
+}
+
+/// Differs: a field differs or the request raised a flag. Matches: amount, asset and recipient are the same.
+/// Partial: nothing differs, but not all three could be checked.
+#[derive(CandidType, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GuardOverall {
+    Differs,
+    Matches,
+    Partial,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct GuardMatch {
+    pub cue: String,
+    pub start: u32,
+    pub end: u32,
+    pub text: String,
+}
+
+/// A text the approver reads (the proposer's label, the memo), through the keyword list.
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct GuardText {
+    pub name: String,
+    pub text: String,
+    pub flags: Vec<String>,
+    pub matched: Vec<GuardMatch>,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq)]
+pub struct GuardReport {
+    pub class: String,
+    pub abstain: bool,
+    pub confidence: f32,
+    pub spans: Vec<GuardSpan>,
+    pub fields: Vec<GuardField>,
+    pub request_flags: Vec<String>,
+    pub overall: GuardOverall,
+    pub texts: Vec<GuardText>,
+    pub instructions: u64,
+}
+
 /// Canister ids are opaque principals, whose last byte is 0x01.
 pub fn is_canister_id(id: &Principal) -> bool {
     id.as_slice().last() == Some(&0x01)

@@ -19,6 +19,7 @@ mod ed25519;
 mod evm;
 mod evm_rpc;
 mod governance;
+mod guard;
 mod http;
 mod icrc;
 mod keys;
@@ -29,6 +30,9 @@ mod storage;
 mod types;
 mod upgrade;
 
+pub use self::guard::{
+    FILE_BYTES as GUARD_FILE_BYTES, FILE_SHA256 as GUARD_FILE_SHA256, MAX_CHUNK as GUARD_MAX_CHUNK,
+};
 pub use access::{NOT_A_MEMBER, NOT_A_PROPOSER, NOT_AN_APPROVER, NOT_AN_OWNER, NOT_CLAIMED};
 pub use claim::message as claim_message;
 pub use types::*;
@@ -85,6 +89,8 @@ fn post_upgrade(arg: WalletArg) {
     let now = ic_cdk::api::time();
     add_defaults_now(now);
     http::certify();
+    // The guard file this release pins, if the owners uploaded it; any other file stays unloaded until they do.
+    let _ = guard::load();
     // This version runs, so an install the wallet sent itself ran.
     let mut upgrade = storage::upgrade();
     if let Some((id, version)) = upgrade.installed() {
@@ -357,6 +363,31 @@ async fn balance(id: AccountId, asset: Option<Chain>) -> Result<Balance, WalletE
         amount,
         as_of_ns: ic_cdk::api::time(),
     })
+}
+
+/// Writes a chunk of the guard file (decision 0011). Owners only: the wallet pays for the bytes it receives.
+#[ic_cdk::update(guard = "access::owner")]
+fn guard_upload(args: GuardUploadArgs) -> Result<u64, WalletError> {
+    guard::upload(&args)
+}
+
+/// Loads the uploaded guard file into the heap, only if it is the one this release pins.
+#[ic_cdk::update(guard = "access::owner")]
+fn guard_load() -> Result<GuardStatus, WalletError> {
+    guard::load()
+}
+
+/// The guard file this release pins, and whether it is loaded.
+#[ic_cdk::query(guard = "access::member")]
+fn guard_status() -> GuardStatus {
+    guard::status()
+}
+
+/// The guard's report on a pending transfer against the person's words: for owners and approvers, who decide on
+/// it, and as a query only, so it is free.
+#[ic_cdk::query(guard = "access::approver")]
+fn guard_check(args: GuardCheckArgs) -> Result<GuardReport, WalletError> {
+    guard::check(&args)
 }
 
 /// The assets the accounts show, ICP first.
