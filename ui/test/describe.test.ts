@@ -47,6 +47,7 @@ const transfer: Pending = {
   executable_after_ns: NOW,
   expires_at_ns: NOW + 7n * 86_400n * SECOND,
   state: { tag: "Ready" },
+  request: null,
 }
 
 test("a transfer names its amount and account once they are known", () => {
@@ -134,6 +135,7 @@ test("a join request is an AddMember of its own proposer", () => {
     proposed_by: device,
     approvals: [],
     state: { tag: "Waiting" },
+    request: null,
   }
   assert.equal(isJoinRequest(join), true)
   assert.equal(joinRequestText(join), `${device} asks to join as a viewer, “Phone”`)
@@ -308,6 +310,7 @@ test("an action waits for a member who may approve or run it", () => {
     approvals: [device],
     quorum: 2,
     state: { tag: "Waiting" },
+    request: null,
   }
   assert.equal(waitsFor(waiting, me, NOW), true)
   assert.equal(waitsFor({ ...waiting, approvals: [device, owner] }, me, NOW), false)

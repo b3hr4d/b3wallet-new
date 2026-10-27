@@ -124,6 +124,74 @@ export function assetArg(named: string | undefined, account: Account): Chain {
   throw new InvalidArguments(`asset: “${named}” is neither ICP nor a ledger's canister id`)
 }
 
+/**
+ * A name as candid-profile's names rule (decision D-045) compares it: NFKC,
+ * lowercase, whitespace runs made one space, trimmed. Nothing else is
+ * stripped: "my" and "the" are the agent's to drop.
+ */
+export function normalizeName(text: string): string {
+  return text
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/\p{White_Space}+/gu, " ")
+    .trim()
+}
+
+/**
+ * Whether `text` reads as an address, which is never looked up as a name: a
+ * principal, an ICRC-1 account in its text form, a Bitcoin address or an EVM
+ * address. A label that reads as one never matches either.
+ */
+export function isAddress(text: string): boolean {
+  const account = /^([a-z0-9-]+)-[a-z2-7]{7}\.[0-9a-f]{1,64}$/.exec(text)
+  return (
+    isPrincipal(text) ||
+    (account !== null && isPrincipal(account[1]!)) ||
+    /^0x[0-9a-fA-F]{40}$/.test(text) ||
+    /^(bc1|tb1|bcrt1)[02-9ac-hj-np-z]{6,87}$/i.test(text) ||
+    /^[123mn][1-9A-HJ-NP-Za-km-z]{25,34}$/.test(text)
+  )
+}
+
+/**
+ * The one account named `name` (D-045: a name matches after normalizeName;
+ * exactly one match, or a refusal that tells the agent to ask). `kinds`
+ * narrows the accounts first, as an asset does: "Main" names one ICP account
+ * even when the Bitcoin and EVM accounts are also called "Main".
+ */
+export function accountNamed(
+  accounts: readonly Account[],
+  name: string,
+  kinds?: readonly AccountKind["tag"][],
+): Account {
+  const want = normalizeName(name)
+  const named = accounts.filter(
+    (account) =>
+      !isAddress(account.label) &&
+      normalizeName(account.label) === want &&
+      (kinds === undefined || kinds.includes(account.kind.tag)),
+  )
+  if (want === "" || named.length === 0) {
+    throw new InvalidArguments(
+      `no account is named “${name}”; wallet_accounts lists their ids and labels`,
+    )
+  }
+  if (named.length > 1) {
+    const which = named.map((account) => `${account.id}, ${kindText(account.kind)}`).join("; ")
+    throw new InvalidArguments(
+      `${named.length} accounts are named “${name}” (${which}): ask the person which one, then pass its id`,
+    )
+  }
+  return named[0]!
+}
+
+/** The account kinds that can send an asset named as `assetArg` reads it. */
+function kindsSending(named: string | undefined): AccountKind["tag"][] {
+  if (named === undefined || named === "") return ["InternetComputer", "Bitcoin"]
+  if (named.toUpperCase() === "ICP" || isPrincipal(named)) return ["InternetComputer"]
+  return ["Evm"]
+}
+
 /** The tracked assets an account of `kind` holds, its default first. */
 function heldBy(kind: AccountKind, tracked: readonly Chain[]): Chain[] {
   switch (kind.tag) {
@@ -180,6 +248,12 @@ export function eventText(event: AuditEvent): string {
       return `the upgrade failed: ${event.value}`
     case "CyclesLow":
       return `cycles ran low: ${event.value}`
+    case "Asked":
+      return `wrote request ${event.value}`
+    case "RequestClosed":
+      return `closed request ${event.value}`
+    case "GuardLoaded":
+      return `loaded the guard model ${event.value}`
   }
 }
 
@@ -311,6 +385,7 @@ function tools(client: Client, config: Config): Tool[] {
     proposed_by: pending.proposed_by === client.caller() ? "you" : pending.proposed_by,
     proposed_at: dateOf(pending.proposed_at_ns),
     open_until: dateOf(pending.expires_at_ns),
+    request: pending.request,
   })
 
   return [
@@ -377,7 +452,7 @@ function tools(client: Client, config: Config): Tool[] {
       name: "wallet_accounts",
       title: "The wallet's accounts",
       description:
-        "The wallet's accounts: each one's id, label, kind, address and the assets it holds. An Internet Computer account holds ICP and every ICRC-1 token the owners track, each named by its ledger's canister id; a Bitcoin account holds bitcoin; an EVM account holds the native token of every EVM chain the owners track, each named by its chain, at one address. Transfers name the account they send from by its id, and the asset unless it is ICP or the account's bitcoin.",
+        "The wallet's accounts: each one's id, label, kind, address and the assets it holds. An Internet Computer account holds ICP and every ICRC-1 token the owners track, each named by its ledger's canister id; a Bitcoin account holds bitcoin; an EVM account holds the native token of every EVM chain the owners track, each named by its chain, at one address. Transfers name the account they send from by its id or its label, and the asset unless it is ICP or the account's bitcoin.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       readOnly: true,
       run: async () => {
@@ -500,24 +575,46 @@ function tools(client: Client, config: Config): Tool[] {
       },
     },
     {
+      name: "wallet_requests",
+      title: "The owners' requests",
+      description:
+        "What the owners ask you to do, in their own words, oldest first: each open request's id, text and the actions already proposed for it. Answer one with wallet_propose_transfer and its request id, so the wallet's guard checks your transfer against the owner's words.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      readOnly: true,
+      run: async () =>
+        json(
+          (await wallet.requests()).map((request) => ({
+            request: request.id,
+            text: request.text,
+            asked_at: dateOf(request.asked_at_ns),
+            answers: request.answers,
+          })),
+        ),
+    },
+    {
       name: "wallet_propose_transfer",
       title: "Propose a transfer",
       description:
-        "Proposes sending an amount from one of the wallet's accounts. It sends nothing: the transfer waits until an owner or an approver approves and runs it on the wallet's Approvals page, and expires after seven days. You can have at most 8 actions open at once.",
+        "Proposes sending an amount from one of the wallet's accounts. It sends nothing: the transfer waits until an owner or an approver approves and runs it on the wallet's Approvals page, and expires after seven days. You can have at most 8 actions open at once. Name the owner's request it answers, from wallet_requests: the wallet's guard then checks it against the owner's own words, and without one it cannot.",
       inputSchema: {
         type: "object",
         properties: {
-          from: {
+          request: {
             type: "integer",
-            description: "The id of the account to send from, from wallet_accounts.",
+            description:
+              "The id of the owner's request this transfer answers, from wallet_requests. A request takes one transfer at a time.",
             minimum: 0,
-            maximum: 2 ** 32 - 1,
+          },
+          from: {
+            type: ["integer", "string"],
+            description:
+              "The account to send from, from wallet_accounts: its id, or its label as the person wrote it (“Main”). A label must name one account that can send the asset; when several do, ask the person which one.",
           },
           asset: ASSET,
           to: {
             type: "string",
             description:
-              "For ICP and ICRC-1 tokens, an ICRC-1 account in its text form (a principal is one); for Bitcoin, an address of the account's network; for an EVM chain, an address: 0x and 40 hex digits.",
+              "For ICP and ICRC-1 tokens, an ICRC-1 account in its text form (a principal is one); for Bitcoin, an address of the account's network; for an EVM chain, an address: 0x and 40 hex digits. Or the label of one of the wallet's own accounts, which sends to its address. An address is always taken as an address.",
           },
           amount: {
             type: "string",
@@ -534,14 +631,29 @@ function tools(client: Client, config: Config): Tool[] {
       },
       readOnly: false,
       run: async (args) => {
-        const account = await accountOf(integer(args, "from") ?? 0)
+        const names: string[] = []
+        const from = args.from
+        let account: Account
+        if (typeof from === "string" && !/^\d+$/.test(from.trim())) {
+          account = accountNamed(await wallet.accounts(), from, kindsSending(text(args, "asset")))
+          names.push(`from “${from.trim()}” is account ${account.id}`)
+        } else {
+          account = await accountOf(
+            typeof from === "string" ? Number(from) : (integer(args, "from") ?? 0),
+          )
+        }
         const asset = assetArg(text(args, "asset"), account)
         const token = await tokenOf(asset)
         if (token === undefined) {
           throw new InvalidArguments(`this server cannot send the ${chainText(asset)}`)
         }
-        const to = text(args, "to") ?? ""
+        let to = text(args, "to") ?? ""
         if (!to) throw new InvalidArguments("to is empty")
+        if (!isAddress(to)) {
+          const own = accountNamed(await wallet.accounts(), to)
+          names.push(`to “${to}” is account ${own.id}, ${own.address}`)
+          to = own.address
+        }
         let amount: bigint
         try {
           amount = parseUnits(text(args, "amount") ?? "", token.decimals)
@@ -558,13 +670,19 @@ function tools(client: Client, config: Config): Tool[] {
             `memo is ${memo.length} bytes, and at most ${MAX_MEMO_BYTES} fit`,
           )
         }
-        const pending = await wallet.propose({
+        const action: Action = {
           tag: "Transfer",
           value: { from: account.id, asset, to, amount, fee: null, memo },
-        })
+        }
+        const request = integer(args, "request")
+        const pending =
+          request === undefined
+            ? await wallet.propose(action)
+            : await wallet.propose_for(BigInt(request), action)
         return json({
           ...(await pendingView(pending, [account])),
           base_units: amount,
+          ...(names.length > 0 && { names }),
           next: `Nothing is sent yet. Tell the user it waits for an owner or an approver to approve and run action ${pending.id} at ${approvals}.`,
         })
       },

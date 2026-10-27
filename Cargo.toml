@@ -5,6 +5,7 @@ members = [
   "canisters/factory",
   "canisters/release_channel",
   "canisters/wallet",
+  "crates/guard",
   "crates/recovery",
   "crates/release",
   "tests/caller",
@@ -35,11 +36,15 @@ ic-cdk-bitcoin-canister = "=0.2.0"
 ic-http-certification = "=4.0.0"
 ic-response-verification = "=4.0.0"
 ic-stable-structures = "=0.7.2"
+# The guard's float math (exp, erf, sqrt), the same bits in the Wasm as natively.
+libm = "=0.2.16"
 # ICRC-1 accounts, their text form, and the ledger's transfer types.
 icrc-ledger-types = "=0.2.0"
 pocket-ic = "=16.1.0"
 # Property tests only; no fork or timeout support needed.
 proptest = { version = "=1.11.0", default-features = false, features = ["std"] }
+# The guard's request rule and keyword list; already under candid_parser.
+regex = "=1.13.1"
 # The curve under `bitcoin`, named to build it with small precomputed tables
 # (the default ones add about 1 MB of gzipped Wasm) and with recovery, which
 # gives an EVM signature the parity of its curve point.
@@ -53,6 +58,8 @@ serde_json = "=1.0.154"
 sha2 = { version = "=0.10.9", default-features = false }
 # Keccak-256 of EVM addresses and transactions; already under candid_parser.
 tiny-keccak = { version = "=2.0.2", features = ["keccak"] }
+# The guard tokenizer's letter, digit and number classes (Python's str methods).
+unicode-general-category = "=1.1.0"
 
 [profile.release]
 codegen-units = 1

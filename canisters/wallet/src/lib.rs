@@ -19,6 +19,7 @@ mod ed25519;
 mod evm;
 mod evm_rpc;
 mod governance;
+mod guard;
 mod http;
 mod icrc;
 mod keys;
@@ -29,6 +30,9 @@ mod storage;
 mod types;
 mod upgrade;
 
+pub use self::guard::{
+    FILE_BYTES as GUARD_FILE_BYTES, FILE_SHA256 as GUARD_FILE_SHA256, MAX_CHUNK as GUARD_MAX_CHUNK,
+};
 pub use access::{NOT_A_MEMBER, NOT_A_PROPOSER, NOT_AN_APPROVER, NOT_AN_OWNER, NOT_CLAIMED};
 pub use claim::message as claim_message;
 pub use types::*;
@@ -85,6 +89,8 @@ fn post_upgrade(arg: WalletArg) {
     let now = ic_cdk::api::time();
     add_defaults_now(now);
     http::certify();
+    // The guard file this release pins, if the owners uploaded it; any other file stays unloaded until they do.
+    let _ = guard::load();
     // This version runs, so an install the wallet sent itself ran.
     let mut upgrade = storage::upgrade();
     if let Some((id, version)) = upgrade.installed() {
@@ -359,6 +365,38 @@ async fn balance(id: AccountId, asset: Option<Chain>) -> Result<Balance, WalletE
     })
 }
 
+/// Writes a chunk of the guard file (decision 0012). Owners only: the wallet pays for the bytes it receives.
+#[ic_cdk::update(guard = "access::owner")]
+fn guard_upload(args: GuardUploadArgs) -> Result<u64, WalletError> {
+    guard::upload(&args)
+}
+
+/// Loads the uploaded guard file into the heap, only if it is the one this release pins.
+#[ic_cdk::update(guard = "access::owner")]
+fn guard_load() -> Result<GuardStatus, WalletError> {
+    let status = guard::load()?;
+    let release = status.release.clone().unwrap_or_default();
+    audit(
+        ic_cdk::api::msg_caller(),
+        AuditEvent::GuardLoaded(release),
+        ic_cdk::api::time(),
+    );
+    Ok(status)
+}
+
+/// The guard file this release pins, and whether it is loaded.
+#[ic_cdk::query(guard = "access::member")]
+fn guard_status() -> GuardStatus {
+    guard::status()
+}
+
+/// The guard's report on a transfer against the words of the owner's request it answers: for owners and
+/// approvers, who decide on it, and as a query only, so it is free.
+#[ic_cdk::query(guard = "access::approver")]
+fn guard_check(action: ActionId) -> Result<GuardReport, WalletError> {
+    guard::check(action)
+}
+
 /// The assets the accounts show, ICP first.
 #[ic_cdk::query(guard = "access::member")]
 fn assets() -> Result<Vec<Chain>, WalletError> {
@@ -416,6 +454,18 @@ fn untrack_asset(asset: Chain) -> Result<Vec<Chain>, WalletError> {
 /// sends, and the listed account it sends from.
 #[ic_cdk::update(guard = "access::proposer")]
 fn propose(action: Action) -> Result<Pending, WalletError> {
+    propose_action(action, None)
+}
+
+/// Proposes a transfer that answers an owner's open request (decision 0012), so the guard can check it against
+/// the owner's own words. A request has at most one transfer that is open or ran; once one is rejected, expires
+/// or fails, another may answer it.
+#[ic_cdk::update(guard = "access::proposer")]
+fn propose_for(request: RequestId, action: Action) -> Result<Pending, WalletError> {
+    propose_action(action, Some(request))
+}
+
+fn propose_action(action: Action, request: Option<RequestId>) -> Result<Pending, WalletError> {
     let mut action = action;
     let (caller, now) = (ic_cdk::api::msg_caller(), ic_cdk::api::time());
     let governance = storage::governance();
@@ -425,6 +475,9 @@ fn propose(action: Action) -> Result<Pending, WalletError> {
             "a proposer proposes only transfers".to_string(),
         ));
     }
+    let answered = request
+        .map(|id| open_request_for(id, &action, now))
+        .transpose()?;
     let spend = match &mut action {
         Action::Transfer(request) => {
             let (from, account) = storage::listed_account(request.from)
@@ -483,10 +536,103 @@ fn propose(action: Action) -> Result<Pending, WalletError> {
         None => policy::terms(&governance.policy, action.kind(), None),
     };
     let approvals = if approves { vec![caller] } else { vec![] };
-    let pending = StoredPending::new(action, caller, approvals, terms, APPROVAL_WINDOW_NS, now);
+    let mut pending = StoredPending::new(action, caller, approvals, terms, APPROVAL_WINDOW_NS, now);
+    pending.request = request;
     let id = storage::add_action(pending.clone());
+    if let Some((request_id, mut stored)) = answered {
+        stored.answers.push(id);
+        storage::set_request(request_id, stored);
+    }
     audit(caller, AuditEvent::Proposed(id), now);
     Ok(pending.view(id, now))
+}
+
+/// The open request `id`, if a transfer may answer it now: none of its answers is open or ran.
+fn open_request_for(
+    id: RequestId,
+    action: &Action,
+    now: u64,
+) -> Result<(RequestId, storage::StoredRequest), WalletError> {
+    if !matches!(action, Action::Transfer(_)) {
+        return Err(WalletError::InvalidArgument(
+            "only a transfer answers a request".to_string(),
+        ));
+    }
+    let stored =
+        storage::request(id).ok_or_else(|| WalletError::NotFound(format!("request {id}")))?;
+    if stored.closed_at_ns.is_some() {
+        return Err(WalletError::Forbidden(format!("request {id} is closed")));
+    }
+    let live = stored.answers.iter().find(|answer| {
+        storage::action(**answer).is_some_and(|pending| {
+            matches!(
+                pending.view(**answer, now).state,
+                ActionState::Waiting | ActionState::Ready | ActionState::Executed(_)
+            )
+        })
+    });
+    if let Some(answer) = live {
+        return Err(WalletError::Forbidden(format!(
+            "request {id} already has action {answer}"
+        )));
+    }
+    Ok((id, stored))
+}
+
+/// The most requests open at once, so the agent's list stays short.
+pub const MAX_OPEN_REQUESTS: usize = 16;
+
+/// Writes down what the caller asks their agent to do, in their own words (decision 0012). Owners only: the guard
+/// checks the agent's transfer against these words, so no one else may write them.
+#[ic_cdk::update(guard = "access::owner")]
+fn ask(text: String) -> Result<Request, WalletError> {
+    let (caller, now) = (ic_cdk::api::msg_caller(), ic_cdk::api::time());
+    let text = text.trim().to_string();
+    if text.is_empty() || text.len() > ::guard::MAX_REQUEST_BYTES {
+        return Err(WalletError::InvalidArgument(format!(
+            "a request is 1 to {} bytes",
+            ::guard::MAX_REQUEST_BYTES
+        )));
+    }
+    if storage::open_requests().len() >= MAX_OPEN_REQUESTS {
+        return Err(WalletError::Forbidden(format!(
+            "at most {MAX_OPEN_REQUESTS} requests can be open at once"
+        )));
+    }
+    let stored = storage::StoredRequest {
+        text,
+        asked_by: caller,
+        asked_at_ns: now,
+        closed_at_ns: None,
+        answers: Vec::new(),
+    };
+    let id = storage::add_request(stored.clone());
+    audit(caller, AuditEvent::Asked(id), now);
+    Ok(stored.view(id))
+}
+
+/// The open requests, oldest first: what the agent is asked to do.
+#[ic_cdk::query(guard = "access::member")]
+fn requests() -> Result<Vec<Request>, WalletError> {
+    Ok(storage::open_requests()
+        .into_iter()
+        .map(|(id, request)| request.view(id))
+        .collect())
+}
+
+/// Closes a request: no transfer may answer it any more. Its answers stay as they are.
+#[ic_cdk::update(guard = "access::owner")]
+fn close_request(id: RequestId) -> Result<Request, WalletError> {
+    let (caller, now) = (ic_cdk::api::msg_caller(), ic_cdk::api::time());
+    let mut stored =
+        storage::request(id).ok_or_else(|| WalletError::NotFound(format!("request {id}")))?;
+    if stored.closed_at_ns.is_some() {
+        return Err(WalletError::Forbidden(format!("request {id} is closed")));
+    }
+    stored.closed_at_ns = Some(now);
+    storage::set_request(id, stored.clone());
+    audit(caller, AuditEvent::RequestClosed(id), now);
+    Ok(stored.view(id))
 }
 
 /// Asks to join as a viewer, or as a proposer when `role` says so. It is an

@@ -18,6 +18,7 @@ import { joinCode } from "../logic/join-code.ts"
 import { dateOf } from "../logic/time.ts"
 import { transferAsset } from "../logic/tokens.ts"
 import { ApprovalDots, OutcomeLine, StateChip, useDecide } from "../parts/decide.tsx"
+import { GuardLine, Requests } from "../parts/guard.tsx"
 import { CheckIcon } from "../parts/icons.tsx"
 import { AsMember, Reading } from "../parts/member.tsx"
 import { useNowNs } from "../parts/now.ts"
@@ -38,7 +39,14 @@ export function Approvals({ wallet }: { wallet: Principal }) {
           approvals and its wait is over.
         </p>
       </div>
-      <AsMember wallet={wallet}>{(me) => <OpenActions wallet={wallet} me={me} />}</AsMember>
+      <AsMember wallet={wallet}>
+        {(me) => (
+          <>
+            <Requests wallet={wallet} me={me} />
+            <OpenActions wallet={wallet} me={me} />
+          </>
+        )}
+      </AsMember>
     </section>
   )
 }
@@ -72,6 +80,7 @@ function OpenActions({ wallet: id, me }: { wallet: Principal; me: Member }) {
           {pending.data.map((action) => (
             <OpenAction
               key={String(action.id)}
+              wallet={id}
               pending={action}
               accounts={accounts.data}
               members={members.data}
@@ -90,6 +99,7 @@ function OpenActions({ wallet: id, me }: { wallet: Principal; me: Member }) {
 }
 
 function OpenAction({
+  wallet,
   pending,
   accounts,
   members,
@@ -100,6 +110,7 @@ function OpenAction({
   onReject,
   onExecute,
 }: {
+  wallet: Principal
   pending: Pending
   accounts: Account[] | undefined
   members: Member[] | undefined
@@ -133,6 +144,7 @@ function OpenAction({
           ))}
         </ul>
       )}
+      {approves && <GuardLine wallet={wallet} pending={pending} me={me} />}
       {join && (
         <>
           <p className="quiet">Approve it only if the device that asks shows this code:</p>

@@ -360,6 +360,12 @@ export function auditText(event: AuditEvent, accounts: readonly Account[] | unde
       return `failed to install version ${event.value}`
     case "CyclesLow":
       return `ran low on cycles, with ${cyclesText(event.value, "down")} left`
+    case "Asked":
+      return `wrote request ${event.value} for the agent`
+    case "RequestClosed":
+      return `closed request ${event.value}`
+    case "GuardLoaded":
+      return `loaded the guard model ${event.value}`
   }
 }
 

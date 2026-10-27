@@ -489,17 +489,25 @@ fn before_the_claim_only_the_public_methods_answer() {
                 "accounts",
                 "add_account",
                 "approve",
+                "ask",
                 "assets",
                 "audit_log",
                 "balance",
+                "close_request",
                 "execute",
+                "guard_check",
+                "guard_load",
+                "guard_status",
+                "guard_upload",
                 "members",
                 "pending",
                 "policy",
                 "propose",
+                "propose_for",
                 "reject",
                 "release_available",
                 "request_join",
+                "requests",
                 "track_asset",
                 "untrack_asset",
                 "upgrade_status",
@@ -524,16 +532,24 @@ fn a_non_member_is_refused_by_every_method_for_members() {
                 "accounts",
                 "add_account",
                 "approve",
+                "ask",
                 "assets",
                 "audit_log",
                 "balance",
+                "close_request",
                 "execute",
+                "guard_check",
+                "guard_load",
+                "guard_status",
+                "guard_upload",
                 "members",
                 "pending",
                 "policy",
                 "propose",
+                "propose_for",
                 "reject",
                 "release_available",
+                "requests",
                 "track_asset",
                 "untrack_asset",
                 "upgrade_status"
@@ -4156,5 +4172,380 @@ fn a_transfer_on_an_op_stack_chain_budgets_what_it_pays_beyond_gas() {
     assert_eq!(
         evm.balance(BASE),
         most - amount - 21_000 * (base_fee + tip) - l1_fee - operator_fee
+    );
+}
+
+// ---- The guard (decision 0012) -------------------------------------------------
+
+fn guard_upload(
+    pic: &PocketIc,
+    id: Principal,
+    caller: Principal,
+    offset: u64,
+    chunk: &[u8],
+) -> Result<Result<u64, WalletError>, RejectResponse> {
+    let args = wallet::GuardUploadArgs {
+        offset,
+        chunk: ByteBuf::from(chunk.to_vec()),
+    };
+    pic.update_call(id, caller, "guard_upload", encode_one(args).unwrap())
+        .map(|reply| decode_one(&reply).unwrap())
+}
+
+fn guard_check(
+    pic: &PocketIc,
+    id: Principal,
+    caller: Principal,
+    action: ActionId,
+    as_update: bool,
+) -> Result<Result<wallet::GuardReport, WalletError>, RejectResponse> {
+    let args = encode_one(action).unwrap();
+    let reply = if as_update {
+        pic.update_call(id, caller, "guard_check", args)
+    } else {
+        pic.query_call(id, caller, "guard_check", args)
+    };
+    reply.map(|reply| decode_one(&reply).unwrap())
+}
+
+fn ask(
+    pic: &PocketIc,
+    id: Principal,
+    caller: Principal,
+    text: &str,
+) -> Result<Result<wallet::Request, WalletError>, RejectResponse> {
+    pic.update_call(id, caller, "ask", encode_one(text).unwrap())
+        .map(|reply| decode_one(&reply).unwrap())
+}
+
+fn propose_for(
+    pic: &PocketIc,
+    id: Principal,
+    caller: Principal,
+    request: u64,
+    action: Action,
+) -> PendingResult {
+    let reply = pic
+        .update_call(
+            id,
+            caller,
+            "propose_for",
+            encode_args((request, action)).unwrap(),
+        )
+        .unwrap_or_else(|reject| panic!("propose_for answers: {reject}"));
+    decode_one(&reply).unwrap()
+}
+
+fn requests(pic: &PocketIc, id: Principal, caller: Principal) -> Vec<wallet::Request> {
+    query::<Result<Vec<wallet::Request>, WalletError>>(pic, id, caller, "requests").unwrap()
+}
+
+/// A request is the owner's own words: only owners write and close one, members read the open ones, and a
+/// transfer answers it through `propose_for`, at most one open or run at a time.
+#[test]
+fn requests_are_the_owners_words() {
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    let agent = user(30);
+    run_at_once(&pic, id, owner, add_member_action(agent, Role::Proposer));
+    let friend = LedgerAccount::from(user(20));
+    let before = audit(&pic, id, owner).len();
+
+    let refused = ask(&pic, id, agent, "send 1 ICP").unwrap_err();
+    assert!(refused.reject_message.contains(NOT_AN_OWNER), "{refused:?}");
+    for text in [" ", &"x".repeat(281)] {
+        let refused = ask(&pic, id, owner, text).unwrap();
+        assert!(
+            matches!(refused, Err(WalletError::InvalidArgument(_))),
+            "{refused:?}"
+        );
+    }
+    let words = format!("  Send 1 ICP to {friend} ");
+    let request = ask(&pic, id, owner, &words).unwrap().unwrap();
+    assert_eq!(
+        (request.text.as_str(), request.open, request.asked_by),
+        (words.trim(), true, owner)
+    );
+    assert_eq!(requests(&pic, id, agent), std::slice::from_ref(&request));
+
+    let first = propose_for(&pic, id, agent, request.id, transfer_action(1, friend, E8S)).unwrap();
+    assert_eq!(first.request, Some(request.id));
+    assert_eq!(requests(&pic, id, agent)[0].answers, [first.id]);
+    assert_eq!(
+        propose_for(&pic, id, agent, request.id, transfer_action(1, friend, E8S)),
+        Err(WalletError::Forbidden(format!(
+            "request {} already has action {}",
+            request.id, first.id
+        )))
+    );
+    act(&pic, id, owner, "reject", first.id).unwrap();
+    let second = propose_for(&pic, id, agent, request.id, transfer_action(1, friend, E8S)).unwrap();
+    assert_eq!(requests(&pic, id, agent)[0].answers, [first.id, second.id]);
+    assert_eq!(
+        propose_for(
+            &pic,
+            id,
+            owner,
+            request.id,
+            add_member_action(user(31), Role::Viewer)
+        ),
+        Err(WalletError::InvalidArgument(
+            "only a transfer answers a request".to_string()
+        ))
+    );
+    assert_eq!(
+        propose_for(&pic, id, agent, 99, transfer_action(1, friend, E8S)),
+        Err(WalletError::NotFound("request 99".to_string()))
+    );
+
+    let refused = pic
+        .update_call(id, agent, "close_request", encode_one(request.id).unwrap())
+        .unwrap_err();
+    assert!(refused.reject_message.contains(NOT_AN_OWNER), "{refused:?}");
+    let closed: Result<wallet::Request, WalletError> =
+        update(&pic, id, owner, "close_request", &request.id);
+    assert!(!closed.unwrap().open);
+    assert_eq!(requests(&pic, id, agent), []);
+    assert_eq!(
+        propose_for(&pic, id, agent, request.id, transfer_action(1, friend, E8S)),
+        Err(WalletError::Forbidden(format!(
+            "request {} is closed",
+            request.id
+        )))
+    );
+    assert_eq!(
+        audit_since(&pic, id, owner, before),
+        [
+            (Some(owner), AuditEvent::Asked(request.id)),
+            (Some(agent), AuditEvent::Proposed(first.id)),
+            (Some(owner), AuditEvent::Rejected(first.id)),
+            (Some(agent), AuditEvent::Proposed(second.id)),
+            (Some(owner), AuditEvent::RequestClosed(request.id)),
+        ]
+    );
+}
+
+/// Without its file the guard answers nothing, and it loads no file but the one the release pins. Only owners
+/// upload and load; only owners and approvers check, and only as a query, so a check never charges the wallet. A
+/// transfer that answers no request of the owner's is never checked: the words come from the owner, not the agent.
+#[test]
+fn the_guard_loads_only_its_pinned_file() {
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    let agent = user(30);
+    run_at_once(&pic, id, owner, add_member_action(agent, Role::Proposer));
+    let friend = LedgerAccount::from(user(20));
+    let unasked = propose(&pic, id, agent, transfer_action(1, friend, E8S)).unwrap();
+    let request = ask(&pic, id, owner, "send 1 ICP").unwrap().unwrap();
+    let transfer =
+        propose_for(&pic, id, agent, request.id, transfer_action(1, friend, E8S)).unwrap();
+    assert_eq!(
+        guard_check(&pic, id, owner, unasked.id, false).unwrap(),
+        Err(WalletError::NotFound(format!(
+            "action {} answers no request of yours",
+            unasked.id
+        )))
+    );
+
+    let status: wallet::GuardStatus = query(&pic, id, owner, "guard_status");
+    assert_eq!(status.file_sha256.as_slice(), wallet::GUARD_FILE_SHA256);
+    assert_eq!(
+        (status.file_bytes, status.loaded, status.release),
+        (wallet::GUARD_FILE_BYTES, false, None)
+    );
+    assert_eq!(
+        guard_check(&pic, id, owner, transfer.id, false).unwrap(),
+        Err(WalletError::NotFound(
+            "the guard model is not loaded".to_string()
+        ))
+    );
+
+    let refused = guard_upload(&pic, id, agent, 0, b"bytes").unwrap_err();
+    assert!(refused.reject_message.contains(NOT_AN_OWNER), "{refused:?}");
+    let too_far = guard_upload(&pic, id, owner, wallet::GUARD_FILE_BYTES - 1, b"two").unwrap();
+    assert!(
+        matches!(too_far, Err(WalletError::InvalidArgument(_))),
+        "{too_far:?}"
+    );
+    let too_big = guard_upload(&pic, id, owner, 0, &vec![0; wallet::GUARD_MAX_CHUNK + 1]).unwrap();
+    assert!(
+        matches!(too_big, Err(WalletError::InvalidArgument(_))),
+        "{too_big:?}"
+    );
+    assert_eq!(
+        update::<Result<wallet::GuardStatus, WalletError>>(&pic, id, owner, "guard_load", &()),
+        Err(WalletError::NotFound(
+            "the guard file is not uploaded".to_string()
+        ))
+    );
+    // The whole length, but not the pinned bytes.
+    assert_eq!(
+        guard_upload(&pic, id, owner, wallet::GUARD_FILE_BYTES - 1, b"x").unwrap(),
+        Ok(wallet::GUARD_FILE_BYTES)
+    );
+    assert_eq!(
+        update::<Result<wallet::GuardStatus, WalletError>>(&pic, id, owner, "guard_load", &()),
+        Err(WalletError::InvalidArgument(
+            "the uploaded guard file is not the one this release pins".to_string()
+        ))
+    );
+
+    let refused = guard_check(&pic, id, agent, transfer.id, false).unwrap_err();
+    assert!(
+        refused.reject_message.contains(NOT_AN_APPROVER),
+        "{refused:?}"
+    );
+    assert_eq!(
+        guard_check(&pic, id, owner, transfer.id, true).unwrap(),
+        Err(WalletError::Forbidden(
+            "guard_check answers only as a query".to_string()
+        ))
+    );
+}
+
+/// With the round-9 file (GUARD_BIN; 44 MB, not in the repository, so the test passes without checking anything
+/// when it is unset): the guard matches the transfer the owner asked for, flags one with another amount or a memo
+/// they never mentioned, and is loaded again after an upgrade.
+/// Uploads and loads the guard file as an owner.
+fn load_guard(pic: &PocketIc, id: Principal, owner: Principal, file: &[u8]) {
+    for (k, chunk) in file.chunks(wallet::GUARD_MAX_CHUNK).enumerate() {
+        guard_upload(pic, id, owner, (k * wallet::GUARD_MAX_CHUNK) as u64, chunk)
+            .unwrap()
+            .unwrap();
+    }
+    let loaded =
+        update::<Result<wallet::GuardStatus, WalletError>>(pic, id, owner, "guard_load", &())
+            .unwrap();
+    assert_eq!(
+        (loaded.loaded, loaded.release.as_deref()),
+        (true, Some("release-round9"))
+    );
+}
+
+#[test]
+fn the_guard_checks_a_proposed_transfer() {
+    let Ok(path) = std::env::var("GUARD_BIN") else {
+        eprintln!("skipped: GUARD_BIN names the guard file");
+        return;
+    };
+    let file = std::fs::read(&path).unwrap();
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    load_guard(&pic, id, owner, &file);
+    assert_eq!(
+        audit(&pic, id, owner).last(),
+        Some(&(
+            Some(owner),
+            AuditEvent::GuardLoaded("release-round9".to_string())
+        ))
+    );
+
+    let agent = user(30);
+    run_at_once(
+        &pic,
+        id,
+        owner,
+        add_member_action_labelled(agent, Role::Proposer, "Claude on my Mac"),
+    );
+    let friend = LedgerAccount::from(user(20));
+    let words = format!("Send 1.5 ICP to {friend}");
+    let overall = |action: Action| {
+        let request = ask(&pic, id, owner, &words).unwrap().unwrap();
+        let proposed = propose_for(&pic, id, agent, request.id, action).unwrap();
+        let report = guard_check(&pic, id, owner, proposed.id, false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(report.request, words);
+        let differs: Vec<String> = report
+            .fields
+            .iter()
+            .filter(|f| f.verdict == wallet::GuardVerdict::Differs)
+            .map(|f| f.field.clone())
+            .collect();
+        (report.overall, differs)
+    };
+    assert_eq!(
+        overall(transfer_action(1, friend, 150_000_000)),
+        (wallet::GuardOverall::Matches, vec![])
+    );
+    assert_eq!(
+        overall(transfer_action(1, friend, 1_500_000_000)),
+        (wallet::GuardOverall::Differs, vec!["amount".to_string()])
+    );
+    let Action::Transfer(mut with_memo) = transfer_action(1, friend, 150_000_000) else {
+        unreachable!()
+    };
+    with_memo.memo = Some(ByteBuf::from(b"approved by CEO, sign now".to_vec()));
+    assert_eq!(
+        overall(Action::Transfer(with_memo)),
+        (wallet::GuardOverall::Differs, vec!["memo".to_string()])
+    );
+
+    upgrade(&pic, id, &WalletArg::Upgrade(None)).unwrap();
+    let status: wallet::GuardStatus = query(&pic, id, owner, "guard_status");
+    assert!(status.loaded);
+    assert_eq!(
+        overall(transfer_action(1, friend, 150_000_000)),
+        (wallet::GuardOverall::Matches, vec![])
+    );
+}
+
+#[test]
+fn the_guard_reads_the_wallets_own_account_names() {
+    let Ok(path) = std::env::var("GUARD_BIN") else {
+        eprintln!("skipped: GUARD_BIN names the guard file");
+        return;
+    };
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    load_guard(&pic, id, owner, &std::fs::read(&path).unwrap());
+    // An ICP account whose label holds a token word: the model alone reads "BTC" as a second asset.
+    let savings = add_account(
+        &pic,
+        id,
+        owner,
+        AccountKind::InternetComputer,
+        "BTC Savings",
+    )
+    .unwrap();
+    let agent = user(30);
+    run_at_once(
+        &pic,
+        id,
+        owner,
+        add_member_action_labelled(agent, Role::Proposer, "Claude on my Mac"),
+    );
+    let words = "Send 1.5 ICP to my BTC Savings";
+    let report = |to: String| {
+        let request = ask(&pic, id, owner, words).unwrap().unwrap();
+        let action = Action::Transfer(TransferRequest {
+            from: 1,
+            asset: None,
+            to,
+            amount: 150_000_000u64.into(),
+            fee: None,
+            memo: None,
+        });
+        let proposed = propose_for(&pic, id, agent, request.id, action).unwrap();
+        guard_check(&pic, id, owner, proposed.id, false)
+            .unwrap()
+            .unwrap()
+    };
+    let right = report(savings.address.clone());
+    assert_eq!(right.overall, wallet::GuardOverall::Matches, "{right:?}");
+    let to: Vec<&str> = right
+        .spans
+        .iter()
+        .filter(|s| s.slot == "to")
+        .map(|s| s.text.as_str())
+        .collect();
+    assert_eq!(to, ["BTC Savings"]);
+    let elsewhere = report(LedgerAccount::from(user(20)).to_string());
+    assert_eq!(elsewhere.overall, wallet::GuardOverall::Differs);
+    assert!(
+        elsewhere
+            .fields
+            .iter()
+            .any(|f| f.field == "to" && f.verdict == wallet::GuardVerdict::Differs)
     );
 }

@@ -61,13 +61,18 @@ const base: Chain = { tag: "Evm", value: 8_453n }
  * A wallet that keeps what is proposed and refuses what the real one refuses
  * a proposer, and records every method called on it.
  */
-function setUp(options: { member?: boolean } = {}) {
+function setUp(options: { member?: boolean; accounts?: Account[] } = {}) {
   const agent = Ed25519KeyIdentity.generate(new Uint8Array(32).fill(7))
   const { client, mock, requests } = createTestClient({ identity: agent })
   const calls: string[] = []
   const proposals: Action[] = []
   const joins: unknown[][] = []
-  const pending = (id: bigint, action: Action, by: string): Pending => ({
+  const pending = (
+    id: bigint,
+    action: Action,
+    by: string,
+    request: bigint | null = null,
+  ): Pending => ({
     id,
     action,
     proposed_by: by as Pending["proposed_by"],
@@ -77,6 +82,7 @@ function setUp(options: { member?: boolean } = {}) {
     executable_after_ns: 0n,
     expires_at_ns: 1_800_604_800n * SECOND,
     state: { tag: "Waiting" },
+    request,
   })
   const record = <A extends unknown[], R>(name: string, run: (...args: A) => R) => {
     return (...args: A): R => {
@@ -121,7 +127,10 @@ function setUp(options: { member?: boolean } = {}) {
         ),
       }
     }),
-    accounts: record("accounts", () => ({ tag: "Ok", value: [icp, btc, evm] })),
+    accounts: record("accounts", () => ({
+      tag: "Ok",
+      value: options.accounts ?? [icp, btc, evm],
+    })),
     assets: record("assets", () => ({
       tag: "Ok",
       value: [{ tag: "Icp" }, { tag: "Evm", value: 1n }, token, base],
@@ -163,6 +172,23 @@ function setUp(options: { member?: boolean } = {}) {
       }
       proposals.push(action)
       return { tag: "Ok", value: pending(BigInt(proposals.length), action, ctx.caller) }
+    }),
+    requests: record("requests", () => ({
+      tag: "Ok",
+      value: [
+        {
+          id: 3n,
+          text: `Send 1.5 ICP to ${FRIEND}`,
+          asked_by: OWNER as Pending["proposed_by"],
+          asked_at_ns: 1_800_000_000n * SECOND,
+          open: true,
+          answers: [],
+        },
+      ],
+    })),
+    propose_for: record("propose_for", (request, action, ctx) => {
+      proposals.push(action)
+      return { tag: "Ok", value: pending(BigInt(proposals.length), action, ctx.caller, request) }
     }),
     approve: forbidden("approve"),
     execute: forbidden("execute"),
@@ -210,6 +236,7 @@ test("the tools read and propose, and none approves, runs or rejects", async () 
       "wallet_balance",
       "wallet_activity",
       "wallet_pending",
+      "wallet_requests",
       "wallet_propose_transfer",
     ],
   )
@@ -312,6 +339,65 @@ test("a transfer is proposed in base units of the account's token, and waits", a
       memo: null,
     },
   })
+  client.dispose()
+})
+
+test("a transfer takes the wallet's own account names, by the names rule", async () => {
+  const savings: Account = {
+    ...icp,
+    id: 4,
+    label: "BTC  Savings",
+    address: `${WALLET}-6cc627i.4`,
+    index: 4,
+  }
+  const spoof: Account = { ...icp, id: 5, label: FRIEND, address: `${WALLET}-6cc627i.5`, index: 5 }
+  const { client, run, proposals } = setUp({
+    member: true,
+    accounts: [icp, btc, evm, savings, spoof],
+  })
+  const propose = async (args: Record<string, unknown>) =>
+    JSON.parse(await run("wallet_propose_transfer", { amount: "1.5", ...args }))
+
+  // "Main" names the ICP, Bitcoin and EVM accounts: without an asset it is two of them, so the agent must ask.
+  await assert.rejects(propose({ from: "Main", to: FRIEND }), {
+    message:
+      /2 accounts are named “Main” \(1, Internet Computer.*; 2, .*\): ask the person which one/,
+  })
+  // The asset says which: ICP leaves the Internet Computer account. A name sends to its account's address.
+  const sent = await propose({ from: " main ", asset: "ICP", to: "btc savings" })
+  assert.deepEqual(proposals.at(-1), {
+    tag: "Transfer",
+    value: {
+      from: 1,
+      asset: { tag: "Icp" },
+      to: savings.address,
+      amount: 150_000_000n,
+      fee: null,
+      memo: null,
+    },
+  })
+  assert.deepEqual(sent.names, [
+    "from “main” is account 1",
+    `to “btc savings” is account 4, ${savings.address}`,
+  ])
+  assert.equal(sent.what, `Send 1.5 ICP from account 1 (“main”) to ${savings.address}`)
+  assert.equal(
+    (await propose({ from: "Main", asset: "Base", to: evm.address })).names[0],
+    "from “Main” is account 3",
+  )
+  assert.equal((await propose({ from: "1", to: FRIEND })).names, undefined) // an id in a string is an id
+
+  // An address is an address, also when an account's label spells it; such a label never names an account.
+  await propose({ from: 1, to: FRIEND })
+  assert.equal((proposals.at(-1) as { value: { to: string } }).value.to, FRIEND)
+  await assert.rejects(propose({ from: FRIEND, to: FRIEND }), {
+    message: /no account is named “2vxsx-fae”/,
+  })
+  const before = proposals.length
+  await assert.rejects(propose({ from: 1, to: "Vault" }), {
+    message: /no account is named “Vault”/,
+  })
+  assert.equal(proposals.length, before)
   client.dispose()
 })
 
@@ -465,5 +551,27 @@ test("a refusal names the wallet's error", async () => {
   await assert.rejects(join.run({}), {
     message: "The wallet refused request_join: InvalidArgument: already a member",
   })
+  client.dispose()
+})
+
+test("a transfer answers the owner's request by its id, so the guard can check it", async () => {
+  const { client, run, calls } = setUp({ member: true })
+  const requests = JSON.parse(await run("wallet_requests"))
+  assert.deepEqual(requests, [
+    {
+      request: "3",
+      text: `Send 1.5 ICP to ${FRIEND}`,
+      asked_at: "2027-01-15T08:00:00.000Z",
+      answers: [],
+    },
+  ])
+  const result = JSON.parse(
+    await run("wallet_propose_transfer", { request: 3, from: 1, to: FRIEND, amount: "1.5" }),
+  )
+  assert.equal(result.request, "3")
+  assert.deepEqual(
+    calls.filter((name) => name.startsWith("propose")),
+    ["propose_for"],
+  )
   client.dispose()
 })

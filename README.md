@@ -26,7 +26,11 @@ its accounts and their balances; it lets
 owners add accounts, and lets someone signed in who is not a member ask to
 join, as a viewer or, for an AI agent through the MCP server in `mcp/`, as a
 proposer whose transfers always wait for an owner
-([decision 0007](docs/decisions/0007-agent-proposer.md)); its send page
+([decision 0007](docs/decisions/0007-agent-proposer.md)), and owners can load a guard
+model into the wallet that checks each transfer the agent proposes
+against the request the owner wrote for it, in a free query, flagging what
+differs
+([decision 0012](docs/decisions/0012-guard-in-wallet.md)); its send page
 proposes and runs a transfer, its receive page shows each account's whole
 address and its QR code to give a sender, each account's page shows what it
 holds and its open transfers, its inbox lists what needs you and what

@@ -13,7 +13,7 @@ use crate::policy::default_policy;
 use crate::upgrade::StoredUpgrade;
 use crate::{
     AccountId, AccountKind, Action, ActionId, ActionState, AuditEntry, AuditEvent, BitcoinNetwork,
-    Chain, InitArgs, Member, Outcome, Policy, Role,
+    Chain, InitArgs, Member, Outcome, Policy, Request, RequestId, Role,
 };
 use crate::{assets, btc, evm};
 use candid::{CandidType, Nat, Principal, decode_one, encode_one};
@@ -43,6 +43,8 @@ const TRANSFER_CLOCK_MEMORY: MemoryId = MemoryId::new(11);
 const RESERVED_MEMORY: MemoryId = MemoryId::new(12);
 const TRACKED_MEMORY: MemoryId = MemoryId::new(13);
 const UNSETTLED_MEMORY: MemoryId = MemoryId::new(14);
+const GUARD_MEMORY: MemoryId = MemoryId::new(15);
+const REQUESTS_MEMORY: MemoryId = MemoryId::new(16);
 
 /// What the wallet was installed with.
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -89,6 +91,30 @@ pub struct StoredAuditEntry {
     pub at_ns: u64,
     pub by: Option<Principal>,
     pub event: AuditEvent,
+}
+
+/// An owner's request to their agent, stored under its id (decision 0012).
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct StoredRequest {
+    pub text: String,
+    pub asked_by: Principal,
+    pub asked_at_ns: u64,
+    pub closed_at_ns: Option<u64>,
+    /// The actions proposed for it, oldest first.
+    pub answers: Vec<ActionId>,
+}
+
+impl StoredRequest {
+    pub fn view(&self, id: RequestId) -> Request {
+        Request {
+            id,
+            text: self.text.clone(),
+            asked_by: self.asked_by,
+            asked_at_ns: self.asked_at_ns,
+            open: self.closed_at_ns.is_none(),
+            answers: self.answers.clone(),
+        }
+    }
 }
 
 /// A transfer the wallet sent, stored under its sequence number.
@@ -165,6 +191,7 @@ candid_storable!(
     StoredAuditEntry,
     StoredMember,
     StoredPending,
+    StoredRequest,
     StoredTransfer,
     StoredUpgrade,
     Tracked
@@ -233,10 +260,48 @@ thread_local! {
     /// `StoredPending::needs_settling`.
     static UNSETTLED: RefCell<StableBTreeMap<ActionId, (), Memory>> =
         RefCell::new(StableBTreeMap::init(memory(UNSETTLED_MEMORY)));
+
+    /// The owners' requests to their agents (decision 0012), never deleted.
+    static REQUESTS: RefCell<StableBTreeMap<RequestId, StoredRequest, Memory>> =
+        RefCell::new(StableBTreeMap::init(memory(REQUESTS_MEMORY)));
 }
 
 fn memory(id: MemoryId) -> Memory {
     MEMORY_MANAGER.with(|manager| manager.get(id))
+}
+
+/// Stores a new request under the next id.
+pub fn add_request(request: StoredRequest) -> RequestId {
+    REQUESTS.with_borrow_mut(|requests| {
+        let id = requests.last_key_value().map_or(1, |(last, _)| last + 1);
+        requests.insert(id, request);
+        id
+    })
+}
+
+pub fn request(id: RequestId) -> Option<StoredRequest> {
+    REQUESTS.with_borrow(|requests| requests.get(&id))
+}
+
+pub fn set_request(id: RequestId, request: StoredRequest) {
+    REQUESTS.with_borrow_mut(|requests| requests.insert(id, request));
+}
+
+/// The open requests, oldest first.
+// shortcut: reads every request ever made; fine at an owner's pace, index the open ones if a wallet holds thousands.
+pub fn open_requests() -> Vec<(RequestId, StoredRequest)> {
+    REQUESTS.with_borrow(|requests| {
+        requests
+            .iter()
+            .map(|entry| entry.into_pair())
+            .filter(|(_, r)| r.closed_at_ns.is_none())
+            .collect()
+    })
+}
+
+/// The guard file's bytes, at their offsets (`guard.rs`): raw, not a structure.
+pub fn guard_file() -> Memory {
+    memory(GUARD_MEMORY)
 }
 
 /// Stores the configuration at install.

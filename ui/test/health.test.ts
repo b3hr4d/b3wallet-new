@@ -39,6 +39,7 @@ const transfer: Pending = {
   executable_after_ns: 0n,
   expires_at_ns: NOW + 24n * HOUR,
   state: { tag: "Waiting" },
+  request: null,
 }
 const healthy = {
   status,
