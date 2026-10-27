@@ -84,7 +84,7 @@ To see the agent's principal yourself, import its key into icp-cli:
 
 A transfer names the owner's request it answers, so the wallet's guard checks
 it against the owner's own words on the Approvals page
-([decision 0011](../docs/decisions/0011-guard-in-wallet.md)); one that names no
+([decision 0012](../docs/decisions/0012-guard-in-wallet.md)); one that names no
 request is shown as not checked.
 
 Its `from` and `to` also take the label of one of the wallet's own accounts,

@@ -93,7 +93,7 @@ pub struct StoredAuditEntry {
     pub event: AuditEvent,
 }
 
-/// An owner's request to their agent, stored under its id (decision 0011).
+/// An owner's request to their agent, stored under its id (decision 0012).
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct StoredRequest {
     pub text: String,
@@ -261,7 +261,7 @@ thread_local! {
     static UNSETTLED: RefCell<StableBTreeMap<ActionId, (), Memory>> =
         RefCell::new(StableBTreeMap::init(memory(UNSETTLED_MEMORY)));
 
-    /// The owners' requests to their agents (decision 0011), never deleted.
+    /// The owners' requests to their agents (decision 0012), never deleted.
     static REQUESTS: RefCell<StableBTreeMap<RequestId, StoredRequest, Memory>> =
         RefCell::new(StableBTreeMap::init(memory(REQUESTS_MEMORY)));
 }

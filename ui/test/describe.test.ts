@@ -15,9 +15,9 @@ import {
   waitsFor,
   walletErrorText,
   whoText,
-} from "../src/describe.ts"
+} from "../src/logic/describe.ts"
 import type { Account, Action, Member, Pending } from "../src/generated/wallet.ts"
-import { agoText, dateOf, durationText } from "../src/time.ts"
+import { agoText, dateOf, durationText } from "../src/logic/time.ts"
 
 const owner = "fvski-cdv2h-g6ldz-eacds-4wfcf-px5sn-yfwv7-bwtxb-wvytu-cm3qa-sae" as never
 const device = "gxhcg-wz6ja-zbwh7-s6ha4-nnlhc-ya5hh-2dv23-dwksw-ujozj-ymkcv-tae" as never

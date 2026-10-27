@@ -1,7 +1,7 @@
 import { renderToString } from "react-dom/server"
 import { App } from "./app.tsx"
-import { THREE } from "./brand.tsx"
-import { PAGES } from "./page.ts"
+import { PAGES } from "./logic/page.ts"
+import { THREE } from "./parts/brand.tsx"
 
 /**
  * B3Wallet's favicon, `b3wallet-favicon.svg` of B3Pay's design system: the

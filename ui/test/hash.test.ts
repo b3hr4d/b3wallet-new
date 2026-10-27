@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { hashOf } from "../src/hash.ts"
+import { hashOf } from "../src/logic/hash.ts"
 
 test("a hash is 64 hex digits, in either case, with spaces around", () => {
   const hex = "00ff7a" + "11".repeat(29)

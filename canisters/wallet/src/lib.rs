@@ -365,7 +365,7 @@ async fn balance(id: AccountId, asset: Option<Chain>) -> Result<Balance, WalletE
     })
 }
 
-/// Writes a chunk of the guard file (decision 0011). Owners only: the wallet pays for the bytes it receives.
+/// Writes a chunk of the guard file (decision 0012). Owners only: the wallet pays for the bytes it receives.
 #[ic_cdk::update(guard = "access::owner")]
 fn guard_upload(args: GuardUploadArgs) -> Result<u64, WalletError> {
     guard::upload(&args)
@@ -457,7 +457,7 @@ fn propose(action: Action) -> Result<Pending, WalletError> {
     propose_action(action, None)
 }
 
-/// Proposes a transfer that answers an owner's open request (decision 0011), so the guard can check it against
+/// Proposes a transfer that answers an owner's open request (decision 0012), so the guard can check it against
 /// the owner's own words. A request has at most one transfer that is open or ran; once one is rejected, expires
 /// or fails, another may answer it.
 #[ic_cdk::update(guard = "access::proposer")]
@@ -582,7 +582,7 @@ fn open_request_for(
 /// The most requests open at once, so the agent's list stays short.
 pub const MAX_OPEN_REQUESTS: usize = 16;
 
-/// Writes down what the caller asks their agent to do, in their own words (decision 0011). Owners only: the guard
+/// Writes down what the caller asks their agent to do, in their own words (decision 0012). Owners only: the guard
 /// checks the agent's transfer against these words, so no one else may write them.
 #[ic_cdk::update(guard = "access::owner")]
 fn ask(text: String) -> Result<Request, WalletError> {

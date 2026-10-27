@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { test } from "node:test"
-import { joinCode } from "../src/join-code.ts"
+import { joinCode } from "../src/logic/join-code.ts"
 
 const device = "gxhcg-wz6ja-zbwh7-s6ha4-nnlhc-ya5hh-2dv23-dwksw-ujozj-ymkcv-tae"
 

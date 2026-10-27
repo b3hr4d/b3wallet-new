@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { dotsOf, hashOf, HUES, hueClass, initialOf } from "../src/mark.ts"
+import { dotsOf, hashOf, HUES, hueClass, initialOf } from "../src/logic/mark.ts"
 
 const wallet = "uxrrr-q7777-77774-qaaaq-cai"
 const other = "u6s2n-gx777-77774-qaaba-cai"

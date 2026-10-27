@@ -1,5 +1,7 @@
 import { Fragment, useState, type ReactNode } from "react"
-import { B3Mark, Loader, Lockup } from "./brand.tsx"
+import { Live, type Slots } from "./live.tsx"
+import type { Page, Path } from "./logic/page.ts"
+import { B3Mark, Loader, Lockup } from "./parts/brand.tsx"
 import {
   ApproveIcon,
   GearIcon,
@@ -8,15 +10,13 @@ import {
   PeopleIcon,
   ReceiveIcon,
   SendIcon,
-} from "./icons.tsx"
-import { Live, type Slots } from "./live.tsx"
-import { HomeOutline, RailOutline } from "./outline.tsx"
-import type { Page } from "./page.ts"
-import { useInBrowser } from "./in-browser.ts"
+} from "./parts/icons.tsx"
+import { useInBrowser } from "./parts/in-browser.ts"
+import { HomeOutline, RailOutline } from "./parts/outline.tsx"
 
 type Link = {
   page: Page
-  href: string
+  href: Path
   label: string
   icon: ReactNode
   /** A count the app fills in: what waits for you, or what is new. */

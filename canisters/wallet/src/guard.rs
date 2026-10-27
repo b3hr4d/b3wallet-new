@@ -1,4 +1,4 @@
-//! The guard, inside the wallet ([decision 0011](../../../docs/decisions/0011-guard-in-wallet.md)): it reads the
+//! The guard, inside the wallet ([decision 0012](../../../docs/decisions/0012-guard-in-wallet.md)): it reads the
 //! person's own words, marks where the amount, asset, recipient and the rest are (a small model, `crates/guard`),
 //! and checks a pending transfer against them field by field with deterministic code, then runs stage 2's
 //! keyword list over the proposer's label and the memo. Everything runs in the owners' own canister, under the code

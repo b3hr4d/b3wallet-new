@@ -256,7 +256,7 @@ type Pending = record {
 };
 
 // What an owner asked their agent to do, in their own words (decision
-// 0011): the agent reads it with `requests` and answers it with
+// 0012): the agent reads it with `requests` and answers it with
 // `propose_for`, and the guard checks the transfer against these words.
 type Request = record {
   id : RequestId;
@@ -398,7 +398,7 @@ type HttpResponse = record {
 
 // ---- Guard ------------------------------------------------------------------
 
-// The guard (decision 0011) reads the person's own words, marks where the
+// The guard (decision 0012) reads the person's own words, marks where the
 // amount, asset, recipient and the rest are, and checks a pending transfer
 // against them field by field; it also runs a keyword list over the
 // proposer's label and the memo. It only adds flags for a person to read:
@@ -551,7 +551,7 @@ service : (WalletArg) -> {
   extensions : () -> (ExtensionsResult) query;
   ext_request : (ExtRequest) -> (ExtResult);
 
-  // Requests (decision 0011). Owners write what they ask their agent to do,
+  // Requests (decision 0012). Owners write what they ask their agent to do,
   // at most 280 bytes, 16 open at once; members read the open ones, oldest
   // first; owners close one when no transfer should answer it any more.
   ask : (text) -> (RequestResult);

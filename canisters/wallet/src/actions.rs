@@ -77,7 +77,7 @@ pub struct StoredPending {
     /// An EVM transfer's transaction and its executions, once `execute`
     /// started one. Absent from actions stored before step 17.
     pub evm: Option<Attempt<EvmTx>>,
-    /// The owner's request a transfer answers (`propose_for`, decision 0011).
+    /// The owner's request a transfer answers (`propose_for`, decision 0012).
     pub request: Option<RequestId>,
 }
 

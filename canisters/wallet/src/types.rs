@@ -246,7 +246,7 @@ pub struct Pending {
     pub request: Option<RequestId>,
 }
 
-/// What an owner asked their agent to do, in their own words (decision 0011): the agent reads it with `requests`
+/// What an owner asked their agent to do, in their own words (decision 0012): the agent reads it with `requests`
 /// and answers it with `propose_for`, and the guard checks the transfer against these words.
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Request {

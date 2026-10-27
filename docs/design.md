@@ -396,13 +396,17 @@ The Content-Security-Policy, pinned by a test:
 default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:;
 font-src 'self'; connect-src 'self' https://icp-api.io https://icp0.io;
 frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'none';
-form-action 'none'; upgrade-insecure-requests
+form-action 'none'; require-trusted-types-for 'script'; trusted-types 'none';
+upgrade-insecure-requests
 ```
 
 The files come from `ui/`, a React app built with a pinned Node, esbuild and
 lockfile ([decision 0006](decisions/0006-client-library.md) chose its client
-library). The build renders each page to HTML in Node, with what is the same
-for every visitor, and bundles the app that hydrates it; the HTML holds no
+library), which bundles Preact in React's place
+([decision 0011](decisions/0011-preact-compat.md)), laid out and checked as
+[ui-standard.md](ui-standard.md) says. The build renders each
+page to HTML in Node, with what is the same for every visitor, and bundles
+the app that hydrates it; the HTML holds no
 inline script or style and loads only `/app.js` and `/app.css`. In the
 browser, the app works only at the wallet's own address
 (`https://<wallet id>.icp0.io`, or `http://<wallet id>.localhost` on
@@ -461,8 +465,8 @@ is never reused or renumbered, even after its store goes away; the audit log's
 | 12 | Reserved Bitcoin outputs | an outpoint to the transfer whose transaction spends it; released if that transfer ends unsent, or once its transaction has spent it for 6 blocks | `StableBTreeMap` | Kept |
 | 13 | Tracked assets | the assets the accounts show and send: ICP, then the ICRC-1 ledgers the owners track | `StableCell` | Kept |
 | 14 | Unsettled transfers | the ids of the transfers whose outcome the timer still settles | `StableBTreeMap` | Kept |
-| 15 | Guard file | the guard model's file (decision 0011) as owners uploaded it, at its offsets | raw virtual memory | Kept; `post_upgrade` loads it again if it is the file the release pins |
-| 16 | Requests | request id to an owner's words for their agent, who wrote it and when, when it closed, and the actions proposed for it; never deleted (decision 0011) | `StableBTreeMap` | Kept |
+| 15 | Guard file | the guard model's file (decision 0012) as owners uploaded it, at its offsets | raw virtual memory | Kept; `post_upgrade` loads it again if it is the file the release pins |
+| 16 | Requests | request id to an owner's words for their agent, who wrote it and when, when it closed, and the actions proposed for it; never deleted (decision 0012) | `StableBTreeMap` | Kept |
 
 Every stored value is Candid with optional new fields, so a release can add
 fields without a migration. A store a release adds is filled in by
