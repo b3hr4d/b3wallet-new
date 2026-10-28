@@ -91,6 +91,7 @@ const PACKAGES = [
   "@icp-sdk/auth",
   "@icp-sdk/core",
   "@icp-sdk/signer",
+  "@meantjs/format",
   "@noble/curves",
   "@noble/hashes",
   "@tanstack/query-core",

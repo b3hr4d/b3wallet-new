@@ -88,13 +88,21 @@ it against the owner's own words on the Approvals page
 request is shown as not checked.
 
 Its `from` and `to` also take the label of one of the wallet's own accounts,
-by candid-profile's names rule (decision D-045 there): the label matches after
-Unicode NFKC, lowercase and collapsed spaces, and it must name exactly one
-account, among those that can send the asset for `from`. "Main" with ICP
-names the Internet Computer account; "Main" alone names two, so the server
-refuses and the agent asks the person. An address is always an address, and a
-label that spells one never names an account. The result lists what each name
-stood for.
+by the profile spec's names rule (decision D-045 there), which the server
+takes from `@meantjs/format` ([decision 0013](../docs/decisions/0013-meant-format.md)):
+the label matches after Unicode NFKC, lowercase and collapsed spaces, and it
+must name exactly one account, among those that can send the asset for
+`from`. "Main" with ICP names the Internet Computer account; "Main" alone
+names two, so the server refuses and the agent asks the person. An address is
+always an address, and a label that spells one never names an account. The
+result lists what each name stood for.
+
+The same package reads and shows the values. An amount is decimal text in the
+token's units, with the token's symbol or without it ("1.5" or "1.5 ICP"), and
+more decimal places than the token has are refused, never rounded. A memo is
+text, stored as UTF-8, or 0x and hex digits for other bytes, and is shown back
+the same way. A ledger whose symbol has control or invisible characters, such
+as a right-to-left override, is one the server neither shows nor sends.
 
 Every read is a replicated call, which the subnet certifies, as on the
 wallet's pages.

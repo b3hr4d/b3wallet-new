@@ -20,6 +20,8 @@ import { walletTools } from "../src/tools.ts"
 const WALLET = "uxrrr-q7777-77774-qaaaq-cai"
 const ICP_LEDGER = "ryjl3-tyaaa-aaaaa-aaaba-cai"
 const TOKEN_LEDGER = "mxzaz-hqaaa-aaaar-qaada-cai"
+/** A ledger whose symbol hides a right-to-left override, which reads “ICP” backwards. */
+const SPOOF_LEDGER = "rrkah-fqaaa-aaaaa-aaaaq-cai"
 const FRIEND = "2vxsx-fae"
 const OWNER = "aaaaa-aa"
 const SECOND = 1_000_000_000n
@@ -208,6 +210,12 @@ function setUp(options: { member?: boolean; accounts?: Account[] } = {}) {
       ["icrc1:decimals", { tag: "Nat", value: 8n }],
     ],
   })
+  mock<Ledger>(ledgerActor, SPOOF_LEDGER, {
+    icrc1_metadata: () => [
+      ["icrc1:symbol", { tag: "Text", value: "\u202ePCI" }],
+      ["icrc1:decimals", { tag: "Nat", value: 8n }],
+    ],
+  })
   const config = readConfig({ B3WALLET_ID: WALLET, B3WALLET_NETWORK: "local" })
   const tools = new Map(walletTools(client, config).map((tool) => [tool.name, tool]))
   const run = (name: string, args: Record<string, unknown> = {}) => {
@@ -294,7 +302,7 @@ test("a transfer is proposed in base units of the account's token, and waits", a
     },
   ])
   assert.equal(result.action, "1")
-  assert.equal(result.what, `Send 1.5 ICP from account 1 (“main”) to ${FRIEND}, memo 72656e74`)
+  assert.equal(result.what, `Send 1.5 ICP from account 1 (“main”) to ${FRIEND}, memo “rent”`)
   assert.equal(result.state, "Waiting for approvals: 0 of 1")
   assert.equal(result.proposed_by, "you")
   assert.equal(result.base_units, "150000000")
@@ -401,12 +409,31 @@ test("a transfer takes the wallet's own account names, by the names rule", async
   client.dispose()
 })
 
+test("an amount may carry the token's symbol, and a memo is text or 0x and hex", async () => {
+  const { client, run, proposals } = setUp({ member: true })
+  const propose = async (args: Record<string, unknown>) =>
+    JSON.parse(await run("wallet_propose_transfer", { from: 1, to: FRIEND, ...args }))
+  const withSymbol = await propose({ amount: "1.5 icp" })
+  assert.equal((proposals.at(-1) as { value: { amount: bigint } }).value.amount, 150_000_000n)
+  assert.equal(withSymbol.what, `Send 1.5 ICP from account 1 (“main”) to ${FRIEND}`)
+  // Bytes that are not text without control characters are shown as hex, as the memo argument takes them.
+  const bytes = await propose({ amount: "1", memo: "0x0a0b" })
+  assert.deepEqual(
+    (proposals.at(-1) as { value: { memo: Uint8Array } }).value.memo,
+    new Uint8Array([0x0a, 0x0b]),
+  )
+  assert.equal(bytes.what, `Send 1 ICP from account 1 (“main”) to ${FRIEND}, memo 0x0a0b`)
+  client.dispose()
+})
+
 test("an amount the token cannot hold is refused before anything is proposed", async () => {
   const { client, run, proposals } = setUp({ member: true })
   for (const [amount, reason] of [
     ["0.123456789", /amount: /],
     ["-1", /amount: /],
     ["1e3", /amount: /],
+    ["1,5", /amount: cannot read "1,5" as an amount/],
+    ["1.5 ckBTC", /amount: the symbol "ckBTC" is not this token's symbol "ICP"/],
     ["0", /amount is zero/],
   ] as const) {
     await assert.rejects(
@@ -420,7 +447,11 @@ test("an amount the token cannot hold is refused before anything is proposed", a
   )
   await assert.rejects(
     run("wallet_propose_transfer", { from: 1, to: FRIEND, amount: "1", memo: "x".repeat(33) }),
-    /memo is 33 bytes/,
+    /memo: the value is 33 bytes after encoding but at most 32 are allowed/,
+  )
+  await assert.rejects(
+    run("wallet_propose_transfer", { from: 1, asset: SPOOF_LEDGER, to: FRIEND, amount: "1" }),
+    new RegExp(`this server cannot send the ICRC-1 token of ledger ${SPOOF_LEDGER}`),
   )
   await assert.rejects(
     run("wallet_propose_transfer", { from: 1, to: " ", amount: "1" }),
