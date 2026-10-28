@@ -1,5 +1,6 @@
 import { isReactorError, type ReactorError } from "@ic-reactor/core"
 import { AgentError, CertifiedRejectErrorCode } from "@icp-sdk/core/agent"
+import { displayBytes } from "@meantjs/format"
 import type {
   Account,
   AccountKind,
@@ -163,7 +164,7 @@ export function actionText(
 export function actionDetails(action: Action): string[] {
   switch (action.tag) {
     case "Transfer":
-      return action.value.memo === null ? [] : [`Memo: ${hexOf(action.value.memo)}.`]
+      return action.value.memo === null ? [] : [`Memo: ${memoText(action.value.memo)}.`]
     case "InstallExtension": {
       const { granted, budgets } = action.value
       if (granted.length === 0 && budgets.length === 0) return ["It is granted nothing."]
@@ -226,6 +227,17 @@ const KIND_TEXT: Record<ActionKind["tag"], string> = {
   UninstallExtension: "Uninstalling an extension",
   SetPolicy: "Changing the policy",
   Upgrade: "An upgrade",
+}
+
+/**
+ * A memo as @meantjs/format shows bytes it reads as UTF-8 (decision 0013):
+ * the text, quoted, when it is text without control or invisible characters,
+ * and otherwise 0x and its hex. An agent writes its memo as text, so the
+ * owner reads that text here, as the agent's own tools show it.
+ */
+function memoText(memo: Uint8Array): string {
+  const shown = displayBytes(memo, { encoding: "utf8" })
+  return shown === displayBytes(memo, { encoding: "hex" }) ? shown : `“${shown}”`
 }
 
 function hexOf(bytes: Uint8Array): string {

@@ -3,7 +3,8 @@
 // wallet would refuse a proposer that tried: every transfer the agent
 // proposes waits for an owner or an approver on the wallet's Approvals page.
 import { isPrincipal, principal } from "@candid-core/schema"
-import { formatUnits, isReactorError, parseUnits, type Client } from "@ic-reactor/core"
+import { isReactorError, type Client } from "@ic-reactor/core"
+import { displayAmount, displayBytes, parseAmount, parseBytes, resolveName } from "@meantjs/format"
 import { actor as ledgerActor, type Actor as Ledger } from "./generated/icrc1.ts"
 import {
   actor as walletActor,
@@ -125,19 +126,6 @@ export function assetArg(named: string | undefined, account: Account): Chain {
 }
 
 /**
- * A name as candid-profile's names rule (decision D-045) compares it: NFKC,
- * lowercase, whitespace runs made one space, trimmed. Nothing else is
- * stripped: "my" and "the" are the agent's to drop.
- */
-export function normalizeName(text: string): string {
-  return text
-    .normalize("NFKC")
-    .toLowerCase()
-    .replace(/\p{White_Space}+/gu, " ")
-    .trim()
-}
-
-/**
  * Whether `text` reads as an address, which is never looked up as a name: a
  * principal, an ICRC-1 account in its text form, a Bitcoin address or an EVM
  * address. A label that reads as one never matches either.
@@ -154,35 +142,39 @@ export function isAddress(text: string): boolean {
 }
 
 /**
- * The one account named `name` (D-045: a name matches after normalizeName;
- * exactly one match, or a refusal that tells the agent to ask). `kinds`
- * narrows the accounts first, as an asset does: "Main" names one ICP account
- * even when the Bitcoin and EVM accounts are also called "Main".
+ * The one account named `name`, by Meant's names rule (`resolveName` of
+ * @meantjs/format, decision D-045 of the profile spec): names compare after
+ * NFKC, lowercase and whitespace runs made one space, an address is never a
+ * name, and it takes exactly one match, or a refusal that tells the agent to
+ * ask. `kinds` narrows the accounts first, as an asset does: "Main" names one
+ * ICP account even when the Bitcoin and EVM accounts are also called "Main".
  */
 export function accountNamed(
   accounts: readonly Account[],
   name: string,
   kinds?: readonly AccountKind["tag"][],
 ): Account {
-  const want = normalizeName(name)
-  const named = accounts.filter(
-    (account) =>
-      !isAddress(account.label) &&
-      normalizeName(account.label) === want &&
-      (kinds === undefined || kinds.includes(account.kind.tag)),
+  const found = resolveName(
+    accounts.map((account) => ({ name: account.label, value: account, kind: account.kind.tag })),
+    name,
+    {
+      isValue: isAddress,
+      kind: (kind) => kinds === undefined || kinds.includes(kind as AccountKind["tag"]),
+    },
   )
-  if (want === "" || named.length === 0) {
+  // An address is a value, never a name: it names no account, and neither does a label that reads as one.
+  if ("entry" in found) return found.entry.value
+  if ("error" in found && found.error === "ambiguous") {
+    const which = found.entries
+      .map(({ value: account }) => `${account.id}, ${kindText(account.kind)}`)
+      .join("; ")
     throw new InvalidArguments(
-      `no account is named “${name}”; wallet_accounts lists their ids and labels`,
+      `${found.entries.length} accounts are named “${name}” (${which}): ask the person which one, then pass its id`,
     )
   }
-  if (named.length > 1) {
-    const which = named.map((account) => `${account.id}, ${kindText(account.kind)}`).join("; ")
-    throw new InvalidArguments(
-      `${named.length} accounts are named “${name}” (${which}): ask the person which one, then pass its id`,
-    )
-  }
-  return named[0]!
+  throw new InvalidArguments(
+    `no account is named “${name}”; wallet_accounts lists their ids and labels`,
+  )
 }
 
 /** The account kinds that can send an asset named as `assetArg` reads it. */
@@ -257,6 +249,25 @@ export function eventText(event: AuditEvent): string {
   }
 }
 
+/**
+ * A memo as @meantjs/format shows bytes it reads as UTF-8: the text, quoted,
+ * when it is text without control or invisible characters, and otherwise 0x
+ * and its hex, which is also how the memo argument takes such bytes.
+ */
+export function memoText(memo: Uint8Array): string {
+  const shown = displayBytes(memo, { encoding: "utf8" })
+  return shown === displayBytes(memo, { encoding: "hex" }) ? shown : `“${shown}”`
+}
+
+/** What `parse` returns, or the argument's refusal: `amount: …` with @meantjs/format's reason. */
+function read<T>(name: string, parse: () => T): T {
+  try {
+    return parse()
+  } catch (error) {
+    throw new InvalidArguments(`${name}: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
 /** A string argument with its whitespace trimmed, or undefined when absent. */
 function text(args: Record<string, unknown>, name: string): string | undefined {
   const value = args[name]
@@ -322,7 +333,15 @@ function tools(client: Client, config: Config): Tool[] {
             if (symbol?.tag !== "Text" || decimals?.tag !== "Nat" || decimals.value > 255n) {
               return undefined
             }
-            return { symbol: symbol.value, decimals: Number(decimals.value) }
+            const token = { symbol: symbol.value, decimals: Number(decimals.value) }
+            // A symbol @meantjs/format refuses (empty, over 32 characters, or with control or
+            // invisible characters, such as a bidirectional override) is shown nowhere.
+            try {
+              displayAmount(0n, token)
+            } catch {
+              return undefined
+            }
+            return token
           })
           // A failed read is tried again next time.
           token.catch(() => tokens.delete(id))
@@ -334,7 +353,7 @@ function tools(client: Client, config: Config): Tool[] {
   }
 
   const amountText = (amount: bigint, token: Token | undefined) =>
-    token ? `${formatUnits(amount, token.decimals)} ${token.symbol}` : `${amount} base units`
+    token ? displayAmount(amount, token) : `${amount} base units`
 
   const accountOf = async (id: number): Promise<Account> => {
     const account = (await wallet.accounts()).find((account) => account.id === id)
@@ -356,7 +375,7 @@ function tools(client: Client, config: Config): Tool[] {
             : sent?.tag === "Evm"
               ? `, at most ${amountText(fee, token)} in fees`
               : `, fee ${amountText(fee, token)}`,
-          memo === null ? "" : `, memo ${Buffer.from(memo).toString("hex")}`,
+          memo === null ? "" : `, memo ${memoText(memo)}`,
         ].join("")
         return `Send ${amountText(amount, token)} from ${source} to ${to}${extras}`
       }
@@ -619,11 +638,11 @@ function tools(client: Client, config: Config): Tool[] {
           amount: {
             type: "string",
             description:
-              "The amount in the token's own units as decimal text, such as “1.5” for 1.5 ICP. The ledger's or the chain's fee comes on top.",
+              "The amount in the token's own units as decimal text, such as “1.5” or “1.5 ICP” for 1.5 ICP; a symbol, if given, must be the token's. More decimal places than the token has are refused, never rounded. The ledger's or the chain's fee comes on top.",
           },
           memo: {
             type: "string",
-            description: `A note of at most ${MAX_MEMO_BYTES} bytes of UTF-8 that the ledger records. Not for Bitcoin or an EVM chain.`,
+            description: `A note of at most ${MAX_MEMO_BYTES} bytes that the ledger records: text, stored as UTF-8, or 0x and hex digits for other bytes. Not for Bitcoin or an EVM chain.`,
           },
         },
         required: ["from", "to", "amount"],
@@ -654,22 +673,13 @@ function tools(client: Client, config: Config): Tool[] {
           names.push(`to “${to}” is account ${own.id}, ${own.address}`)
           to = own.address
         }
-        let amount: bigint
-        try {
-          amount = parseUnits(text(args, "amount") ?? "", token.decimals)
-        } catch (error) {
-          throw new InvalidArguments(
-            `amount: ${error instanceof Error ? error.message : String(error)}`,
-          )
-        }
+        // Exact, by @meantjs/format: more digits than the token has are refused, never rounded.
+        const amount = BigInt(read("amount", () => parseAmount(text(args, "amount") ?? "", token)))
         if (amount === 0n) throw new InvalidArguments("amount is zero")
         const note = text(args, "memo")
-        const memo = note ? new TextEncoder().encode(note) : null
-        if (memo && memo.length > MAX_MEMO_BYTES) {
-          throw new InvalidArguments(
-            `memo is ${memo.length} bytes, and at most ${MAX_MEMO_BYTES} fit`,
-          )
-        }
+        const memo = note
+          ? read("memo", () => parseBytes(note, { encoding: "utf8", maxLen: MAX_MEMO_BYTES }))
+          : null
         const action: Action = {
           tag: "Transfer",
           value: { from: account.id, asset, to, amount, fee: null, memo },

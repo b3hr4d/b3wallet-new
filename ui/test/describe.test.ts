@@ -258,18 +258,18 @@ test("an action shows what it sets beyond its sentence", () => {
     }),
     ["The new version's Wasm has the SHA-256 0001abff."],
   )
-  const memo: Action = {
+  // A memo of text, as an agent writes one, reads as that text; other bytes,
+  // and text that would read as other than its bytes (a right-to-left
+  // override, or text that starts with 0x), show as 0x and hex.
+  const withMemo = (memo: Uint8Array): Action => ({
     tag: "Transfer",
-    value: {
-      from: 1,
-      asset: null,
-      to: owner,
-      amount: 1n,
-      fee: null,
-      memo: new Uint8Array([0x0a, 0x0b]),
-    },
-  }
-  assert.deepEqual(actionDetails(memo), ["Memo: 0a0b."])
+    value: { from: 1, asset: null, to: owner, amount: 1n, fee: null, memo },
+  })
+  const utf8 = (text: string) => new TextEncoder().encode(text)
+  assert.deepEqual(actionDetails(withMemo(new Uint8Array([0x0a, 0x0b]))), ["Memo: 0x0a0b."])
+  assert.deepEqual(actionDetails(withMemo(utf8("rent for May"))), ["Memo: “rent for May”."])
+  assert.deepEqual(actionDetails(withMemo(utf8("\u202ePCI"))), ["Memo: 0xe280ae504349."])
+  assert.deepEqual(actionDetails(withMemo(utf8("0x41"))), ["Memo: 0x30783431."])
   assert.deepEqual(actionDetails(transfer.action), [])
   assert.deepEqual(actionDetails({ tag: "RemoveMember", value: owner }), [])
 })

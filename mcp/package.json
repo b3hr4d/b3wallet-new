@@ -19,7 +19,8 @@
     "@candid-core/cli": "0.3.0",
     "@candid-core/schema": "0.4.0",
     "@ic-reactor/core": "4.0.0-beta.6",
-    "@icp-sdk/core": "6.1.1"
+    "@icp-sdk/core": "6.1.1",
+    "@meantjs/format": "0.1.0"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
