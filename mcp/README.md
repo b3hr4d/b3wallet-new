@@ -80,12 +80,23 @@ To see the agent's principal yourself, import its key into icp-cli:
 | `wallet_activity`         | The audit log, newest first: who proposed, approved, ran or rejected what        |
 | `wallet_pending`          | The open actions, who proposed them, and where each stands                       |
 | `wallet_requests`         | The owners' open requests: what they ask the agent to do, in their own words     |
+| `wallet_propose_terms`    | Writes the terms the agent reads in a request, for an owner to confirm           |
 | `wallet_propose_transfer` | Proposes a transfer of a decimal amount, which waits for an owner or an approver |
 
 A transfer names the owner's request it answers, so the wallet's guard checks
 it against the owner's own words on the Approvals page
 ([decision 0012](../docs/decisions/0012-guard-in-wallet.md)); one that names no
 request is shown as not checked.
+
+Before it answers a request, the agent writes the terms it reads there with
+`wallet_propose_terms`: the token, who is paid, the most and the latest time
+the transfer may be sent ([decision 0014](../docs/decisions/0014-confirmed-terms.md)).
+The server reads them with `@meantjs/consent/terms` as the owner's page will,
+refuses a draft that cannot be read before it is written, with why, and
+returns the words the owner will see. An owner confirms them, or says no, on
+the Approvals page. Until an owner confirms them the wallet refuses a
+transfer for the request, and `wallet_propose_transfer` refuses one outside
+them, with the reasons, as the Approvals page would offer no Approve for it.
 
 Its `from` and `to` also take the label of one of the wallet's own accounts,
 by the profile spec's names rule (decision D-045 there), which the server

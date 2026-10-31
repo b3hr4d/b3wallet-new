@@ -1,7 +1,8 @@
 import { useClient } from "@ic-reactor/react"
-import { useQuery } from "@tanstack/react-query"
+import { useQueries, useQuery } from "@tanstack/react-query"
 import { actor as ledgerActor, type Actor as Ledger } from "../generated/icrc1.ts"
 import type { Chain } from "../generated/wallet.ts"
+import type { LedgerToken } from "../logic/terms.ts"
 import {
   bitcoinToken,
   evmToken,
@@ -36,4 +37,31 @@ export function useToken(chain: Chain | undefined): TokenRead {
   return token
     ? { token }
     : { error: new Error("The token's ledger does not say its symbol and decimals.") }
+}
+
+/**
+ * The tokens terms may name (decision 0014): those of the ledgers among
+ * `assets`, ICP and each tracked ICRC-1 token, as each ledger's metadata
+ * describes it, once every ledger has answered; undefined until then. A
+ * ledger that could not be read, or that does not say its symbol and
+ * decimals, is left out.
+ */
+export function useLedgerTokens(assets: readonly Chain[] | undefined): LedgerToken[] | undefined {
+  const client = useClient()
+  const ledgers = (assets ?? []).flatMap((asset) => ledgerOf(asset) ?? [])
+  const reads = useQueries({
+    queries: ledgers.map((id) => ({
+      ...client.queryOptions(
+        client.canister<Ledger>(ledgerActor, { id, certified: true }),
+        "icrc1_metadata",
+      ),
+      staleTime: Infinity,
+    })),
+  })
+  if (assets === undefined || reads.some((read) => read.isPending)) return undefined
+  return ledgers.flatMap((ledger, index) => {
+    const metadata = reads[index]?.data
+    const token = metadata && tokenOf(metadata)
+    return token ? [{ ledger, token }] : []
+  })
 }

@@ -122,11 +122,12 @@ checks the rules still refuse what they should.
 ## Performance
 
 11. **Every file has a budget.** The build stops when `app.js` is over
-    560,000 bytes, `app.css` over 46,000 or a page over 20,000. A member
+    600,000 bytes, `app.css` over 46,000 or a page over 20,000. A member
     downloads all of `app.js` on every visit, uncompressed unless the
     gateway compresses it, and the wallet serves a file of 2,000,000 bytes
     or more only in certified ranges. Raising a budget is a decision for the
-    review of the change that needs it.
+    review of the change that needs it: `app.js` went from 560,000 to
+    600,000 with the confirmed terms ([decision 0014](decisions/0014-confirmed-terms.md)).
 12. **The page shows before its script runs.** Each page is its prerendered
     HTML, one stylesheet and one module script, which the browser runs after
     parsing the page. Nothing else loads; the next request is the app's

@@ -494,6 +494,8 @@ fn before_the_claim_only_the_public_methods_answer() {
                 "audit_log",
                 "balance",
                 "close_request",
+                "confirm_terms",
+                "decline_terms",
                 "execute",
                 "guard_check",
                 "guard_load",
@@ -504,8 +506,10 @@ fn before_the_claim_only_the_public_methods_answer() {
                 "policy",
                 "propose",
                 "propose_for",
+                "propose_terms",
                 "reject",
                 "release_available",
+                "request",
                 "request_join",
                 "requests",
                 "track_asset",
@@ -537,6 +541,8 @@ fn a_non_member_is_refused_by_every_method_for_members() {
                 "audit_log",
                 "balance",
                 "close_request",
+                "confirm_terms",
+                "decline_terms",
                 "execute",
                 "guard_check",
                 "guard_load",
@@ -547,8 +553,10 @@ fn a_non_member_is_refused_by_every_method_for_members() {
                 "policy",
                 "propose",
                 "propose_for",
+                "propose_terms",
                 "reject",
                 "release_available",
+                "request",
                 "requests",
                 "track_asset",
                 "untrack_asset",
@@ -1104,6 +1112,10 @@ fn a_wallet_from_the_previous_release_upgrades_to_this_one() {
         });
         propose(&pic, id, owner, transfer).unwrap()
     });
+    // An owner's request, where the previous release takes them (decision 0012).
+    let asked = ask(&pic, id, owner, "Send 1 ICP to my friend")
+        .ok()
+        .map(|reply| reply.unwrap());
 
     upgrade(&pic, id, &WalletArg::Upgrade(None)).unwrap();
     assert!(status(&pic, id).claimed);
@@ -1143,6 +1155,20 @@ fn a_wallet_from_the_previous_release_upgrades_to_this_one() {
             assert_eq!(assets(&pic, id, owner), [Chain::Icp, Chain::Evm(ETHEREUM)]);
             assert_eq!(pending(&pic, id, owner), std::slice::from_ref(&open));
         }
+    }
+    // A request the previous release wrote reads with no terms, and takes them (decision 0014).
+    if let Some(asked) = asked {
+        let request = asked.id;
+        assert_eq!(asked.terms, None);
+        assert_eq!(requests(&pic, id, owner), [asked]);
+        let draft = wallet::TermsDraft {
+            token: "ICP".to_string(),
+            to: user(9).to_text(),
+            max_amount: "1".to_string(),
+            expires_by: "30 days".to_string(),
+        };
+        let terms = propose_terms(&pic, id, owner, request, &draft).unwrap();
+        assert_eq!(terms.unwrap().terms.map(|terms| terms.version), Some(1));
     }
     let executed = act(&pic, id, owner, "execute", open.id).unwrap();
     assert_eq!(executed.state, ActionState::Executed(Outcome::Done));
@@ -4322,6 +4348,289 @@ fn requests_are_the_owners_words() {
             (Some(agent), AuditEvent::Proposed(second.id)),
             (Some(owner), AuditEvent::RequestClosed(request.id)),
         ]
+    );
+}
+
+fn propose_terms(
+    pic: &PocketIc,
+    id: Principal,
+    caller: Principal,
+    request: u64,
+    draft: &wallet::TermsDraft,
+) -> Result<Result<wallet::Request, WalletError>, RejectResponse> {
+    pic.update_call(
+        id,
+        caller,
+        "propose_terms",
+        encode_args((request, draft)).unwrap(),
+    )
+    .map(|reply| decode_one(&reply).unwrap())
+}
+
+fn confirm_terms(
+    pic: &PocketIc,
+    id: Principal,
+    caller: Principal,
+    request: u64,
+    args: &wallet::ConfirmTermsArgs,
+) -> Result<Result<wallet::Request, WalletError>, RejectResponse> {
+    pic.update_call(
+        id,
+        caller,
+        "confirm_terms",
+        encode_args((request, args)).unwrap(),
+    )
+    .map(|reply| decode_one(&reply).unwrap())
+}
+
+fn decline_terms(
+    pic: &PocketIc,
+    id: Principal,
+    caller: Principal,
+    request: u64,
+    version: u32,
+) -> Result<Result<wallet::Request, WalletError>, RejectResponse> {
+    pic.update_call(
+        id,
+        caller,
+        "decline_terms",
+        encode_args((request, version)).unwrap(),
+    )
+    .map(|reply| decode_one(&reply).unwrap())
+}
+
+/// What the wallet's page sends when an owner confirms version `version`. The wallet does not read the terms (the
+/// page does, with @meantjs/consent/terms); it checks that the id is their SHA-256, in lowercase hex.
+fn confirmation(version: u32) -> wallet::ConfirmTermsArgs {
+    wallet::ConfirmTermsArgs {
+        version,
+        terms: r#"{"amount":{"unlimited":false,"units":"100000000"},"symbol":"ICP"}"#.to_string(),
+        id: "b774f7be466c30870c3f9c28119dbfa1ef14a9e92c2c47848fb6ea08b3622589".to_string(),
+        text: "The friend may be sent at most 1 ICP, until the end of 30 November 2026 (UTC)."
+            .to_string(),
+    }
+}
+
+/// Terms come before the transfer (decision 0014): the agent writes the terms it reads in the owner's request, an
+/// owner confirms them or says no, and only a request whose terms are confirmed takes a transfer. Once one answers
+/// it, the terms are fixed. The agent can neither confirm terms nor answer a request around them.
+#[test]
+fn terms_come_before_the_transfer() {
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    let (agent, viewer) = (user(30), user(31));
+    run_at_once(&pic, id, owner, add_member_action(agent, Role::Proposer));
+    run_at_once(&pic, id, owner, add_member_action(viewer, Role::Viewer));
+    let friend = LedgerAccount::from(user(20));
+    let draft = wallet::TermsDraft {
+        token: " ICP ".to_string(),
+        to: friend.to_string(),
+        max_amount: "1".to_string(),
+        expires_by: "2026-11-30".to_string(),
+    };
+    let request = ask(
+        &pic,
+        id,
+        owner,
+        &format!("Send at most 1 ICP to {friend} this month"),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(request.terms, None);
+    let before = audit(&pic, id, owner).len();
+
+    let refused = propose_terms(&pic, id, viewer, request.id, &draft).unwrap_err();
+    assert!(
+        refused.reject_message.contains(NOT_A_PROPOSER),
+        "{refused:?}"
+    );
+    let empty = wallet::TermsDraft {
+        max_amount: " ".to_string(),
+        ..draft.clone()
+    };
+    assert!(matches!(
+        propose_terms(&pic, id, agent, request.id, &empty).unwrap(),
+        Err(WalletError::InvalidArgument(_))
+    ));
+    let first = propose_terms(&pic, id, agent, request.id, &draft)
+        .unwrap()
+        .unwrap()
+        .terms
+        .unwrap();
+    assert_eq!(
+        (first.draft.token.as_str(), first.version, first.drafted_by),
+        ("ICP", 1, agent)
+    );
+    assert_eq!((first.confirmed, first.declined), (None, None));
+    assert_eq!(
+        propose_for(&pic, id, agent, request.id, transfer_action(1, friend, E8S)),
+        Err(WalletError::Forbidden(format!(
+            "the terms of request {} wait for an owner to confirm them",
+            request.id
+        )))
+    );
+
+    let refused = confirm_terms(&pic, id, agent, request.id, &confirmation(1)).unwrap_err();
+    assert!(refused.reject_message.contains(NOT_AN_OWNER), "{refused:?}");
+    let refused = decline_terms(&pic, id, agent, request.id, 1).unwrap_err();
+    assert!(refused.reject_message.contains(NOT_AN_OWNER), "{refused:?}");
+    assert_eq!(
+        confirm_terms(&pic, id, owner, request.id, &confirmation(2)).unwrap(),
+        Err(WalletError::Forbidden(format!(
+            "the terms of request {} are at version 1, not 2: read them again",
+            request.id
+        )))
+    );
+    let mut forged = confirmation(1);
+    forged.terms = forged.terms.replace("100000000", "200000000");
+    assert_eq!(
+        confirm_terms(&pic, id, owner, request.id, &forged).unwrap(),
+        Err(WalletError::InvalidArgument(
+            "id is not the SHA-256 of the terms, in lowercase hex".to_string()
+        ))
+    );
+
+    let declined = decline_terms(&pic, id, owner, request.id, 1)
+        .unwrap()
+        .unwrap()
+        .terms
+        .unwrap();
+    assert_eq!(declined.declined.map(|no| no.by), Some(owner));
+    assert_eq!(
+        propose_for(&pic, id, agent, request.id, transfer_action(1, friend, E8S)),
+        Err(WalletError::Forbidden(format!(
+            "an owner said no to the terms of request {}; propose terms again",
+            request.id
+        )))
+    );
+    assert_eq!(
+        confirm_terms(&pic, id, owner, request.id, &confirmation(1)).unwrap(),
+        Err(WalletError::Forbidden(format!(
+            "an owner already said no to version 1 of the terms of request {}",
+            request.id
+        )))
+    );
+
+    let second = propose_terms(&pic, id, agent, request.id, &draft)
+        .unwrap()
+        .unwrap()
+        .terms
+        .unwrap();
+    assert_eq!((second.version, second.declined), (2, None));
+    let confirmed = confirm_terms(&pic, id, owner, request.id, &confirmation(2))
+        .unwrap()
+        .unwrap()
+        .terms
+        .unwrap()
+        .confirmed
+        .unwrap();
+    assert_eq!(
+        (confirmed.terms, confirmed.id, confirmed.by),
+        (confirmation(2).terms, confirmation(2).id, owner)
+    );
+    assert_eq!(
+        confirm_terms(&pic, id, owner, request.id, &confirmation(2)).unwrap(),
+        Err(WalletError::Forbidden(format!(
+            "version 2 of the terms of request {} is already confirmed",
+            request.id
+        )))
+    );
+
+    let answer = propose_for(&pic, id, agent, request.id, transfer_action(1, friend, E8S)).unwrap();
+    assert_eq!(answer.request, Some(request.id));
+    let fixed = Err(WalletError::Forbidden(format!(
+        "request {} has an answer, so its terms are fixed",
+        request.id
+    )));
+    assert_eq!(
+        propose_terms(&pic, id, agent, request.id, &draft).unwrap(),
+        fixed
+    );
+    assert_eq!(
+        decline_terms(&pic, id, owner, request.id, 2).unwrap(),
+        fixed
+    );
+
+    // Every member reads a request, open or closed, with its terms.
+    let read = |caller| -> Result<wallet::Request, WalletError> {
+        let reply = pic
+            .query_call(id, caller, "request", encode_one(request.id).unwrap())
+            .unwrap();
+        decode_one(&reply).unwrap()
+    };
+    let shown = read(viewer).unwrap();
+    assert_eq!(shown.terms.as_ref().map(|terms| terms.version), Some(2));
+    assert_eq!(requests(&pic, id, agent), [shown]);
+    let missing = pic
+        .query_call(id, agent, "request", encode_one(99_u64).unwrap())
+        .unwrap();
+    assert_eq!(
+        decode_one::<Result<wallet::Request, WalletError>>(&missing).unwrap(),
+        Err(WalletError::NotFound("request 99".to_string()))
+    );
+    assert_eq!(
+        audit_since(&pic, id, owner, before),
+        [
+            (Some(agent), AuditEvent::TermsProposed(request.id)),
+            (Some(owner), AuditEvent::TermsDeclined(request.id)),
+            (Some(agent), AuditEvent::TermsProposed(request.id)),
+            (Some(owner), AuditEvent::TermsConfirmed(request.id)),
+            (Some(agent), AuditEvent::Proposed(answer.id)),
+        ]
+    );
+
+    // A request takes at most three drafts, and a closed one none.
+    let other = ask(&pic, id, owner, "Send 1 ICP to my friend")
+        .unwrap()
+        .unwrap();
+    for _ in 0..3 {
+        propose_terms(&pic, id, agent, other.id, &draft)
+            .unwrap()
+            .unwrap();
+    }
+    assert_eq!(
+        propose_terms(&pic, id, agent, other.id, &draft).unwrap(),
+        Err(WalletError::Forbidden(format!(
+            "request {} has had 3 drafts of terms; ask the owner to write a new request",
+            other.id
+        )))
+    );
+    let _: Result<wallet::Request, WalletError> =
+        update(&pic, id, owner, "close_request", &other.id);
+    assert_eq!(
+        propose_terms(&pic, id, agent, other.id, &draft).unwrap(),
+        Err(WalletError::Forbidden(format!(
+            "request {} is closed",
+            other.id
+        )))
+    );
+    // A confirmed draft can still be refused while no transfer answers its request, and a new draft drops a yes.
+    let third = ask(&pic, id, owner, "Send 1 ICP to my friend")
+        .unwrap()
+        .unwrap();
+    propose_terms(&pic, id, agent, third.id, &draft)
+        .unwrap()
+        .unwrap();
+    confirm_terms(&pic, id, owner, third.id, &confirmation(1))
+        .unwrap()
+        .unwrap();
+    let redrafted = propose_terms(&pic, id, agent, third.id, &draft)
+        .unwrap()
+        .unwrap()
+        .terms
+        .unwrap();
+    assert_eq!((redrafted.version, redrafted.confirmed), (2, None));
+    confirm_terms(&pic, id, owner, third.id, &confirmation(2))
+        .unwrap()
+        .unwrap();
+    let refused = decline_terms(&pic, id, owner, third.id, 2)
+        .unwrap()
+        .unwrap()
+        .terms
+        .unwrap();
+    assert_eq!(
+        (refused.confirmed, refused.declined.map(|no| no.by)),
+        (None, Some(owner))
     );
 }
 

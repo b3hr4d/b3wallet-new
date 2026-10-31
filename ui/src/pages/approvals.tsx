@@ -22,6 +22,7 @@ import { GuardLine, Requests } from "../parts/guard.tsx"
 import { CheckIcon } from "../parts/icons.tsx"
 import { AsMember, Reading } from "../parts/member.tsx"
 import { useNowNs } from "../parts/now.ts"
+import { TermsLine, termsAllow, useTermsCheck } from "../parts/terms.tsx"
 
 /**
  * The approvals page: every open action, with what each member may do about
@@ -129,6 +130,9 @@ function OpenAction({
   const owner = me.role.tag === "Owner"
   const approves = owner || me.role.tag === "Approver"
   const approved = pending.approvals.includes(me.id)
+  // A transfer outside the terms an owner confirmed is offered no Approve and no Run (decision 0014).
+  const terms = useTermsCheck({ wallet, pending, from, accounts, now, active: approves })
+  const allowed = termsAllow(terms)
   return (
     <li className="item">
       <p className="item-head">
@@ -145,6 +149,7 @@ function OpenAction({
         </ul>
       )}
       {approves && <GuardLine wallet={wallet} pending={pending} me={me} />}
+      <TermsLine check={terms} />
       {join && (
         <>
           <p className="quiet">Approve it only if the device that asks shows this code:</p>
@@ -163,12 +168,12 @@ function OpenAction({
       </p>
       <p className="quiet">Open until {dateOf(pending.expires_at_ns)}.</p>
       <div className="buttons">
-        {state.tag === "Waiting" && approves && !approved && (
+        {state.tag === "Waiting" && approves && !approved && allowed && (
           <button type="button" className="primary" disabled={busy} onClick={onApprove}>
             Approve
           </button>
         )}
-        {approves && canRun(pending, now) && (
+        {approves && allowed && canRun(pending, now) && (
           <button type="button" className="primary" disabled={busy} onClick={onExecute}>
             Run it
           </button>

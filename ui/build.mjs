@@ -91,7 +91,9 @@ const PACKAGES = [
   "@icp-sdk/auth",
   "@icp-sdk/core",
   "@icp-sdk/signer",
+  "@meantjs/consent",
   "@meantjs/format",
+  "@meantjs/profile",
   "@noble/curves",
   "@noble/hashes",
   "@tanstack/query-core",
@@ -180,7 +182,7 @@ if (names.join() !== expected.join()) {
 // visit, uncompressed unless the gateway compresses it, and the wallet serves
 // a file of 2,000,000 bytes or more only in certified ranges. Raising a budget
 // is a decision for the review of the change that needs it.
-const BUDGET = { "app.js": 560_000, "app.css": 46_000, page: 20_000 }
+const BUDGET = { "app.js": 600_000, "app.css": 46_000, page: 20_000 }
 for (const { file, bytes } of files) {
   const budget = BUDGET[file] ?? BUDGET.page
   if (bytes.length > budget) {

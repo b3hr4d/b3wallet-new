@@ -266,6 +266,57 @@ type Request = record {
   open : bool;
   // The actions proposed for it, oldest first.
   answers : vec ActionId;
+  // The terms the agent read in it, and what an owner said to them
+  // (decision 0014).
+  terms : opt RequestTerms;
+};
+
+// The terms an agent reads in an owner's request (decision 0014): the token,
+// who is paid, the most and the latest time the transfer may be sent, in the
+// agent's words. The wallet's own page reads them with
+// @meantjs/consent/terms and shows them to the owners in words.
+type TermsDraft = record {
+  // A token's symbol: ICP, or a tracked ICRC-1 token's.
+  token : text;
+  // An ICRC-1 account in its text form, or the label of one of the wallet's
+  // own Internet Computer accounts.
+  to : text;
+  // The most, in tokens, such as "1.5"; "unlimited" only where the owner
+  // plainly allows any amount.
+  max_amount : text;
+  // A date as YYYY-MM-DD (the whole day counts), a length of time from when
+  // the terms were written, such as "30 days" or "2 hours", or "never" only
+  // where the owner plainly allows no end.
+  expires_by : text;
+};
+
+// An owner's yes to a draft, as the wallet's page wrote it.
+type TermsConfirmation = record {
+  // The terms as @meantjs/consent/terms read them, as JSON (RFC 8785).
+  terms : text;
+  // The SHA-256 of `terms` in lowercase hex: the id the library gives them.
+  id : text;
+  // The words the owner confirmed.
+  text : text;
+  by : principal;
+  at_ns : nat64;
+};
+
+type RequestTerms = record {
+  draft : TermsDraft;
+  // 1 for a request's first draft, then one more for each new draft.
+  version : nat32;
+  drafted_by : principal;
+  drafted_at_ns : nat64;
+  confirmed : opt TermsConfirmation;
+  declined : opt record { by : principal; at_ns : nat64 };
+};
+
+type ConfirmTermsArgs = record {
+  version : nat32;
+  terms : text;
+  id : text;
+  text : text;
 };
 
 // ---- Extensions -------------------------------------------------------------
@@ -360,6 +411,10 @@ type AuditEvent = variant {
   RequestClosed : RequestId;
   // The guard file's model release, loaded by an owner.
   GuardLoaded : text;
+  // Terms written for a request, confirmed by an owner, or refused by one.
+  TermsProposed : RequestId;
+  TermsConfirmed : RequestId;
+  TermsDeclined : RequestId;
 };
 
 type AuditEntry = record {
@@ -556,7 +611,19 @@ service : (WalletArg) -> {
   // first; owners close one when no transfer should answer it any more.
   ask : (text) -> (RequestResult);
   requests : () -> (RequestsResult) query;
+  // One request, open or closed.
+  request : (RequestId) -> (RequestResult) query;
   close_request : (RequestId) -> (RequestResult);
+
+  // Terms (decision 0014). A proposer or an owner writes the terms it reads
+  // in an open request that no transfer answers yet, at most three drafts a
+  // request; a draft replaces the one before and what the owners said to it.
+  // Owners confirm a draft by its version on the wallet's own page, or say
+  // no to it. A request whose terms are not confirmed takes no transfer, and
+  // once a transfer answers it, its terms are fixed.
+  propose_terms : (RequestId, TermsDraft) -> (RequestResult);
+  confirm_terms : (RequestId, ConfirmTermsArgs) -> (RequestResult);
+  decline_terms : (RequestId, nat32) -> (RequestResult);
 
   // The guard. guard_upload and guard_load are for owners; guard_upload
   // returns where the bytes written end, and guard_load refuses a file
