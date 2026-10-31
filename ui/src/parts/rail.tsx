@@ -32,6 +32,7 @@ import { useNowNs } from "./now.ts"
 import { readSeen, subscribeSeen, writeSeen } from "./seen.ts"
 import { useHealth } from "./session.tsx"
 import { SignIn } from "./sign-in.tsx"
+import { TermsLine, termsAllow, useTermsCheck } from "./terms.tsx"
 
 /**
  * The rail beside the page on a wide screen: what needs you, then what
@@ -135,6 +136,7 @@ export function NeedsYou({ wallet: id, me }: { wallet: Principal; me: Member }) 
           {mine.map((action) => (
             <Ticket
               key={String(action.id)}
+              wallet={id}
               pending={action}
               me={me}
               accounts={accounts.data}
@@ -213,6 +215,7 @@ function kindOf(pending: Pending): string {
  * the asking device must show.
  */
 function Ticket({
+  wallet,
   pending,
   me,
   accounts,
@@ -223,6 +226,7 @@ function Ticket({
   onReject,
   onExecute,
 }: {
+  wallet: Principal
   pending: Pending
   me: Member
   accounts: Account[] | undefined
@@ -242,6 +246,10 @@ function Ticket({
   const details = actionDetails(action)
   const ready = canRun(pending, now)
   const approved = pending.approvals.includes(me.id)
+  // As on the approvals page: no Approve and no Run for a transfer outside its terms (decision 0014).
+  const approves = me.role.tag === "Owner" || me.role.tag === "Approver"
+  const terms = useTermsCheck({ wallet, pending, from, accounts, now, active: approves })
+  const allowed = termsAllow(terms)
   const tone = join || action.tag !== "Transfer" ? "ticket watch" : "ticket"
   return (
     <li className={ready ? `${tone} ready` : tone}>
@@ -260,6 +268,7 @@ function Ticket({
           ))}
         </ul>
       )}
+      <TermsLine check={terms} />
       {join && (
         <div className="ticket-code">
           <p>Approve only if the device that asks shows</p>
@@ -273,12 +282,12 @@ function Ticket({
         </span>
       </p>
       <div className="ticket-actions">
-        {state.tag === "Waiting" && !approved && (
+        {state.tag === "Waiting" && !approved && allowed && (
           <button type="button" className="primary small" disabled={busy} onClick={onApprove}>
             Approve
           </button>
         )}
-        {ready && (
+        {ready && allowed && (
           <button type="button" className="primary small" disabled={busy} onClick={onExecute}>
             Run it
           </button>

@@ -30,7 +30,7 @@ named next.
 
 | Option | What it is | For | Against |
 | --- | --- | --- | --- |
-| **A. Terms on the request, checked on the page** | `propose_terms` for the proposer, `confirm_terms` and `decline_terms` for owners, `request` for members. The wallet keeps the order and the record; the page reads the terms and checks the transfer with the library | Exact, and in words: the owner reads the whole account, the amount as written and the end in their own zone. A transfer outside the terms gets no Approve on the wallet's own page. A draft that cannot be read is refused, with why, before it is written. The check is the library every other consumer of the spec uses | The check runs on the page, not in the canister: an owner using another client can still approve a transfer outside the terms. `app.js` grows from 543,895 to 579,114 bytes, so its budget goes from 560,000 to 600,000. Two more packages ship in the signed release |
+| **A. Terms on the request, checked on the page** | `propose_terms` for the proposer, `confirm_terms` and `decline_terms` for owners, `request` for members. The wallet keeps the order and the record; the page reads the terms and checks the transfer with the library | Exact, and in words: the owner reads the whole account, the amount as written and the end in their own zone. A transfer outside the terms gets no Approve on the wallet's own page. A draft that cannot be read is refused, with why, before it is written. The check is the library every other consumer of the spec uses | The check runs on the page, not in the canister: an owner using another client can still approve a transfer outside the terms. `app.js` grows from 543,895 to 579,268 bytes, so its budget goes from 560,000 to 600,000. Two more packages ship in the signed release |
 | B. A, and the canister requires terms | `propose_for` also refuses a request with no terms | No transfer answers a request without confirmed terms | Agents that do not write terms, and requests written before this change, stop working. It is a one-line change once every agent writes terms |
 | C. The check in the canister | A Rust port of `checkGrant` runs in `approve` and `execute` | No client can approve a transfer outside the terms | A second implementation of the terms to keep equal to the library, as `meant-format` is for amounts. Reading the draft (dates, names, zones) stays on the page either way |
 
@@ -59,10 +59,11 @@ What changes with A:
 - **The page.** The Requests card shows the agent's draft in words, read as
   of when it was written and in the browser's zone then, with "Confirm these
   terms" and "Not what I meant". A draft that cannot be read, or has already
-  ended, offers only the no. The Approvals page reads the request a transfer
-  answers and checks the transfer against its confirmed terms each time it
-  renders, at least every 10 seconds. Outside them, Approve and Run are not
-  offered and the reasons are listed; Reject stays. A transfer for a request
+  ended, offers only the no. The Approvals page, and the "Needs you" list
+  beside every page, read the request a transfer answers and check the
+  transfer against its confirmed terms each time they render, at least every
+  10 seconds. Outside them, Approve and Run are not offered and the reasons
+  are listed; Reject stays. A transfer for a request
   without terms shows a notice and keeps its buttons, as before (that is B's
   difference).
 - **Names.** Terms name a token by the symbol its ledger reports, and who is
