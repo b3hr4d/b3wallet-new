@@ -376,6 +376,12 @@ export function auditText(event: AuditEvent, accounts: readonly Account[] | unde
       return `wrote request ${event.value} for the agent`
     case "RequestClosed":
       return `closed request ${event.value}`
+    case "TermsProposed":
+      return `wrote the terms of request ${event.value}`
+    case "TermsConfirmed":
+      return `confirmed the terms of request ${event.value}`
+    case "TermsDeclined":
+      return `said no to the terms of request ${event.value}`
     case "GuardLoaded":
       return `loaded the guard model ${event.value}`
   }

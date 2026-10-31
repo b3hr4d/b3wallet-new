@@ -119,9 +119,11 @@ function look(event: AuditEvent): [string, ReactNode] {
     case "Approved":
     case "Executed":
     case "UpgradeInstalled":
+    case "TermsConfirmed":
       return ["good", <CheckIcon key="icon" />]
     case "Rejected":
     case "UpgradeFailed":
+    case "TermsDeclined":
       return ["bad", <CrossIcon key="icon" />]
     case "CyclesLow":
       return ["warn", <AlertIcon key="icon" />]
@@ -134,6 +136,7 @@ function look(event: AuditEvent): [string, ReactNode] {
     case "AccountAdded":
     case "AssetTracked":
     case "Asked":
+    case "TermsProposed":
       return ["accent", <PlusIcon key="icon" />]
     case "GuardLoaded":
       return ["accent", <LayersIcon key="icon" />]

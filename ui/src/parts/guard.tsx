@@ -3,8 +3,12 @@ import { skipToken, useMutation, useQuery } from "@tanstack/react-query"
 import { useState } from "react"
 import type { GuardReport, Member, Pending } from "../generated/wallet.ts"
 import { useQueryWallet, useWallet } from "../ic/canister.ts"
+import { useLedgerTokens } from "../ic/ledger.ts"
 import { failureText } from "../logic/describe.ts"
 import { dateOf } from "../logic/time.ts"
+import { ICP_ONLY } from "../logic/tokens.ts"
+import { useNowNs } from "./now.ts"
+import { RequestTermsView } from "./terms.tsx"
 
 /** The longest request the guard reads, in bytes of UTF-8. */
 const MAX_REQUEST_BYTES = 280
@@ -13,11 +17,17 @@ const MAX_REQUEST_BYTES = 280
  * Requests (decision 0012): owners write here what they ask their agent to do,
  * in their own words. The agent reads the open ones and answers one with a
  * transfer, and the guard checks that transfer against these words, so no one
- * pastes anything and the agent cannot change what was asked.
+ * pastes anything and the agent cannot change what was asked. Before it
+ * answers, the agent writes the terms it reads in a request, and an owner
+ * confirms them here (decision 0014).
  */
 export function Requests({ wallet: id, me }: { wallet: Principal; me: Member }) {
   const { client, wallet } = useWallet(id)
   const requests = useQuery(client.queryOptions(wallet, "requests"))
+  const accounts = useQuery(client.queryOptions(wallet, "accounts"))
+  const assets = useQuery(client.queryOptions(wallet, "assets"))
+  const tokens = useLedgerTokens(assets.isError ? ICP_ONLY : assets.data)
+  const now = useNowNs()
   const ask = useMutation(
     client.mutationOptions(wallet, "ask", { invalidates: [[wallet, "requests"]] }),
   )
@@ -33,8 +43,9 @@ export function Requests({ wallet: id, me }: { wallet: Principal; me: Member }) 
         <strong>Requests to your agent</strong>
       </p>
       <p className="quiet">
-        What you ask your AI agent to do, in your own words. The agent answers a request with a
-        transfer, and the guard checks that transfer against what you wrote here.
+        What you ask your AI agent to do, in your own words. Your agent writes the terms it reads in
+        a request, and you confirm them here. It then answers the request with a transfer, which the
+        guard checks against what you wrote, and the Approvals page against the terms.
       </p>
       {owner && (
         <form
@@ -91,6 +102,14 @@ export function Requests({ wallet: id, me }: { wallet: Principal; me: Member }) 
                   </button>
                 </>
               )}
+              <RequestTermsView
+                wallet={id}
+                request={request}
+                me={me}
+                tokens={tokens}
+                accounts={accounts.data}
+                now={now}
+              />
             </li>
           ))}
         </ul>
