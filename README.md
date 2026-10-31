@@ -30,7 +30,11 @@ proposer whose transfers always wait for an owner
 model into the wallet that checks each transfer the agent proposes
 against the request the owner wrote for it, in a free query, flagging what
 differs
-([decision 0012](docs/decisions/0012-guard-in-wallet.md)); its send page
+([decision 0012](docs/decisions/0012-guard-in-wallet.md)); before the agent
+answers a request, an owner confirms the terms it read there (the token, who
+is paid, the most and the latest end, in words), and the approvals page
+offers no Approve for a transfer outside them
+([decision 0014](docs/decisions/0014-confirmed-terms.md)); its send page
 proposes and runs a transfer, its receive page shows each account's whole
 address and its QR code to give a sender, each account's page shows what it
 holds and its open transfers, its inbox lists what needs you and what
