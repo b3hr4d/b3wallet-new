@@ -26,7 +26,12 @@ small models signed 33 (Gemma 4 E2B) and 26 (E4B) of 650 bad requests:
 where the words left a term open, they wrote "unlimited" or "never"
 themselves, and the check then passed what the person had not allowed. The
 person confirming the terms, which this record adds, is the step that test
-named next.
+named next. Its re-test with that step (fact, candid-profile PR #79) had a
+careful simulated user read the terms in words and confirm only their own:
+none of 1,950 bad requests was signed, by the same two models or by Claude
+Haiku 5.5. What it cost was real requests: E2B signed 120 of 150, since after
+each no it asked the user rather than write the terms again. No person
+confirmed terms in that test.
 
 | Option | What it is | For | Against |
 | --- | --- | --- | --- |
