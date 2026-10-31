@@ -4,7 +4,24 @@
 // proposes waits for an owner or an approver on the wallet's Approvals page.
 import { isPrincipal, principal } from "@candid-core/schema"
 import { isReactorError, type Client } from "@ic-reactor/core"
-import { displayAmount, displayBytes, parseAmount, parseBytes, resolveName } from "@meantjs/format"
+import type { Grant } from "@meantjs/consent"
+import {
+  checkGrant,
+  readTerms,
+  TermsError,
+  termsText,
+  type ConfirmedTerms,
+  type Wallet as TermsWallet,
+} from "@meantjs/consent/terms"
+import {
+  displayAmount,
+  displayBytes,
+  normalizeName,
+  parseAccount,
+  parseAmount,
+  parseBytes,
+  resolveName,
+} from "@meantjs/format"
 import { actor as ledgerActor, type Actor as Ledger } from "./generated/icrc1.ts"
 import {
   actor as walletActor,
@@ -15,6 +32,8 @@ import {
   type AuditEvent,
   type Chain,
   type Pending,
+  type RequestTerms,
+  type TermsConfirmation,
 } from "./generated/wallet.ts"
 import type { Config } from "./config.ts"
 import { joinCode } from "./join-code.ts"
@@ -24,6 +43,8 @@ import { InvalidArguments, type Tool } from "./protocol.ts"
 const ICP_LEDGER = "ryjl3-tyaaa-aaaaa-aaaba-cai"
 /** The longest memo a transfer carries, in bytes. */
 const MAX_MEMO_BYTES = 32
+/** The most drafts of terms a request takes (decision 0014). */
+const MAX_DRAFTS = 3
 
 type Token = { symbol: string; decimals: number }
 
@@ -244,8 +265,138 @@ export function eventText(event: AuditEvent): string {
       return `wrote request ${event.value}`
     case "RequestClosed":
       return `closed request ${event.value}`
+    case "TermsProposed":
+      return `wrote the terms of request ${event.value}`
+    case "TermsConfirmed":
+      return `confirmed the terms of request ${event.value}`
+    case "TermsDeclined":
+      return `said no to the terms of request ${event.value}`
     case "GuardLoaded":
       return `loaded the guard model ${event.value}`
+  }
+}
+
+/** How the terms look a token or an account up: NFKC, lowercase, letters and digits only. */
+function nameKey(name: string): string {
+  return normalizeName(name).replace(/[^\p{L}\p{N}]/gu, "")
+}
+
+function counts(keys: readonly string[]): Map<string, number> {
+  const seen = new Map<string, number>()
+  for (const key of keys) seen.set(key, (seen.get(key) ?? 0) + 1)
+  return seen
+}
+
+function isAccount(text: string): boolean {
+  try {
+    parseAccount(text)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * What @meantjs/consent/terms reads terms against (decision 0014), as the
+ * wallet's page builds it in `ui/src/logic/terms.ts`: the tokens by symbol
+ * and the wallet's own Internet Computer accounts by label, at `now`, in
+ * UTC. A name that would not name one thing is left out: one with no letters
+ * or digits, and one two tokens or two accounts share once case, spaces and
+ * punctuation are set aside. ICP keeps its name, and another ledger that
+ * calls itself ICP is left out.
+ */
+export function termsWallet(
+  tokens: ReadonlyArray<{ ledger: string; token: Token }>,
+  accounts: readonly Account[],
+  now: bigint,
+): TermsWallet {
+  const shown = tokens.filter(
+    ({ ledger, token }, index) =>
+      tokens.findIndex((other) => other.ledger === ledger) === index &&
+      nameKey(token.symbol) !== "",
+  )
+  const icp = shown.find(({ ledger }) => ledger === ICP_LEDGER)
+  const icpKey = icp && nameKey(icp.token.symbol)
+  const symbols = counts(shown.map(({ token }) => nameKey(token.symbol)))
+  const known = shown.filter((entry) => {
+    const key = nameKey(entry.token.symbol)
+    return entry === icp || (key !== icpKey && symbols.get(key) === 1)
+  })
+  const own = accounts.filter(
+    (account) =>
+      account.kind.tag === "InternetComputer" &&
+      nameKey(account.label) !== "" &&
+      isAccount(account.address),
+  )
+  const labels = counts(own.map((account) => nameKey(account.label)))
+  return {
+    tokens: Object.fromEntries(
+      known.map(({ ledger, token }) => [
+        token.symbol,
+        { canister: ledger, decimals: token.decimals },
+      ]),
+    ),
+    apps: Object.fromEntries(
+      own
+        .filter((account) => labels.get(nameKey(account.label)) === 1)
+        .map((account) => [account.label, account.address]),
+    ),
+    now,
+    utcOffsetMinutes: 0,
+  }
+}
+
+/**
+ * Refuses a transfer outside the terms an owner confirmed for its request,
+ * as the wallet's Approvals page would: it offers no Approve for one.
+ */
+export function checkTerms(
+  request: bigint,
+  confirmation: TermsConfirmation,
+  grant: Grant | null,
+  now: bigint,
+): void {
+  let result: { fits: boolean; reasons: string[] }
+  try {
+    const parsed: unknown = JSON.parse(confirmation.terms)
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error()
+    const confirmed = { ...parsed, id: confirmation.id } as ConfirmedTerms
+    result = checkGrant(confirmed, grant, {
+      tokens: { [confirmed.symbol]: { canister: confirmed.token, decimals: confirmed.decimals } },
+      now,
+      utcOffsetMinutes: confirmed.utcOffsetMinutes,
+    })
+  } catch {
+    throw new InvalidArguments(
+      `the terms an owner confirmed for request ${request} cannot be read, so the Approvals page would offer no Approve: ask the owner to withdraw them, then write them again`,
+    )
+  }
+  if (!result.fits) {
+    throw new InvalidArguments(
+      `this transfer is outside the terms an owner confirmed for request ${request}, “${confirmation.text}”: ${result.reasons.join("; ")}. The Approvals page would offer no Approve for it. Propose one within the terms, or ask the user`,
+    )
+  }
+}
+
+/** A request's terms and what an owner said to them, for the model. */
+function termsView(terms: RequestTerms | null) {
+  if (terms === null) return null
+  return {
+    version: terms.version,
+    draft: terms.draft,
+    written_at: dateOf(terms.drafted_at_ns),
+    state:
+      terms.confirmed !== null
+        ? "confirmed by an owner"
+        : terms.declined !== null
+          ? "an owner said no"
+          : "waiting for an owner to confirm them",
+    ...(terms.confirmed !== null && {
+      confirmed: terms.confirmed.text,
+      confirmed_at: dateOf(terms.confirmed.at_ns),
+    }),
+    ...(terms.declined !== null && { declined_at: dateOf(terms.declined.at_ns) }),
+    drafts_left: Math.max(0, MAX_DRAFTS - terms.version),
   }
 }
 
@@ -350,6 +501,32 @@ function tools(client: Client, config: Config): Tool[] {
         return token
       }
     }
+  }
+
+  /**
+   * What terms read against now: ICP and each tracked ICRC-1 token whose
+   * ledger says its symbol and decimals, and the wallet's own accounts.
+   */
+  const termsWalletNow = async (): Promise<TermsWallet> => {
+    const [accounts, tracked] = await Promise.all([wallet.accounts(), wallet.assets()])
+    const tokens = await Promise.all(
+      tracked.flatMap((asset) =>
+        asset.tag === "Icp" || asset.tag === "Icrc"
+          ? [
+              tokenOf(asset).then(
+                (token) =>
+                  token && { ledger: asset.tag === "Icp" ? ICP_LEDGER : asset.value, token },
+                () => undefined,
+              ),
+            ]
+          : [],
+      ),
+    )
+    const read = tokens.filter((token) => token !== undefined)
+    if (read.length === 0) {
+      throw new Error("no token's ledger could be read, so terms cannot be read now: try again")
+    }
+    return termsWallet(read, accounts, BigInt(Date.now()) * 1_000_000n)
   }
 
   const amountText = (amount: bigint, token: Token | undefined) =>
@@ -597,7 +774,7 @@ function tools(client: Client, config: Config): Tool[] {
       name: "wallet_requests",
       title: "The owners' requests",
       description:
-        "What the owners ask you to do, in their own words, oldest first: each open request's id, text and the actions already proposed for it. Answer one with wallet_propose_transfer and its request id, so the wallet's guard checks your transfer against the owner's words.",
+        "What the owners ask you to do, in their own words, oldest first: each open request's id, text, the terms you wrote for it and what an owner said to them, and the actions already proposed for it. First write the terms you read in a request with wallet_propose_terms, and wait for an owner to confirm them. Then answer it with wallet_propose_transfer and its request id: the wallet's guard checks your transfer against the owner's words, and the Approvals page against the terms.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       readOnly: true,
       run: async () =>
@@ -606,15 +783,81 @@ function tools(client: Client, config: Config): Tool[] {
             request: request.id,
             text: request.text,
             asked_at: dateOf(request.asked_at_ns),
+            terms: termsView(request.terms),
             answers: request.answers,
           })),
         ),
     },
     {
+      name: "wallet_propose_terms",
+      title: "Write the terms of a request",
+      description: `Writes the terms you read in an owner's request, from wallet_requests: the token, who is paid, the most, and the latest time the transfer may be sent. An owner reads them in words on the wallet's Approvals page, and confirms them or says no. Until an owner confirms them, the wallet refuses a transfer for the request, and the Approvals page offers no Approve for a transfer outside them. Write only what the owner's words say: when they do not say the token, the recipient, the amount or how long, ask the user instead of guessing, and write “unlimited” or “never” only when the owner plainly allows it. Terms that cannot be read are refused, with why, before anything is written. A request takes ${MAX_DRAFTS} drafts at most, and none once a transfer answers it.`,
+      inputSchema: {
+        type: "object",
+        properties: {
+          request: {
+            type: "integer",
+            description: "The id of the owner's request, from wallet_requests.",
+            minimum: 0,
+          },
+          token: {
+            type: "string",
+            description:
+              "The token, by its symbol: “ICP”, or a tracked ICRC-1 token's symbol from wallet_accounts.",
+          },
+          to: {
+            type: "string",
+            description:
+              "Who is paid: an ICRC-1 account in its text form (a principal is one), as the owner gave it, or the label of one of the wallet's own Internet Computer accounts.",
+          },
+          max_amount: {
+            type: "string",
+            description:
+              "The most, in the token's units, such as “1.5”; “unlimited” only when the owner plainly allows any amount. More decimal places than the token has are refused, never rounded.",
+          },
+          expires_by: {
+            type: "string",
+            description:
+              "The latest time the transfer may be sent: a date as YYYY-MM-DD (the whole day counts, in the owner's zone), a length of time from now such as “2 hours”, “30 days” or “1 month”, or “never” only when the owner plainly allows no end.",
+          },
+        },
+        required: ["request", "token", "to", "max_amount", "expires_by"],
+        additionalProperties: false,
+      },
+      readOnly: false,
+      run: async (args) => {
+        const id = integer(args, "request")
+        if (id === undefined) {
+          throw new InvalidArguments("request: the id of the owner's request, from wallet_requests")
+        }
+        const draft = {
+          token: text(args, "token") ?? "",
+          to: text(args, "to") ?? "",
+          max_amount: text(args, "max_amount") ?? "",
+          expires_by: text(args, "expires_by") ?? "",
+        }
+        // Read as the owner's page will read them, so a draft that cannot be read costs none of the request's drafts.
+        let words: string
+        try {
+          words = termsText(readTerms(draft, await termsWalletNow()))
+        } catch (error) {
+          if (error instanceof TermsError) throw new InvalidArguments(error.message)
+          throw error
+        }
+        const request = await wallet.propose_terms(BigInt(id), draft)
+        return json({
+          request: request.id,
+          terms: termsView(request.terms),
+          reads_as: words,
+          next: `Nothing can be sent for request ${request.id} until an owner confirms these terms at ${approvals}, where they read them in their own zone. Tell the user they will read: “${words}” Ask them to confirm the terms only if that is what they meant, then call wallet_requests for their answer.`,
+        })
+      },
+    },
+    {
       name: "wallet_propose_transfer",
       title: "Propose a transfer",
       description:
-        "Proposes sending an amount from one of the wallet's accounts. It sends nothing: the transfer waits until an owner or an approver approves and runs it on the wallet's Approvals page, and expires after seven days. You can have at most 8 actions open at once. Name the owner's request it answers, from wallet_requests: the wallet's guard then checks it against the owner's own words, and without one it cannot.",
+        "Proposes sending an amount from one of the wallet's accounts. It sends nothing: the transfer waits until an owner or an approver approves and runs it on the wallet's Approvals page, and expires after seven days. You can have at most 8 actions open at once. Name the owner's request it answers, from wallet_requests: the wallet's guard then checks it against the owner's own words, and without one it cannot. A request whose terms you wrote takes a transfer only once an owner has confirmed them, and only one within them.",
       inputSchema: {
         type: "object",
         properties: {
@@ -685,6 +928,24 @@ function tools(client: Client, config: Config): Tool[] {
           value: { from: account.id, asset, to, amount, fee: null, memo },
         }
         const request = integer(args, "request")
+        if (request !== undefined) {
+          const confirmed = (await wallet.request(BigInt(request))).terms?.confirmed
+          if (confirmed) {
+            const ledger =
+              asset.tag === "Icp" ? ICP_LEDGER : asset.tag === "Icrc" ? asset.value : null
+            const grant: Grant | null =
+              ledger === null
+                ? null
+                : {
+                    kind: "transfer",
+                    to,
+                    token: ledger,
+                    amount: { units: amount.toString(), unlimited: false },
+                    ends: { now: true },
+                  }
+            checkTerms(BigInt(request), confirmed, grant, BigInt(Date.now()) * 1_000_000n)
+          }
+        }
         const pending =
           request === undefined
             ? await wallet.propose(action)

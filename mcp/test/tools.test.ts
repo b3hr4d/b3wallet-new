@@ -11,11 +11,13 @@ import {
   type Actor as Wallet,
   type Chain,
   type Pending,
+  type Request,
+  type TermsDraft,
 } from "../src/generated/wallet.ts"
 import { readConfig } from "../src/config.ts"
 import { joinCode } from "../src/join-code.ts"
 import { InvalidArguments } from "../src/protocol.ts"
-import { walletTools } from "../src/tools.ts"
+import { eventText, walletTools } from "../src/tools.ts"
 
 const WALLET = "uxrrr-q7777-77774-qaaaq-cai"
 const ICP_LEDGER = "ryjl3-tyaaa-aaaaa-aaaba-cai"
@@ -25,6 +27,29 @@ const SPOOF_LEDGER = "rrkah-fqaaa-aaaaa-aaaaq-cai"
 const FRIEND = "2vxsx-fae"
 const OWNER = "aaaaa-aa"
 const SECOND = 1_000_000_000n
+
+/** Terms an owner confirmed on the wallet's page: 1.5 ICP to FRIEND, until the end of 2099 (ui/src/logic/terms.ts writes them so). */
+const CONFIRMED = {
+  terms:
+    '{"amount":{"units":"150000000","unlimited":false},"decimals":8,"ends":{"at":"4102444799.999999999","day":"2099-12-31"},"name":null,"symbol":"ICP","to":"2vxsx-fae","token":"ryjl3-tyaaa-aaaaa-aaaba-cai","utcOffsetMinutes":0,"written":{"expires_by":"2099-12-31","max_amount":"1.5","to":"2vxsx-fae","token":"ICP"}}',
+  id: "ee78f0dd0fafd46461acacb595b38234032836b5fc1299793b4929c0fc1c2da8",
+  text: "2vxsx-fae may be sent at most 1.5 ICP, until the end of 31 December 2099 (UTC).",
+  by: OWNER as Pending["proposed_by"],
+  at_ns: 1_800_000_100n * SECOND,
+}
+
+/** An owner's open request, with its terms. */
+function asked(id: bigint, terms: Request["terms"] = null): Request {
+  return {
+    id,
+    text: `Send 1.5 ICP to ${FRIEND}`,
+    asked_by: OWNER as Pending["proposed_by"],
+    asked_at_ns: 1_800_000_000n * SECOND,
+    open: true,
+    answers: [],
+    terms,
+  }
+}
 
 const icp: Account = {
   id: 1,
@@ -63,12 +88,14 @@ const base: Chain = { tag: "Evm", value: 8_453n }
  * A wallet that keeps what is proposed and refuses what the real one refuses
  * a proposer, and records every method called on it.
  */
-function setUp(options: { member?: boolean; accounts?: Account[] } = {}) {
+function setUp(options: { member?: boolean; accounts?: Account[]; requests?: Request[] } = {}) {
   const agent = Ed25519KeyIdentity.generate(new Uint8Array(32).fill(7))
   const { client, mock, requests } = createTestClient({ identity: agent })
   const calls: string[] = []
   const proposals: Action[] = []
   const joins: unknown[][] = []
+  const drafts: Array<[bigint, TermsDraft]> = []
+  const open = options.requests ?? [asked(3n)]
   const pending = (
     id: bigint,
     action: Action,
@@ -175,19 +202,29 @@ function setUp(options: { member?: boolean; accounts?: Account[] } = {}) {
       proposals.push(action)
       return { tag: "Ok", value: pending(BigInt(proposals.length), action, ctx.caller) }
     }),
-    requests: record("requests", () => ({
-      tag: "Ok",
-      value: [
-        {
-          id: 3n,
-          text: `Send 1.5 ICP to ${FRIEND}`,
-          asked_by: OWNER as Pending["proposed_by"],
-          asked_at_ns: 1_800_000_000n * SECOND,
-          open: true,
-          answers: [],
-        },
-      ],
-    })),
+    requests: record("requests", () => ({ tag: "Ok", value: open })),
+    request: record("request", (id) => {
+      const found = open.find((request) => request.id === id)
+      return found
+        ? { tag: "Ok", value: found }
+        : { tag: "Err", value: { tag: "NotFound", value: `request ${id}` } }
+    }),
+    propose_terms: record("propose_terms", (id, draft, ctx) => {
+      drafts.push([id, draft])
+      const found = open.find((request) => request.id === id)
+      if (found === undefined) {
+        return { tag: "Err", value: { tag: "NotFound", value: `request ${id}` } }
+      }
+      const terms = {
+        draft,
+        version: (found.terms?.version ?? 0) + 1,
+        drafted_by: ctx.caller,
+        drafted_at_ns: 1_800_000_050n * SECOND,
+        confirmed: null,
+        declined: null,
+      }
+      return { tag: "Ok", value: { ...found, terms } }
+    }),
     propose_for: record("propose_for", (request, action, ctx) => {
       proposals.push(action)
       return { tag: "Ok", value: pending(BigInt(proposals.length), action, ctx.caller, request) }
@@ -230,7 +267,7 @@ function setUp(options: { member?: boolean; accounts?: Account[] } = {}) {
         .filter((request) => request.canisterId === WALLET && request.methodName)
         .map((request) => request.methodName),
     )
-  return { client, agent, tools, run, calls, called, proposals, joins }
+  return { client, agent, tools, run, calls, called, proposals, joins, drafts }
 }
 
 test("the tools read and propose, and none approves, runs or rejects", async () => {
@@ -245,12 +282,20 @@ test("the tools read and propose, and none approves, runs or rejects", async () 
       "wallet_activity",
       "wallet_pending",
       "wallet_requests",
+      "wallet_propose_terms",
       "wallet_propose_transfer",
     ],
   )
   for (const name of tools.keys()) {
     const args: Record<string, Record<string, unknown>> = {
       wallet_balance: { account: 1 },
+      wallet_propose_terms: {
+        request: 3,
+        token: "ICP",
+        to: FRIEND,
+        max_amount: "1.5",
+        expires_by: "30 days",
+      },
       wallet_propose_transfer: { from: 1, to: FRIEND, amount: "1" },
     }
     await run(name, args[name] ?? {})
@@ -593,6 +638,7 @@ test("a transfer answers the owner's request by its id, so the guard can check i
       request: "3",
       text: `Send 1.5 ICP to ${FRIEND}`,
       asked_at: "2027-01-15T08:00:00.000Z",
+      terms: null,
       answers: [],
     },
   ])
@@ -605,4 +651,94 @@ test("a transfer answers the owner's request by its id, so the guard can check i
     ["propose_for"],
   )
   client.dispose()
+})
+
+test("terms are read as the owner's page reads them, before anything is written", async () => {
+  const { client, run, calls, drafts } = setUp({ member: true })
+  const terms = {
+    request: 3,
+    token: "ICP",
+    to: FRIEND,
+    max_amount: "1.5",
+    expires_by: "2099-12-31",
+  }
+  // An unreadable draft is refused with why, and costs none of the request's drafts.
+  await assert.rejects(run("wallet_propose_terms", { ...terms, token: "ICPP" }), {
+    message: /knows no token named "ICPP"; it knows ICP and ckBTC/,
+  })
+  await assert.rejects(run("wallet_propose_terms", { ...terms, max_amount: "1.123456789" }), {
+    message: /^max_amount: /,
+  })
+  await assert.rejects(run("wallet_propose_terms", { ...terms, expires_by: "next Monday" }), {
+    message: /^expires_by must be a date/,
+  })
+  assert.deepEqual(drafts, [])
+  const written = JSON.parse(await run("wallet_propose_terms", { ...terms, token: " icp " }))
+  assert.deepEqual(drafts, [
+    [3n, { token: "icp", to: FRIEND, max_amount: "1.5", expires_by: "2099-12-31" }],
+  ])
+  assert.equal(
+    written.reads_as,
+    `${FRIEND} may be sent at most 1.5 ICP, until the end of 31 December 2099 (UTC).`,
+  )
+  assert.equal(written.terms.state, "waiting for an owner to confirm them")
+  assert.equal(written.terms.drafts_left, 2)
+  // The label of one of the wallet's own Internet Computer accounts names its account.
+  const own = JSON.parse(await run("wallet_propose_terms", { ...terms, to: "Main" }))
+  assert.equal(
+    own.reads_as,
+    `main (${WALLET}) may be sent at most 1.5 ICP, until the end of 31 December 2099 (UTC).`,
+  )
+  assert.ok(calls.includes("propose_terms"))
+  client.dispose()
+})
+
+test("a request's terms show what an owner said, and a transfer for it must fit them", async () => {
+  const terms = {
+    draft: { token: "ICP", to: FRIEND, max_amount: "1.5", expires_by: "2099-12-31" },
+    version: 1,
+    drafted_by: FRIEND as Pending["proposed_by"],
+    drafted_at_ns: 1_800_000_050n * SECOND,
+    confirmed: CONFIRMED,
+    declined: null,
+  }
+  const tampered = { ...CONFIRMED, terms: CONFIRMED.terms.replace("150000000", "950000000") }
+  const { client, run, calls } = setUp({
+    member: true,
+    requests: [asked(4n, terms), asked(5n, { ...terms, confirmed: tampered })],
+  })
+  const [listed] = JSON.parse(await run("wallet_requests"))
+  assert.deepEqual(listed.terms, {
+    version: 1,
+    draft: terms.draft,
+    written_at: "2027-01-15T08:00:50.000Z",
+    state: "confirmed by an owner",
+    confirmed: CONFIRMED.text,
+    confirmed_at: "2027-01-15T08:01:40.000Z",
+    drafts_left: 2,
+  })
+  const transfer = { request: 4, from: 1, to: FRIEND, amount: "1.5" }
+  await assert.rejects(run("wallet_propose_transfer", { ...transfer, amount: "2" }), {
+    message: `this transfer is outside the terms an owner confirmed for request 4, “${CONFIRMED.text}”: the request allows 2 ICP, the terms say at most 1.5 ICP. The Approvals page would offer no Approve for it. Propose one within the terms, or ask the user`,
+  })
+  await assert.rejects(run("wallet_propose_transfer", { ...transfer, to: OWNER }), {
+    message: /the recipient is aaaaa-aa, the terms say 2vxsx-fae/,
+  })
+  await assert.rejects(run("wallet_propose_transfer", { ...transfer, asset: TOKEN_LEDGER }), {
+    message: /the request is for mxzaz-hqaaa-aaaar-qaada-cai, the terms say ICP/,
+  })
+  await assert.rejects(run("wallet_propose_transfer", { ...transfer, request: 5 }), {
+    message: /the terms an owner confirmed for request 5 cannot be read/,
+  })
+  assert.ok(!calls.includes("propose_for"))
+  const result = JSON.parse(await run("wallet_propose_transfer", transfer))
+  assert.equal(result.request, "4")
+  assert.ok(calls.includes("propose_for"))
+  client.dispose()
+})
+
+test("the log names what happened to a request's terms", () => {
+  assert.equal(eventText({ tag: "TermsProposed", value: 4n }), "wrote the terms of request 4")
+  assert.equal(eventText({ tag: "TermsConfirmed", value: 4n }), "confirmed the terms of request 4")
+  assert.equal(eventText({ tag: "TermsDeclined", value: 4n }), "said no to the terms of request 4")
 })
