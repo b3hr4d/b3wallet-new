@@ -13,7 +13,7 @@ use crate::policy::default_policy;
 use crate::upgrade::StoredUpgrade;
 use crate::{
     AccountId, AccountKind, Action, ActionId, ActionState, AuditEntry, AuditEvent, BitcoinNetwork,
-    Chain, InitArgs, Member, Outcome, Policy, Request, RequestId, Role,
+    Chain, InitArgs, Member, Outcome, Policy, Request, RequestId, RequestTerms, Role,
 };
 use crate::{assets, btc, evm};
 use candid::{CandidType, Nat, Principal, decode_one, encode_one};
@@ -102,6 +102,8 @@ pub struct StoredRequest {
     pub closed_at_ns: Option<u64>,
     /// The actions proposed for it, oldest first.
     pub answers: Vec<ActionId>,
+    /// Its terms (decision 0014); absent in a request stored before them.
+    pub terms: Option<RequestTerms>,
 }
 
 impl StoredRequest {
@@ -113,6 +115,7 @@ impl StoredRequest {
             asked_at_ns: self.asked_at_ns,
             open: self.closed_at_ns.is_none(),
             answers: self.answers.clone(),
+            terms: self.terms.clone(),
         }
     }
 }
@@ -918,6 +921,39 @@ mod tests {
         }
 
         let _: BrokenMember = from_candid(&stored_member().to_bytes());
+    }
+
+    /// A request stored before terms (decision 0014) still decodes, with none.
+    #[test]
+    fn a_request_stored_before_terms_has_none() {
+        #[derive(CandidType, Deserialize)]
+        struct EarlierRequest {
+            text: String,
+            asked_by: Principal,
+            asked_at_ns: u64,
+            closed_at_ns: Option<u64>,
+            answers: Vec<ActionId>,
+        }
+
+        let earlier = EarlierRequest {
+            text: "Send 1 ICP".to_string(),
+            asked_by: Principal::anonymous(),
+            asked_at_ns: 5,
+            closed_at_ns: None,
+            answers: vec![3],
+        };
+        let request: StoredRequest = from_candid(&to_candid(&earlier));
+        assert_eq!(
+            request,
+            StoredRequest {
+                text: "Send 1 ICP".to_string(),
+                asked_by: Principal::anonymous(),
+                asked_at_ns: 5,
+                closed_at_ns: None,
+                answers: vec![3],
+                terms: None,
+            }
+        );
     }
 
     #[test]

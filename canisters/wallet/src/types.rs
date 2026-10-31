@@ -257,6 +257,57 @@ pub struct Request {
     pub open: bool,
     /// The actions proposed for it, oldest first.
     pub answers: Vec<ActionId>,
+    /// The terms the agent read in it, and what an owner said to them (decision 0014).
+    pub terms: Option<RequestTerms>,
+}
+
+/// The terms an agent reads in an owner's request (decision 0014): the token by symbol, who is paid, the most and
+/// the latest time the transfer may be sent, in the agent's words. The wallet's own page reads them with
+/// `@meantjs/consent/terms` and shows them to the owners, who confirm them or say no.
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct TermsDraft {
+    pub token: String,
+    pub to: String,
+    pub max_amount: String,
+    pub expires_by: String,
+}
+
+/// An owner's yes to a draft, as the wallet's page wrote it: the terms as `@meantjs/consent/terms` read them, as
+/// JSON (RFC 8785), their SHA-256 in lowercase hex (the id the library gives them), and the words the owner confirmed.
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct TermsConfirmation {
+    pub terms: String,
+    pub id: String,
+    pub text: String,
+    pub by: Principal,
+    pub at_ns: u64,
+}
+
+/// An owner's no to a draft.
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct TermsDecline {
+    pub by: Principal,
+    pub at_ns: u64,
+}
+
+/// The terms of a request: the agent's latest draft, numbered from 1, and what an owner said to it.
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct RequestTerms {
+    pub draft: TermsDraft,
+    pub version: u32,
+    pub drafted_by: Principal,
+    pub drafted_at_ns: u64,
+    pub confirmed: Option<TermsConfirmation>,
+    pub declined: Option<TermsDecline>,
+}
+
+/// What the wallet's page sends when an owner confirms the draft numbered `version`.
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ConfirmTermsArgs {
+    pub version: u32,
+    pub terms: String,
+    pub id: String,
+    pub text: String,
 }
 
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -282,6 +333,10 @@ pub enum AuditEvent {
     RequestClosed(RequestId),
     /// The guard file's model release, loaded by an owner.
     GuardLoaded(String),
+    /// Terms written for a request, confirmed by an owner, or refused by one (decision 0014).
+    TermsProposed(RequestId),
+    TermsConfirmed(RequestId),
+    TermsDeclined(RequestId),
 }
 
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]

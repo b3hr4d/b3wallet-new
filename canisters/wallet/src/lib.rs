@@ -27,6 +27,7 @@ mod management;
 mod policy;
 mod sending;
 mod storage;
+mod terms;
 mod types;
 mod upgrade;
 
@@ -563,6 +564,16 @@ fn open_request_for(
     if stored.closed_at_ns.is_some() {
         return Err(WalletError::Forbidden(format!("request {id} is closed")));
     }
+    // Terms come before the transfer (decision 0014): once a request has them, only confirmed ones let it be answered.
+    if let Some(terms) = &stored.terms
+        && terms.confirmed.is_none()
+    {
+        return Err(WalletError::Forbidden(if terms.declined.is_some() {
+            format!("an owner said no to the terms of request {id}; propose terms again")
+        } else {
+            format!("the terms of request {id} wait for an owner to confirm them")
+        }));
+    }
     let live = stored.answers.iter().find(|answer| {
         storage::action(**answer).is_some_and(|pending| {
             matches!(
@@ -605,6 +616,7 @@ fn ask(text: String) -> Result<Request, WalletError> {
         asked_at_ns: now,
         closed_at_ns: None,
         answers: Vec::new(),
+        terms: None,
     };
     let id = storage::add_request(stored.clone());
     audit(caller, AuditEvent::Asked(id), now);
@@ -618,6 +630,127 @@ fn requests() -> Result<Vec<Request>, WalletError> {
         .into_iter()
         .map(|(id, request)| request.view(id))
         .collect())
+}
+
+/// One request, open or closed: what the transfers that answer it are checked against.
+#[ic_cdk::query(guard = "access::member")]
+fn request(id: RequestId) -> Result<Request, WalletError> {
+    storage::request(id)
+        .map(|request| request.view(id))
+        .ok_or_else(|| WalletError::NotFound(format!("request {id}")))
+}
+
+/// An open request whose terms may still change: none of its transfers has been proposed yet.
+fn unanswered_request(id: RequestId) -> Result<storage::StoredRequest, WalletError> {
+    let stored =
+        storage::request(id).ok_or_else(|| WalletError::NotFound(format!("request {id}")))?;
+    if stored.closed_at_ns.is_some() {
+        return Err(WalletError::Forbidden(format!("request {id} is closed")));
+    }
+    if !stored.answers.is_empty() {
+        return Err(WalletError::Forbidden(format!(
+            "request {id} has an answer, so its terms are fixed"
+        )));
+    }
+    Ok(stored)
+}
+
+/// Writes the terms the caller reads in an owner's open request (decision 0014): the token, who is paid, the most
+/// and the latest time, in its own words. It replaces the request's earlier draft and what the owners said to it,
+/// and the request takes no transfer until an owner confirms the new one on the wallet's own page. A request takes
+/// at most three drafts, and none once a transfer answers it.
+#[ic_cdk::update(guard = "access::proposer")]
+fn propose_terms(id: RequestId, draft: TermsDraft) -> Result<Request, WalletError> {
+    let (caller, now) = (ic_cdk::api::msg_caller(), ic_cdk::api::time());
+    let draft = terms::check_draft(draft)?;
+    let mut stored = unanswered_request(id)?;
+    let version = stored.terms.as_ref().map_or(0, |terms| terms.version) + 1;
+    if version > terms::MAX_DRAFTS {
+        return Err(WalletError::Forbidden(format!(
+            "request {id} has had {} drafts of terms; ask the owner to write a new request",
+            terms::MAX_DRAFTS
+        )));
+    }
+    stored.terms = Some(RequestTerms {
+        draft,
+        version,
+        drafted_by: caller,
+        drafted_at_ns: now,
+        confirmed: None,
+        declined: None,
+    });
+    storage::set_request(id, stored.clone());
+    audit(caller, AuditEvent::TermsProposed(id), now);
+    Ok(stored.view(id))
+}
+
+/// The terms of request `id` at `version`, which an owner may still answer: neither confirmed nor refused.
+fn draft_to_answer(
+    stored: &mut storage::StoredRequest,
+    id: RequestId,
+    version: u32,
+) -> Result<&mut RequestTerms, WalletError> {
+    let terms = stored
+        .terms
+        .as_mut()
+        .ok_or_else(|| WalletError::NotFound(format!("terms of request {id}")))?;
+    if terms.version != version {
+        return Err(WalletError::Forbidden(format!(
+            "the terms of request {id} are at version {}, not {version}: read them again",
+            terms.version
+        )));
+    }
+    if terms.declined.is_some() {
+        return Err(WalletError::Forbidden(format!(
+            "an owner already said no to version {version} of the terms of request {id}"
+        )));
+    }
+    Ok(terms)
+}
+
+/// An owner's yes, given on the wallet's own page, to the draft of request `id` numbered `version`: the terms as the
+/// page read them and the words it showed. From now a transfer may answer the request, and the page checks it
+/// against these terms. A record whose id is not the SHA-256 of its terms is refused.
+#[ic_cdk::update(guard = "access::owner")]
+fn confirm_terms(id: RequestId, args: ConfirmTermsArgs) -> Result<Request, WalletError> {
+    let (caller, now) = (ic_cdk::api::msg_caller(), ic_cdk::api::time());
+    terms::check_confirmation(&args)?;
+    let mut stored = unanswered_request(id)?;
+    let draft = draft_to_answer(&mut stored, id, args.version)?;
+    if draft.confirmed.is_some() {
+        return Err(WalletError::Forbidden(format!(
+            "version {} of the terms of request {id} is already confirmed",
+            args.version
+        )));
+    }
+    draft.confirmed = Some(TermsConfirmation {
+        terms: args.terms,
+        id: args.id,
+        text: args.text,
+        by: caller,
+        at_ns: now,
+    });
+    storage::set_request(id, stored.clone());
+    audit(caller, AuditEvent::TermsConfirmed(id), now);
+    Ok(stored.view(id))
+}
+
+/// An owner's no to the draft of request `id` numbered `version`, even one already confirmed while no transfer
+/// answers the request: the request takes no transfer until the agent proposes terms again and an owner confirms
+/// them.
+#[ic_cdk::update(guard = "access::owner")]
+fn decline_terms(id: RequestId, version: u32) -> Result<Request, WalletError> {
+    let (caller, now) = (ic_cdk::api::msg_caller(), ic_cdk::api::time());
+    let mut stored = unanswered_request(id)?;
+    let draft = draft_to_answer(&mut stored, id, version)?;
+    draft.confirmed = None;
+    draft.declined = Some(TermsDecline {
+        by: caller,
+        at_ns: now,
+    });
+    storage::set_request(id, stored.clone());
+    audit(caller, AuditEvent::TermsDeclined(id), now);
+    Ok(stored.view(id))
 }
 
 /// Closes a request: no transfer may answer it any more. Its answers stay as they are.
