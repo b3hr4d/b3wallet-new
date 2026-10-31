@@ -94,6 +94,24 @@ test("a symbol or a label that would not name one thing is left out", () => {
   assert.deepEqual(wallet.tokens, { ICP: { canister: ICP_LEDGER, decimals: 8 } })
   // Two accounts called Main and main name neither; only Internet Computer accounts are named.
   assert.deepEqual(wallet.apps, { Épargne: savings.address })
+  // ICP's name stays ICP's even when its ledger could not be read, and so does the symbol its ledger reports.
+  const unread = termsWallet(
+    [{ ledger: SPOOF, token: { symbol: "ICP", decimals: 8, fee: null } }, ckbtc],
+    [],
+    DRAFTED,
+    0,
+  )
+  assert.deepEqual(unread.tokens, { ckBTC: { canister: CKBTC, decimals: 8 } })
+  const local = termsWallet(
+    [
+      { ledger: ICP_LEDGER, token: { symbol: "LICP", decimals: 8, fee: null } },
+      { ledger: SPOOF, token: { symbol: "licp", decimals: 8, fee: null } },
+    ],
+    [],
+    DRAFTED,
+    0,
+  )
+  assert.deepEqual(local.tokens, { LICP: { canister: ICP_LEDGER, decimals: 8 } })
 })
 
 test("the agent's draft reads as the owner confirms it, as of when it was written", () => {

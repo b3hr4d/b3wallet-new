@@ -315,12 +315,13 @@ export function termsWallet(
       tokens.findIndex((other) => other.ledger === ledger) === index &&
       nameKey(token.symbol) !== "",
   )
+  // ICP's names are ICP's, whether or not its ledger could be read: "ICP", and the symbol its ledger reports.
   const icp = shown.find(({ ledger }) => ledger === ICP_LEDGER)
-  const icpKey = icp && nameKey(icp.token.symbol)
+  const reserved = new Set([nameKey("ICP"), ...(icp ? [nameKey(icp.token.symbol)] : [])])
   const symbols = counts(shown.map(({ token }) => nameKey(token.symbol)))
   const known = shown.filter((entry) => {
     const key = nameKey(entry.token.symbol)
-    return entry === icp || (key !== icpKey && symbols.get(key) === 1)
+    return entry === icp || (!reserved.has(key) && symbols.get(key) === 1)
   })
   const own = accounts.filter(
     (account) =>

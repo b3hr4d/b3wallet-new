@@ -17,7 +17,7 @@ import {
 import { readConfig } from "../src/config.ts"
 import { joinCode } from "../src/join-code.ts"
 import { InvalidArguments } from "../src/protocol.ts"
-import { eventText, walletTools } from "../src/tools.ts"
+import { eventText, termsWallet, walletTools } from "../src/tools.ts"
 
 const WALLET = "uxrrr-q7777-77774-qaaaq-cai"
 const ICP_LEDGER = "ryjl3-tyaaa-aaaaa-aaaba-cai"
@@ -741,4 +741,20 @@ test("the log names what happened to a request's terms", () => {
   assert.equal(eventText({ tag: "TermsProposed", value: 4n }), "wrote the terms of request 4")
   assert.equal(eventText({ tag: "TermsConfirmed", value: 4n }), "confirmed the terms of request 4")
   assert.equal(eventText({ tag: "TermsDeclined", value: 4n }), "said no to the terms of request 4")
+})
+
+test("the terms name ICP only by ICP's own ledger, read or not", () => {
+  const ckbtc = { ledger: TOKEN_LEDGER, token: { symbol: "ckBTC", decimals: 8 } }
+  const spoof = { ledger: SPOOF_LEDGER, token: { symbol: "icp", decimals: 8 } }
+  const real = { ledger: ICP_LEDGER, token: { symbol: "ICP", decimals: 8 } }
+  assert.deepEqual(termsWallet([real, spoof, ckbtc], [icp, btc, evm], 0n).tokens, {
+    ICP: { canister: ICP_LEDGER, decimals: 8 },
+    ckBTC: { canister: TOKEN_LEDGER, decimals: 8 },
+  })
+  // ICP's ledger could not be read: the other ledger still does not get its name.
+  assert.deepEqual(termsWallet([spoof, ckbtc], [], 0n).tokens, {
+    ckBTC: { canister: TOKEN_LEDGER, decimals: 8 },
+  })
+  // Only the Internet Computer account is named; the Bitcoin and EVM accounts called Main are not.
+  assert.deepEqual(termsWallet([real], [icp, btc, evm], 0n).apps, { main: WALLET })
 })
