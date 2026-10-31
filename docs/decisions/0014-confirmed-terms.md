@@ -1,6 +1,7 @@
 # 0014: An owner confirms the terms of a request before the agent's transfer
 
-Status: proposed, 2026-10-31.
+Status: accepted, 2026-10-31. Behrad chose option A, with the budget of
+`app.js` raised from 560,000 to 600,000 bytes.
 
 **Decision: before an agent answers an owner's request with a transfer, it
 writes the terms it reads in the request: the token, who is paid, the most,
