@@ -136,6 +136,8 @@ fn checks() {
                     .collect();
                 let checked = g["abstain"] == false && g["class"] == "one_transfer";
                 let ctx = context(&c["context"]);
+                let labels: Vec<&str> = ctx.accounts.iter().map(|a| a.label.as_str()).collect();
+                let flags = rule.flags(request, &labels);
                 for pair in c["pairs"].as_array().expect("pairs") {
                     n[0] += 1;
                     let got = compare(
@@ -144,7 +146,7 @@ fn checks() {
                         request,
                         &ctx,
                         &proposal(&pair["proposal"]),
-                        rule.flags(request),
+                        flags.clone(),
                     );
                     let fields: serde_json::Map<String, Value> = got
                         .fields
@@ -163,10 +165,10 @@ fn checks() {
             Some("request") => {
                 n[1] += 1;
                 let request = c["request"].as_str().expect("a request");
-                if json!(rule.flags(request)) != c["want"] {
+                if json!(rule.flags(request, &[])) != c["want"] {
                     wrong.push(format!(
                         "request {request:?}: rust {:?}, want {}",
-                        rule.flags(request),
+                        rule.flags(request, &[]),
                         c["want"]
                     ));
                 }
