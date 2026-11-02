@@ -231,9 +231,9 @@ impl Guard {
         Ok(answer)
     }
 
-    /// The request rule's flags: says_not_to, repeats.
-    pub fn request_flags(&self, request: &str) -> Vec<&'static str> {
-        self.rule.flags(request)
+    /// The request rule's flags: says_not_to, repeats. `labels`: the wallet's own account labels.
+    pub fn request_flags(&self, request: &str, labels: &[&str]) -> Vec<&'static str> {
+        self.rule.flags(request, labels)
     }
 
     /// The comparator's verdicts for `proposal`, with the request rule's flags.
@@ -245,13 +245,14 @@ impl Guard {
         proposal: &Proposal,
     ) -> Check {
         let checked = !answer.abstain && answer.class == "one_transfer";
+        let labels: Vec<&str> = ctx.accounts.iter().map(|a| a.label.as_str()).collect();
         comparator::compare(
             checked,
             &answer.spans,
             request,
             ctx,
             proposal,
-            self.request_flags(request),
+            self.request_flags(request, &labels),
         )
     }
 
