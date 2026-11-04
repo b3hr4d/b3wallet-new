@@ -97,7 +97,7 @@ type AddAccountArgs = record {
   label : text;
 };
 
-// A new name for an account: one no other account has (decision 0015).
+// A new name for an account: one no other account has (decision 0016).
 type RenameAccountArgs = record {
   account : AccountId;
   label : text;
@@ -183,6 +183,47 @@ type Action = variant {
     controller_module_hash : blob;
     controller_policy_sha256 : blob;
   };
+  // Adds a contact (no id) or changes one (decision 0015). A change of an
+  // address is as strict as adding a contact: both are this action, under
+  // its rule. Only owners propose it; a proposer cannot. The name is plain
+  // English: printable ASCII with at least one letter.
+  SetContact : record {
+    id : opt ContactId;
+    name : text;
+    addresses : vec ContactAddress;
+  };
+  RemoveContact : ContactId;
+};
+
+type ContactId = nat32;
+
+// A contact's address for accounts of one kind, checked as a transfer from
+// that kind checks its recipient. A contact has at most one of each kind.
+type ContactAddress = record {
+  kind : AccountKind;
+  address : text;
+};
+
+// A name and its addresses, nothing else: no notes, since the agent reads
+// the contacts. A name is unique among the contacts and the account labels
+// when saved, and is never an address; where it is read it names a contact
+// only when exactly one contact or label has it.
+type Contact = record {
+  id : ContactId;
+  name : text;
+  addresses : vec ContactAddress;
+  added_at_ns : nat64;
+  added_by : principal;
+  changed_at_ns : opt nat64;
+  changed_by : opt principal;
+};
+
+// Whom a proposer's transfer may pay. Known: one of the wallet's own
+// accounts, an address of a contact of the transfer's kind, or an address
+// the owner's request it answers writes. Any: whoever it names.
+type ProposerRecipients = variant {
+  Known;
+  Any;
 };
 
 type ActionKind = variant {
@@ -194,6 +235,8 @@ type ActionKind = variant {
   UninstallExtension;
   SetPolicy;
   Upgrade;
+  SetContact;
+  RemoveContact;
 };
 
 type DailyLimit = record {
@@ -213,6 +256,8 @@ type PolicyRule = record {
 
 type Policy = record {
   rules : vec PolicyRule;
+  // Absent means Known (decision 0015).
+  proposer_recipients : opt ProposerRecipients;
 };
 
 type TxReceipt = record {
@@ -550,6 +595,7 @@ type MemberResult = variant { Ok : Member; Err : WalletError };
 type MembersResult = variant { Ok : vec Member; Err : WalletError };
 type AccountResult = variant { Ok : Account; Err : WalletError };
 type AccountsResult = variant { Ok : vec Account; Err : WalletError };
+type ContactsResult = variant { Ok : vec Contact; Err : WalletError };
 type BalanceResult = variant { Ok : Balance; Err : WalletError };
 type HistoryResult = variant { Ok : vec HistoryEntry; Err : WalletError };
 type PendingResult = variant { Ok : Pending; Err : WalletError };
@@ -579,7 +625,7 @@ service : (WalletArg) -> {
 
   // Accounts. add_account and rename_account are for owners and need no
   // approval: they move nothing. Each account's label is a name no other
-  // account has, compared without case or extra spaces (decision 0015).
+  // account has, compared without case or extra spaces (decision 0016).
   accounts : () -> (AccountsResult) query;
   add_account : (AddAccountArgs) -> (AccountResult);
   rename_account : (RenameAccountArgs) -> (AccountResult);
@@ -612,6 +658,9 @@ service : (WalletArg) -> {
   execute : (ActionId) -> (PendingResult);
   pending : () -> (PendingListResult) query;
   policy : () -> (PolicyResult) query;
+  // The owners' contacts, in id order (decision 0015). Members, proposers
+  // included: the agent proposes by their names.
+  contacts : () -> (ContactsResult) query;
 
   // Extensions. ext_request accepts only a registered extension canister as caller.
   extensions : () -> (ExtensionsResult) query;

@@ -24,7 +24,7 @@ members the wallet at a glance: its holdings per token and how they split
 between accounts, its open actions, cycles, policy, members and version, and
 its accounts and their balances; it lets
 owners add and rename accounts, each with a name of its own
-([decision 0015](docs/decisions/0015-unique-account-names.md)), and lets someone signed in who is not a member ask to
+([decision 0016](docs/decisions/0016-unique-account-names.md)), and lets someone signed in who is not a member ask to
 join, as a viewer or, for an AI agent through the MCP server in `mcp/`, as a
 proposer whose transfers always wait for an owner
 ([decision 0007](docs/decisions/0007-agent-proposer.md)), and owners can load a guard

@@ -76,12 +76,20 @@ To see the agent's principal yourself, import its key into icp-cli:
 | `wallet_whoami`           | The agent's principal, the wallet's version and pages, and the agent's role      |
 | `wallet_join`             | Asks to join as a proposer and returns the code the Approvals page shows         |
 | `wallet_accounts`         | The accounts, with each one's chain, address and token                           |
+| `wallet_contacts`         | The owners' contacts: each one's name and addresses, one per kind of account     |
 | `wallet_balance`          | One account's balance, in its token's units                                      |
 | `wallet_activity`         | The audit log, newest first: who proposed, approved, ran or rejected what        |
 | `wallet_pending`          | The open actions, who proposed them, and where each stands                       |
 | `wallet_requests`         | The owners' open requests: what they ask the agent to do, in their own words     |
 | `wallet_propose_terms`    | Writes the terms the agent reads in a request, for an owner to confirm           |
 | `wallet_propose_transfer` | Proposes a transfer of a decimal amount, which waits for an owner or an approver |
+
+A transfer's recipient may be a contact's name, or the label of one of the
+wallet's own accounts, when exactly one contact or account has it
+([decision 0015](../docs/decisions/0015-contacts.md)); the result says what
+the name stood for. Under the default policy the wallet refuses a proposer's
+transfer to an address that is not a contact, not one of its accounts and not
+written in the owner's request it answers.
 
 A transfer names the owner's request it answers, so the wallet's guard checks
 it against the owner's own words on the Approvals page

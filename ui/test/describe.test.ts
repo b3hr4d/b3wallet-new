@@ -260,13 +260,20 @@ test("an action shows what it sets beyond its sentence", () => {
         },
         { kind: { tag: "SetPolicy" }, quorum: 2, timelock_ns: 7n * day, daily_limits: [] },
       ],
+      proposer_recipients: null,
     },
   }
   assert.deepEqual(actionDetails(policy), [
     "A transfer: 2 approvals and no wait.",
     "A transfer that keeps the last 24 hours' spending on ICP within 1 ICP needs only its proposer and no wait.",
     "Changing the policy: 2 approvals and a wait of 7 days.",
+    "A proposer's transfer may pay only the wallet's own accounts, its contacts and addresses written in the owner's request it answers.",
   ])
+  const any: Action = {
+    tag: "SetPolicy",
+    value: { rules: [], proposer_recipients: { tag: "Any" } },
+  }
+  assert.deepEqual(actionDetails(any), ["A proposer's transfer may pay any address."])
   const ledger = "mxzaz-hqaaa-aaaar-qaada-cai" as never
   const extension: Action = {
     tag: "InstallExtension",

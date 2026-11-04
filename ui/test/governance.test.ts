@@ -11,6 +11,7 @@ const member = (id: string, role: Role["tag"]): Member => ({
   added_by: null,
 })
 const policy = (quorum: number): Policy => ({
+  proposer_recipients: null,
   rules: [
     { kind: { tag: "Transfer" }, quorum, timelock_ns: 0n, daily_limits: [] },
     { kind: { tag: "AddMember" }, quorum: 1, timelock_ns: 0n, daily_limits: [] },

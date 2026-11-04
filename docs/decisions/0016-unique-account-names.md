@@ -1,4 +1,4 @@
-# 0015: Each account has a name of its own
+# 0016: Each account has a name of its own
 
 Status: accepted, 2026-11-04. Behrad chose unique names ("Go with your pick!",
 thread "Try the guard on B3Wallet locally"), over names shown with their
@@ -26,6 +26,9 @@ one account.
   names rule matches them, so a label the wallet accepts is one the tools
   can always resolve. A fullwidth "Ｓavings" is "Savings", and "BTC
   Savings" is " btc  savings ". Accents are not removed.
+- **Contacts.** A contact's name ([decision 0015](0015-contacts.md)) is
+  compared by the same key: an account cannot take a contact's name, and a
+  contact cannot take an account's (`contacts.rs` `check_label_free`).
 - **The wallet's own accounts.** Each is named for its chain. If an owner
   already took a name, the wallet takes the next free one ("Bitcoin
   wallet 2").

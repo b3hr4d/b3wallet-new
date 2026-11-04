@@ -31,6 +31,7 @@ import {
   type Actor as Wallet,
   type AuditEvent,
   type Chain,
+  type Contact,
   type Pending,
   type RequestTerms,
   type TermsConfirmation,
@@ -98,6 +99,18 @@ export function kindText(kind: AccountKind): string {
       return chainText({ tag: "Bitcoin", value: kind.value })
     case "Evm":
       return "EVM: the native token of each tracked EVM chain, at one address"
+  }
+}
+
+/** An account's kind, by name only, as a contact's address names it. */
+export function kindName(kind: AccountKind): string {
+  switch (kind.tag) {
+    case "InternetComputer":
+      return "Internet Computer"
+    case "Bitcoin":
+      return chainText({ tag: "Bitcoin", value: kind.value })
+    case "Evm":
+      return "EVM"
   }
 }
 
@@ -195,6 +208,70 @@ export function accountNamed(
   }
   throw new InvalidArguments(
     `no account is named “${name}”; wallet_accounts lists their ids and labels`,
+  )
+}
+
+/**
+ * The address a recipient's name stands for, by the same rule over the
+ * wallet's own accounts and the owners' contacts together (decision 0015):
+ * exactly one of them has the name, and for a contact, its address for
+ * accounts of `kind`, the kind the transfer sends from. Otherwise a refusal
+ * that tells the agent to ask.
+ */
+export function recipientNamed(
+  accounts: readonly Account[],
+  contacts: readonly Contact[],
+  name: string,
+  kind: AccountKind,
+): { address: string; names: string } {
+  type Named = { account: Account } | { contact: Contact }
+  const found = resolveName<Named>(
+    [
+      ...accounts.map((account) => ({ name: account.label, value: { account } })),
+      ...contacts.map((contact) => ({ name: contact.name, value: { contact } })),
+    ],
+    name,
+    { isValue: isAddress },
+  )
+  if ("entry" in found) {
+    const named = found.entry.value
+    if ("account" in named) {
+      return {
+        address: named.account.address,
+        names: `to “${name}” is account ${named.account.id}, ${named.account.address}`,
+      }
+    }
+    const address = named.contact.addresses.find((address) => sameKind(address.kind, kind))
+    if (address === undefined) {
+      throw new InvalidArguments(
+        `the contact “${named.contact.name}” has no ${kindName(kind)} address: ask the person for one, or for another account to send from`,
+      )
+    }
+    return {
+      address: address.address,
+      names: `to “${name}” is the contact “${named.contact.name}”, ${address.address}`,
+    }
+  }
+  if ("error" in found && found.error === "ambiguous") {
+    const which = found.entries
+      .map(({ value }) =>
+        "account" in value
+          ? `account ${value.account.id}, ${kindText(value.account.kind)}`
+          : `contact ${value.contact.id}`,
+      )
+      .join("; ")
+    throw new InvalidArguments(
+      `${found.entries.length} accounts or contacts are named “${name}” (${which}): ask the person which one, then pass its address`,
+    )
+  }
+  throw new InvalidArguments(
+    `no account or contact is named “${name}”; wallet_accounts and wallet_contacts list them. Ask the person for the address`,
+  )
+}
+
+function sameKind(a: AccountKind, b: AccountKind): boolean {
+  return (
+    a.tag === b.tag && (a.tag !== "Bitcoin" || b.tag !== "Bitcoin" || a.value.tag === b.value.tag)
   )
 }
 
@@ -300,17 +377,19 @@ function isAccount(text: string): boolean {
 
 /**
  * What @meantjs/consent/terms reads terms against (decision 0014), as the
- * wallet's page builds it in `ui/src/logic/terms.ts`: the tokens by symbol
- * and the wallet's own Internet Computer accounts by label, at `now`, in
- * UTC. A name that would not name one thing is left out: one with no letters
- * or digits, and one two tokens or two accounts share once case, spaces and
- * punctuation are set aside. ICP keeps its name, and another ledger that
+ * wallet's page builds it in `ui/src/logic/terms.ts`: the tokens by symbol,
+ * and the wallet's own Internet Computer accounts by label and the owners'
+ * contacts with an Internet Computer address by name (decision 0015), at
+ * `now`, in UTC. A name that would not name one thing is left out: one with
+ * no letters or digits, and one two tokens, or two of the accounts and
+ * contacts, share once case, spaces and punctuation are set aside. ICP keeps its name, and another ledger that
  * calls itself ICP is left out.
  */
 export function termsWallet(
   tokens: ReadonlyArray<{ ledger: string; token: Token }>,
   accounts: readonly Account[],
   now: bigint,
+  contacts: readonly Contact[] = [],
 ): TermsWallet {
   const shown = tokens.filter(
     ({ ledger, token }, index) =>
@@ -331,7 +410,16 @@ export function termsWallet(
       nameKey(account.label) !== "" &&
       isAccount(account.address),
   )
-  const labels = counts(own.map((account) => nameKey(account.label)))
+  const payees = [
+    ...own.map((account) => ({ name: account.label, address: account.address })),
+    ...contacts.flatMap((contact) => {
+      const address = contact.addresses.find((address) => address.kind.tag === "InternetComputer")
+      return address !== undefined && nameKey(contact.name) !== "" && isAccount(address.address)
+        ? [{ name: contact.name, address: address.address }]
+        : []
+    }),
+  ]
+  const names = counts(payees.map((payee) => nameKey(payee.name)))
   return {
     tokens: Object.fromEntries(
       known.map(({ ledger, token }) => [
@@ -340,9 +428,9 @@ export function termsWallet(
       ]),
     ),
     apps: Object.fromEntries(
-      own
-        .filter((account) => labels.get(nameKey(account.label)) === 1)
-        .map((account) => [account.label, account.address]),
+      payees
+        .filter((payee) => names.get(nameKey(payee.name)) === 1)
+        .map((payee) => [payee.name, payee.address]),
     ),
     now,
     utcOffsetMinutes: 0,
@@ -511,7 +599,11 @@ function tools(client: Client, config: Config): Tool[] {
    * ledger says its symbol and decimals, and the wallet's own accounts.
    */
   const termsWalletNow = async (): Promise<TermsWallet> => {
-    const [accounts, tracked] = await Promise.all([wallet.accounts(), wallet.assets()])
+    const [accounts, tracked, contacts] = await Promise.all([
+      wallet.accounts(),
+      wallet.assets(),
+      wallet.contacts(),
+    ])
     const tokens = await Promise.all(
       tracked.flatMap((asset) =>
         asset.tag === "Icp" || asset.tag === "Icrc"
@@ -529,7 +621,7 @@ function tools(client: Client, config: Config): Tool[] {
     if (read.length === 0) {
       throw new Error("no token's ledger could be read, so terms cannot be read now: try again")
     }
-    return termsWallet(read, accounts, BigInt(Date.now()) * 1_000_000n)
+    return termsWallet(read, accounts, BigInt(Date.now()) * 1_000_000n, contacts)
   }
 
   const amountText = (amount: bigint, token: Token | undefined) =>
@@ -565,6 +657,13 @@ function tools(client: Client, config: Config): Tool[] {
         return `Make ${action.value.id} ${action.value.role.tag}`
       case "RemoveMember":
         return `Remove the member ${action.value}`
+      case "SetContact": {
+        const { id, name, addresses } = action.value
+        const at = addresses.map((address) => `${kindName(address.kind)} ${address.address}`)
+        return `${id === null ? "Add the contact" : `Change contact ${id} to`} “${name}”: ${at.join("; ")}`
+      }
+      case "RemoveContact":
+        return `Remove contact ${action.value}`
       default:
         return `${action.tag}: ${json(action.value)}`
     }
@@ -684,6 +783,26 @@ function tools(client: Client, config: Config): Tool[] {
           ),
         )
       },
+    },
+    {
+      name: "wallet_contacts",
+      title: "The owners' contacts",
+      description:
+        "The owners' address book: each contact's id, name and addresses, at most one for each kind of account. A transfer's to may be a contact's name, which sends to its address for the kind of account sent from; the wallet's guard then checks the recipient against the owner's words. Only owners add, change or remove contacts, on the wallet's Settings page; a new contact or a changed address waits a day before it counts. A proposer's transfer to an address that is not a contact, not one of the wallet's accounts and not written in the owner's request is refused, unless the owners allow any.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      readOnly: true,
+      run: async () =>
+        json(
+          (await wallet.contacts()).map((contact) => ({
+            id: contact.id,
+            name: contact.name,
+            addresses: contact.addresses.map((address) => ({
+              kind: kindName(address.kind),
+              address: address.address,
+            })),
+            since: dateOf(contact.changed_at_ns ?? contact.added_at_ns),
+          })),
+        ),
     },
     {
       name: "wallet_balance",
@@ -811,7 +930,7 @@ function tools(client: Client, config: Config): Tool[] {
           to: {
             type: "string",
             description:
-              "Who is paid: an ICRC-1 account in its text form (a principal is one), as the owner gave it, or the label of one of the wallet's own Internet Computer accounts.",
+              "Who is paid: an ICRC-1 account in its text form (a principal is one), as the owner gave it, the label of one of the wallet's own Internet Computer accounts, or the name of a contact with an Internet Computer address, from wallet_contacts.",
           },
           max_amount: {
             type: "string",
@@ -879,7 +998,7 @@ function tools(client: Client, config: Config): Tool[] {
           to: {
             type: "string",
             description:
-              "For ICP and ICRC-1 tokens, an ICRC-1 account in its text form (a principal is one); for Bitcoin, an address of the account's network; for an EVM chain, an address: 0x and 40 hex digits. Or the label of one of the wallet's own accounts, which sends to its address. An address is always taken as an address.",
+              "For ICP and ICRC-1 tokens, an ICRC-1 account in its text form (a principal is one); for Bitcoin, an address of the account's network; for an EVM chain, an address: 0x and 40 hex digits. Or the label of one of the wallet's own accounts, which sends to its address, or a contact's name from wallet_contacts, which sends to its address for the kind of account sent from. A name must belong to exactly one account or contact; when several share it, ask the person. An address is always taken as an address.",
           },
           amount: {
             type: "string",
@@ -915,9 +1034,10 @@ function tools(client: Client, config: Config): Tool[] {
         let to = text(args, "to") ?? ""
         if (!to) throw new InvalidArguments("to is empty")
         if (!isAddress(to)) {
-          const own = accountNamed(await wallet.accounts(), to)
-          names.push(`to “${to}” is account ${own.id}, ${own.address}`)
-          to = own.address
+          const [accounts, contacts] = await Promise.all([wallet.accounts(), wallet.contacts()])
+          const named = recipientNamed(accounts, contacts, to, account.kind)
+          names.push(named.names)
+          to = named.address
         }
         // Exact, by @meantjs/format: more digits than the token has are refused, never rounded.
         const amount = BigInt(read("amount", () => parseAmount(text(args, "amount") ?? "", token)))

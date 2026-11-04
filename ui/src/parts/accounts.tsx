@@ -540,7 +540,7 @@ type Kind = AccountKind["tag"]
 
 /**
  * Renames an account, for owners. It moves nothing, so it needs no approval,
- * and the wallet refuses a name another account has (decision 0015); the
+ * and the wallet refuses a name another account has (decision 0016); the
  * rename is in the activity log.
  */
 export function RenameAccount({

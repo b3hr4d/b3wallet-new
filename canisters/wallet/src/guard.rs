@@ -121,7 +121,16 @@ fn chain(c: &Chain) -> ::guard::Chain {
     }
 }
 
-/// The wallet as the comparator reads it: the listed accounts, with their labels and addresses.
+fn kind_chain(kind: AccountKind) -> ::guard::Chain {
+    match kind {
+        AccountKind::InternetComputer => ::guard::Chain::Icp,
+        AccountKind::Bitcoin(network) => ::guard::Chain::Bitcoin(format!("{network:?}")),
+        AccountKind::Evm => ::guard::Chain::Evm(None),
+    }
+}
+
+/// The wallet as the comparator reads it: the listed accounts, with their labels and addresses, and the owners'
+/// contacts (decision 0015).
 // shortcut: no tokens, since the wallet keeps no ICRC-1 ledger's symbol or decimals; an ICRC-1 transfer's asset
 // and amount are then not checked. Upgrade by storing them when a ledger is tracked.
 fn context() -> ::guard::Context {
@@ -131,22 +140,29 @@ fn context() -> ::guard::Context {
         .filter(|(_, account)| account.is_listed())
         .map(|(id, account)| {
             let view = account.view(id, wallet);
-            let chain = match view.kind {
-                AccountKind::InternetComputer => ::guard::Chain::Icp,
-                AccountKind::Bitcoin(network) => ::guard::Chain::Bitcoin(format!("{network:?}")),
-                AccountKind::Evm => ::guard::Chain::Evm(None),
-            };
             ::guard::Account {
                 id,
                 label: view.label,
                 address: view.address,
-                chain,
+                chain: kind_chain(view.kind),
             }
+        })
+        .collect();
+    let contacts = storage::contacts()
+        .into_iter()
+        .map(|(_, contact)| ::guard::Contact {
+            name: contact.name,
+            addresses: contact
+                .addresses
+                .into_iter()
+                .map(|a| (kind_chain(a.kind), a.address))
+                .collect(),
         })
         .collect();
     ::guard::Context {
         accounts,
         tokens: Vec::new(),
+        contacts,
     }
 }
 
@@ -194,6 +210,8 @@ pub fn check(id: ActionId) -> Result<GuardReport, WalletError> {
             .ok_or_else(|| WalletError::NotFound("the guard model is not loaded".to_string()))?;
         // The wallet's own account labels are swapped before the model reads (candid-profile D-045), so a label such
         // as "BTC Savings" reads as a label, not as a second asset; the comparator resolves it from the owner's words.
+        // Contact names are not swapped: the model was trained on person names as names it leaves unresolved, and
+        // decision 0015 swaps them only if the re-scored guard benchmark shows the false flags do not rise.
         let ctx = context();
         let names: Vec<String> = ctx.accounts.iter().map(|a| a.label.clone()).collect();
         let symbols: Vec<String> = ctx.tokens.iter().map(|t| t.symbol.clone()).collect();

@@ -30,10 +30,10 @@ use unicode_normalization::UnicodeNormalization;
 
 /// At most this many accounts, so every list of them stays small.
 pub const MAX_ACCOUNTS: usize = 64;
-/// What the wallet named every account it made itself before names were unique (decision 0015).
+/// What the wallet named every account it made itself before names were unique (decision 0016).
 pub const OLD_DEFAULT_LABEL: &str = "Main";
 
-/// The label of the account of `kind` the wallet makes itself, one per kind, so each is a name of its own (decision 0015).
+/// The label of the account of `kind` the wallet makes itself, one per kind, so each is a name of its own (decision 0016).
 pub fn default_label(kind: AccountKind) -> &'static str {
     match kind {
         AccountKind::InternetComputer => "ICP wallet",
@@ -50,7 +50,7 @@ pub fn name_key(label: &str) -> String {
 }
 
 /// Refuses `label` when a listed account other than `except` already has that name: names are unique, so a name stands
-/// for one account (decision 0015).
+/// for one account (decision 0016).
 pub fn check_unique<'a>(
     label: &str,
     except: Option<AccountId>,
@@ -94,7 +94,7 @@ pub fn free_label<'a>(
 }
 
 /// The accounts the wallet made itself that still have the old name "Main", renamed to their kind's default label (or
-/// the next free one), in id order: what an upgrade stores (decision 0015). Accounts people added or named keep theirs.
+/// the next free one), in id order: what an upgrade stores (decision 0016). Accounts people added or named keep theirs.
 pub fn rename_defaults(accounts: &[(AccountId, StoredAccount)]) -> Vec<(AccountId, StoredAccount)> {
     let mut all = accounts.to_vec();
     let mut renamed = Vec::new();

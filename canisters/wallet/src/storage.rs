@@ -8,12 +8,13 @@
 
 use crate::accounts::{self, StoredAccount};
 use crate::actions::{StoredPending, Tx};
+use crate::contacts::StoredContact;
 use crate::governance::Governance;
-use crate::policy::default_policy;
+use crate::policy::{default_policy, with_contact_rules};
 use crate::upgrade::StoredUpgrade;
 use crate::{
     AccountId, AccountKind, Action, ActionId, ActionState, AuditEntry, AuditEvent, BitcoinNetwork,
-    Chain, InitArgs, Member, Outcome, Policy, Request, RequestId, RequestTerms, Role,
+    Chain, ContactId, InitArgs, Member, Outcome, Policy, Request, RequestId, RequestTerms, Role,
 };
 use crate::{assets, btc, evm};
 use candid::{CandidType, Nat, Principal, decode_one, encode_one};
@@ -45,6 +46,7 @@ const TRACKED_MEMORY: MemoryId = MemoryId::new(13);
 const UNSETTLED_MEMORY: MemoryId = MemoryId::new(14);
 const GUARD_MEMORY: MemoryId = MemoryId::new(15);
 const REQUESTS_MEMORY: MemoryId = MemoryId::new(16);
+const CONTACTS_MEMORY: MemoryId = MemoryId::new(17);
 
 /// What the wallet was installed with.
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -192,6 +194,7 @@ candid_storable!(
     Policy,
     StoredAccount,
     StoredAuditEntry,
+    StoredContact,
     StoredMember,
     StoredPending,
     StoredRequest,
@@ -267,6 +270,11 @@ thread_local! {
     /// The owners' requests to their agents (decision 0012), never deleted.
     static REQUESTS: RefCell<StableBTreeMap<RequestId, StoredRequest, Memory>> =
         RefCell::new(StableBTreeMap::init(memory(REQUESTS_MEMORY)));
+
+    /// The owners' contacts (decision 0015). A removed one stays, marked, so
+    /// its id names no other contact.
+    static CONTACTS: RefCell<StableBTreeMap<ContactId, StoredContact, Memory>> =
+        RefCell::new(StableBTreeMap::init(memory(CONTACTS_MEMORY)));
 }
 
 fn memory(id: MemoryId) -> Memory {
@@ -300,6 +308,34 @@ pub fn open_requests() -> Vec<(RequestId, StoredRequest)> {
             .filter(|(_, r)| r.closed_at_ns.is_none())
             .collect()
     })
+}
+
+/// The contacts not removed, in id order.
+pub fn contacts() -> Vec<(ContactId, StoredContact)> {
+    CONTACTS.with_borrow(|contacts| {
+        contacts
+            .iter()
+            .map(|entry| entry.into_pair())
+            .filter(|(_, contact)| contact.removed_at_ns.is_none())
+            .collect()
+    })
+}
+
+pub fn contact(id: ContactId) -> Option<StoredContact> {
+    CONTACTS.with_borrow(|contacts| contacts.get(&id))
+}
+
+/// Stores a new contact under the next id. Ids start at 1 and only grow.
+pub fn add_contact(contact: StoredContact) -> ContactId {
+    CONTACTS.with_borrow_mut(|contacts| {
+        let id = contacts.last_key_value().map_or(1, |(last, _)| last + 1);
+        contacts.insert(id, contact);
+        id
+    })
+}
+
+pub fn set_contact(id: ContactId, contact: StoredContact) {
+    CONTACTS.with_borrow_mut(|contacts| contacts.insert(id, contact));
 }
 
 /// The guard file's bytes, at their offsets (`guard.rs`): raw, not a structure.
@@ -691,8 +727,15 @@ pub fn complete_claim(owner: Principal, member: StoredMember) {
 ///   network holds, and one that tracked some and holds none of them on its
 ///   new network tracks that network's first.
 pub fn migrate(network: Option<BitcoinNetwork>) -> Result<(), String> {
-    if POLICY.with_borrow(|cell| cell.get().is_none()) {
-        set_policy(default_policy());
+    match POLICY.with_borrow(|cell| cell.get().clone()) {
+        None => set_policy(default_policy()),
+        // A wallet from before contacts gets their two rules (decision 0015).
+        Some(policy) => {
+            let upgraded = with_contact_rules(policy.clone());
+            if upgraded != policy {
+                set_policy(upgraded);
+            }
+        }
     }
     let migration = accounts::migrate(&accounts())?;
     ACCOUNTS.with_borrow_mut(|stored| {
@@ -700,7 +743,7 @@ pub fn migrate(network: Option<BitcoinNetwork>) -> Result<(), String> {
             stored.insert(*id, account.clone());
         }
     });
-    // The accounts the wallet made itself as "Main" get names of their own (decision 0015).
+    // The accounts the wallet made itself as "Main" get names of their own (decision 0016).
     for (id, account) in accounts::rename_defaults(&accounts()) {
         set_account(id, account);
     }
@@ -803,6 +846,7 @@ pub fn check() -> Result<(), String> {
         return Err("stable memory holds no policy".to_string());
     }
     MEMBERS.with_borrow(|members| members.values().for_each(drop));
+    CONTACTS.with_borrow(|contacts| contacts.values().for_each(drop));
     PENDING.with_borrow(|actions| actions.values().for_each(drop));
     HISTORY.with_borrow(|history| history.values().for_each(drop));
     AUDIT.with_borrow(|log| log.iter().for_each(drop));

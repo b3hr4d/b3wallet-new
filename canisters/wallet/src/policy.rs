@@ -29,8 +29,40 @@ pub fn default_policy() -> Policy {
             rule(ActionKind::UninstallExtension, 0),
             rule(ActionKind::SetPolicy, 7 * DAY_NS),
             rule(ActionKind::Upgrade, 7 * DAY_NS),
+            rule(ActionKind::SetContact, DAY_NS),
+            rule(ActionKind::RemoveContact, 0),
         ],
+        proposer_recipients: Some(crate::ProposerRecipients::Known),
     }
+}
+
+/// A policy stored before decision 0015, with the rules of the contact
+/// actions added: the default ones, with the `SetContact` timelock no longer
+/// than the `SetPolicy` rule's, so the policy stays valid. Any other policy
+/// is returned as it is.
+pub fn with_contact_rules(mut policy: Policy) -> Policy {
+    let Some(set_policy) = policy
+        .rules
+        .iter()
+        .find(|rule| rule.kind == ActionKind::SetPolicy)
+        .cloned()
+    else {
+        return policy;
+    };
+    for (kind, timelock_ns) in [
+        (ActionKind::SetContact, DAY_NS),
+        (ActionKind::RemoveContact, 0),
+    ] {
+        if !policy.rules.iter().any(|rule| rule.kind == kind) {
+            policy.rules.push(PolicyRule {
+                kind,
+                quorum: 1,
+                timelock_ns: timelock_ns.min(set_policy.timelock_ns),
+                daily_limits: vec![],
+            });
+        }
+    }
+    policy
 }
 
 /// Checks a policy's shape. A stored policy always passes it.
@@ -189,7 +221,7 @@ pub(crate) mod tests {
     pub(crate) fn valid_policy() -> impl Strategy<Value = Policy> {
         let rule = (1u8..=4, 0..=3 * DAY_NS);
         let limits = prop::collection::btree_map(0u8..3, 0u64..1_000, 0..3);
-        (prop::collection::vec(rule, 8), limits).prop_map(|(terms, limits)| {
+        (prop::collection::vec(rule, ActionKind::ALL.len()), limits).prop_map(|(terms, limits)| {
             let quorum = terms.iter().map(|(quorum, _)| *quorum).max().unwrap();
             let timelock_ns = terms.iter().map(|(_, timelock)| *timelock).max().unwrap();
             let rules = ActionKind::ALL
@@ -219,7 +251,10 @@ pub(crate) mod tests {
                     }
                 })
                 .collect();
-            Policy { rules }
+            Policy {
+                rules,
+                proposer_recipients: None,
+            }
         })
     }
 
@@ -239,6 +274,48 @@ pub(crate) mod tests {
         let policy = default_policy();
         assert_eq!(validate(&policy), Ok(()));
         assert_eq!(check_governance([Role::Owner], &policy), Ok(()));
+    }
+
+    #[test]
+    fn a_policy_from_before_contacts_gets_their_rules() {
+        let mut old = default_policy();
+        old.rules.retain(|rule| {
+            !matches!(
+                rule.kind,
+                ActionKind::SetContact | ActionKind::RemoveContact
+            )
+        });
+        old.proposer_recipients = None;
+        assert!(validate(&old).is_err());
+        let upgraded = with_contact_rules(old.clone());
+        assert_eq!(validate(&upgraded), Ok(()));
+        let set = |p: &Policy| {
+            p.rules
+                .iter()
+                .find(|r| r.kind == ActionKind::SetContact)
+                .cloned()
+        };
+        assert_eq!(
+            set(&upgraded).map(|r| (r.quorum, r.timelock_ns)),
+            Some((1, DAY_NS))
+        );
+        assert_eq!(
+            upgraded.proposer_recipients(),
+            crate::ProposerRecipients::Known
+        );
+        // Never longer than the SetPolicy rule's, so the policy stays valid.
+        let mut quick = old;
+        for rule in &mut quick.rules {
+            rule.timelock_ns = rule.timelock_ns.min(3600 * 1_000_000_000);
+        }
+        let quick = with_contact_rules(quick);
+        assert_eq!(validate(&quick), Ok(()));
+        assert_eq!(
+            set(&quick).map(|r| r.timelock_ns),
+            Some(3600 * 1_000_000_000)
+        );
+        // A policy with them is kept as it is.
+        assert_eq!(with_contact_rules(default_policy()), default_policy());
     }
 
     #[test]
@@ -438,7 +515,7 @@ pub(crate) mod tests {
         #[test]
         fn only_transfers_within_the_daily_limit_skip_their_rule(
             policy in valid_policy(),
-            kind_index in 0usize..8,
+            kind_index in 0usize..ActionKind::ALL.len(),
             chain in chain(),
             amount in 0u64..1_500,
             spent in 0u64..1_500,

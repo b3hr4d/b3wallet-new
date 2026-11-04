@@ -44,6 +44,9 @@ export function RequestTermsView({
     [wallet, "request"],
   ] as const
   const confirm = useMutation(client.mutationOptions(wallet, "confirm_terms", { invalidates }))
+  // A contact's name may say who is paid (decision 0015). Contacts that cannot be read name no one.
+  const contactsRead = useQuery(client.queryOptions(wallet, "contacts"))
+  const contacts = contactsRead.data ?? (contactsRead.isError ? [] : undefined)
   const decline = useMutation(client.mutationOptions(wallet, "decline_terms", { invalidates }))
   const terms = request.terms
   if (terms === null) {
@@ -113,13 +116,13 @@ export function RequestTermsView({
     )
   }
 
-  if (tokens === undefined || accounts === undefined) {
+  if (tokens === undefined || accounts === undefined || contacts === undefined) {
     return <p className="quiet">Reading the terms your agent wrote…</p>
   }
   const read: DraftRead =
     tokens.length === 0
       ? { error: "the wallet could not read the ledger of any token it holds" }
-      : readDraft(terms, tokens, accounts)
+      : readDraft(terms, tokens, accounts, undefined, contacts)
   const end = read.terms && endOf(read.terms)
   const ended = end !== undefined && end !== null && end < now
   const draft = `Draft ${terms.version} of at most ${MAX_DRAFTS}, written on ${dateOf(terms.drafted_at_ns)}.`
@@ -205,12 +208,16 @@ export function useTermsCheck({
 }): TermsCheck {
   const { client, wallet } = useWallet(id)
   const answers = active && pending.action.tag === "Transfer" ? pending.request : null
+  const contactsRead = useQuery(client.queryOptions(wallet, "contacts"))
+  const contacts = contactsRead.data ?? (contactsRead.isError ? [] : undefined)
   const request = useQuery(
     client.queryOptions(wallet, "request", answers === null ? skipToken : answers),
   )
   if (answers === null) return { tag: "none" }
   if (request.isError) return { tag: "failed", error: request.error }
-  if (request.data === undefined || accounts === undefined) return { tag: "reading" }
+  if (request.data === undefined || accounts === undefined || contacts === undefined) {
+    return { tag: "reading" }
+  }
   const terms = request.data.terms
   if (terms === null) return { tag: "no-terms", request: answers }
   if (terms.confirmed === null) return { tag: "unconfirmed", request: answers }
@@ -220,7 +227,7 @@ export function useTermsCheck({
     tag: "checked",
     request: answers,
     text: terms.confirmed.text,
-    ...checkTransfer(confirmed, pending.action, from, accounts, now),
+    ...checkTransfer(confirmed, pending.action, from, accounts, now, contacts),
   }
 }
 

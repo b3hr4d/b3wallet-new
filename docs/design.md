@@ -212,7 +212,7 @@ action that the policy module releases only after its quorum and timelock.
    `add_account`: a kind and a label. It needs no approval, since it moves
    nothing, and a wallet has at most 64 accounts. Each label is a name no
    other account has, and owners rename an account with `rename_account`
-   ([decision 0015](decisions/0015-unique-account-names.md)). An Internet Computer
+   ([decision 0016](decisions/0016-unique-account-names.md)). An Internet Computer
    account is an ICRC-1 account of the wallet's own principal and holds ICP
    and every ICRC-1 token the owners track: index `n` is subaccount `n` as
    32 big-endian bytes, so index 0 is the plain principal ([decision
@@ -454,7 +454,7 @@ is never reused or renumbered, even after its store goes away; the audit log's
 | Memory id | Store | Key to value | Structure | On upgrade |
 | --- | --- | --- | --- | --- |
 | 0 | Config | claim key until claimed, release channel, release signer keys and threshold, factory | `StableCell` | Kept |
-| 1 | Policy | action kind to quorum, daily limit, timelock | `StableCell` | Kept; changed only by a `SetPolicy` action |
+| 1 | Policy | action kind to quorum, daily limit, timelock; whom a proposer's transfer may pay (decision 0015) | `StableCell` | Kept; changed only by a `SetPolicy` action |
 | 2 | Members | principal to role, label, added at, added by | `StableBTreeMap` | Kept |
 | 3 | Accounts | account id to kind, label, derivation index, holder, added at and by, a Bitcoin account's public key, and the account an ICP or ICRC account became when accounts got kinds; never deleted | `StableBTreeMap` | Kept; addresses derived from the index or the key |
 | 4 | Pending actions | action id to action, approvals, earliest execution, state, and a Bitcoin transfer's transaction, whether it may have been sent, how often and when it was last sent, and from which block its inputs were spent; never deleted, so an id never names another action | `StableBTreeMap` | Kept; timelocks keep running |
@@ -469,6 +469,7 @@ is never reused or renumbered, even after its store goes away; the audit log's
 | 14 | Unsettled transfers | the ids of the transfers whose outcome the timer still settles | `StableBTreeMap` | Kept |
 | 15 | Guard file | the guard model's file (decision 0012) as owners uploaded it, at its offsets | raw virtual memory | Kept; `post_upgrade` loads it again if it is the file the release pins |
 | 16 | Requests | request id to an owner's words for their agent, who wrote it and when, when it closed, the actions proposed for it, and the terms the agent read in it with an owner's yes or no (decision 0014); never deleted (decision 0012) | `StableBTreeMap` | Kept; a request stored before terms reads with none |
+| 17 | Contacts | contact id to a name and at most one address per kind of account, added at and by, changed at and by, and when it was removed; a removed one stays, so an id never names another contact (decision 0015) | `StableBTreeMap` | Kept; a wallet from before contacts starts with none and gets the `SetContact` and `RemoveContact` rules |
 
 Every stored value is Candid with optional new fields, so a release can add
 fields without a migration. A store a release adds is filled in by

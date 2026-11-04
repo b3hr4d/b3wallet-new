@@ -15,6 +15,7 @@ mod btc;
 mod calls;
 mod channel;
 mod claim;
+mod contacts;
 mod ed25519;
 mod evm;
 mod evm_rpc;
@@ -161,6 +162,16 @@ fn pending() -> Result<Vec<Pending>, WalletError> {
         .collect())
 }
 
+/// The owners' contacts, in id order (decision 0015). A proposer reads them
+/// too: the agent proposes by their names.
+#[ic_cdk::query(guard = "access::member")]
+fn contacts() -> Result<Vec<Contact>, WalletError> {
+    Ok(storage::contacts()
+        .into_iter()
+        .map(|(id, contact)| contact.view(id))
+        .collect())
+}
+
 /// The wallet's accounts, in id order.
 #[ic_cdk::query(guard = "access::member")]
 fn accounts() -> Result<Vec<Account>, WalletError> {
@@ -180,6 +191,7 @@ async fn add_account(args: AddAccountArgs) -> Result<Account, WalletError> {
     let caller = ic_cdk::api::msg_caller();
     check_not_installing(ic_cdk::api::time())?;
     let index = accounts::check_new(&args, storage::accounts().iter().map(|(_, a)| a))?;
+    contacts::check_label_free(&args.label, &storage::contacts())?;
     let public_key = account_key(args.kind, index).await?;
     if public_key.is_some() {
         // Other calls ran meanwhile.
@@ -204,7 +216,7 @@ async fn add_account(args: AddAccountArgs) -> Result<Account, WalletError> {
 
 /// Renames an account. Its name is only how people find it, and every
 /// screen shows its address beside it, so owners rename without approval;
-/// the name must be one no other account has (decision 0015).
+/// the name must be one no other account has (decision 0016).
 #[ic_cdk::update(guard = "access::owner")]
 fn rename_account(args: RenameAccountArgs) -> Result<Account, WalletError> {
     let caller = ic_cdk::api::msg_caller();
@@ -215,6 +227,7 @@ fn rename_account(args: RenameAccountArgs) -> Result<Account, WalletError> {
     governance::check_label(&args.label)?;
     let all = storage::accounts();
     accounts::check_unique(&args.label, Some(id), all.iter().map(|(id, a)| (*id, a)))?;
+    contacts::check_label_free(&args.label, &storage::contacts())?;
     let from = std::mem::replace(&mut account.label, args.label.trim().to_string());
     storage::set_account(id, account.clone());
     let now = ic_cdk::api::time();
@@ -286,7 +299,7 @@ fn add_default(kind: AccountKind, public_key: Option<Vec<u8>>, now: u64) {
     if accounts::next_index(kind, accounts.iter().map(|(_, a)| a)) != 0 {
         return;
     }
-    // One name per account (decision 0015): an owner may have taken the default name meanwhile.
+    // One name per account (decision 0016): an owner may have taken the default name meanwhile.
     let label = accounts::free_label(
         accounts::default_label(kind),
         accounts.iter().map(|(_, a)| a),
@@ -505,6 +518,7 @@ fn propose_action(action: Action, request: Option<RequestId>) -> Result<Pending,
     let answered = request
         .map(|id| open_request_for(id, &action, now))
         .transpose()?;
+    let action_copy = action.clone();
     let spend = match &mut action {
         Action::Transfer(request) => {
             let (from, account) = storage::listed_account(request.from)
@@ -514,7 +528,19 @@ fn propose_action(action: Action, request: Option<RequestId>) -> Result<Pending,
             request.from = from;
             request.asset = Some(asset.clone());
             let amount = sending::check_transfer(request, &account)?;
+            if !approves {
+                check_known_recipient(request, account.kind(), answered.as_ref())?;
+            }
             Some((asset, amount))
+        }
+        Action::SetContact { addresses, .. } => {
+            let checked = check_contact(&action_copy)?;
+            *addresses = checked;
+            None
+        }
+        Action::RemoveContact(_) => {
+            check_contact(&action_copy)?;
+            None
         }
         Action::Upgrade {
             version,
@@ -614,6 +640,55 @@ fn open_request_for(
         )));
     }
     Ok((id, stored))
+}
+
+/// Checks a contact action against the contacts and the account labels as
+/// they are now, and returns a `SetContact`'s addresses in canonical form.
+fn check_contact(action: &Action) -> Result<Vec<ContactAddress>, WalletError> {
+    let labels: Vec<String> = storage::accounts()
+        .into_iter()
+        .filter(|(_, account)| account.is_listed())
+        .map(|(_, account)| account.label)
+        .collect();
+    contacts::check(
+        action,
+        &storage::contacts(),
+        &labels,
+        storage::bitcoin_network(),
+    )
+}
+
+/// Refuses a proposer's transfer to a recipient the owners do not know, under
+/// the policy's `proposer_recipients` (decision 0015).
+fn check_known_recipient(
+    transfer: &TransferRequest,
+    kind: AccountKind,
+    answered: Option<&(RequestId, storage::StoredRequest)>,
+) -> Result<(), WalletError> {
+    let wallet = ic_cdk::api::canister_self();
+    let own: Vec<String> = storage::accounts()
+        .into_iter()
+        .filter(|(_, account)| account.is_listed() && account.kind() == kind)
+        .map(|(id, account)| account.view(id, wallet).address)
+        .collect();
+    let rule = storage::policy().proposer_recipients();
+    let request = answered.map(|(_, stored)| stored.text.as_str());
+    if contacts::known_recipient(
+        rule,
+        kind,
+        &transfer.to,
+        &own,
+        &storage::contacts(),
+        request,
+    ) {
+        Ok(())
+    } else {
+        Err(WalletError::PolicyViolation(
+            "the recipient is not a contact, not one of the wallet's accounts and not written in \
+             the owner's request; an owner can propose it, or add a contact"
+                .to_string(),
+        ))
+    }
 }
 
 /// The most requests open at once, so the agent's list stays short.
@@ -910,6 +985,25 @@ async fn execute(id: ActionId) -> Result<Pending, WalletError> {
         let caller = ic_cdk::api::msg_caller();
         return sending::execute(id, pending, request, Some(caller), now).await;
     }
+    if matches!(
+        pending.action,
+        Action::SetContact { .. } | Action::RemoveContact(_)
+    ) {
+        let by = pending
+            .approvals
+            .first()
+            .copied()
+            .unwrap_or(pending.proposed_by);
+        let result = apply_contact(&pending.action, by, now);
+        pending.finish(
+            result
+                .map(|()| Outcome::Done)
+                .map_err(|error| reason(&error)),
+        );
+        storage::set_action(id, pending.clone());
+        audit(ic_cdk::api::msg_caller(), AuditEvent::Executed(id), now);
+        return Ok(pending.view(id, now));
+    }
     let mut governance = storage::governance();
     // The first approval is the proposer's, or for a join request the first
     // member who approved it.
@@ -942,6 +1036,46 @@ async fn execute(id: ActionId) -> Result<Pending, WalletError> {
     storage::set_action(id, pending.clone());
     audit(ic_cdk::api::msg_caller(), AuditEvent::Executed(id), now);
     Ok(pending.view(id, now))
+}
+
+/// Writes a contact action that passed its policy, checked again against the
+/// contacts and labels as they are now. On error nothing changes.
+fn apply_contact(action: &Action, by: Principal, now: u64) -> Result<(), WalletError> {
+    let addresses = check_contact(action)?;
+    match action {
+        Action::SetContact { id: None, name, .. } => {
+            storage::add_contact(contacts::StoredContact {
+                name: name.clone(),
+                addresses,
+                added_at_ns: now,
+                added_by: by,
+                changed_at_ns: None,
+                changed_by: None,
+                removed_at_ns: None,
+            });
+        }
+        Action::SetContact {
+            id: Some(id), name, ..
+        } => {
+            let mut contact = storage::contact(*id)
+                .ok_or_else(|| WalletError::NotFound(format!("contact {id}")))?;
+            contact.name = name.clone();
+            contact.addresses = addresses;
+            contact.changed_at_ns = Some(now);
+            contact.changed_by = Some(by);
+            storage::set_contact(*id, contact);
+        }
+        Action::RemoveContact(id) => {
+            let mut contact = storage::contact(*id)
+                .ok_or_else(|| WalletError::NotFound(format!("contact {id}")))?;
+            contact.removed_at_ns = Some(now);
+            contact.changed_at_ns = Some(now);
+            contact.changed_by = Some(by);
+            storage::set_contact(*id, contact);
+        }
+        _ => unreachable!("only contact actions are applied here"),
+    }
+    Ok(())
 }
 
 /// How a step of a Bitcoin transfer or an upgrade failed.

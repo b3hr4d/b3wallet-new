@@ -14,6 +14,7 @@ import type {
   Account,
   Action,
   ConfirmTermsArgs,
+  Contact,
   RequestTerms,
   TermsConfirmation,
 } from "../generated/wallet.ts"
@@ -50,12 +51,14 @@ function isAccount(text: string): boolean {
 }
 
 /**
- * What the terms read against: the tokens of `tokens` by symbol and the
- * wallet's own Internet Computer accounts by label, at `now`, in a zone
- * `utcOffsetMinutes` east of UTC. A name that would not name one thing is
- * left out, so terms cannot use it: one with no letters or digits, a symbol
- * @meantjs/format would not show, and a name two tokens or two accounts
- * share once case, spaces and punctuation are set aside. ICP keeps its name,
+ * What the terms read against: the tokens of `tokens` by symbol, and the
+ * wallet's own Internet Computer accounts by label and the owners' contacts
+ * with an Internet Computer address by name (decision 0015), at `now`, in a
+ * zone `utcOffsetMinutes` east of UTC. A name that would not name one thing
+ * is left out, so terms cannot use it: one with no letters or digits, a
+ * symbol @meantjs/format would not show, and a name two tokens, or two of the
+ * accounts and contacts, share once case, spaces and punctuation are set
+ * aside. ICP keeps its name,
  * and another ledger that calls itself ICP is left out.
  */
 export function termsWallet(
@@ -63,6 +66,7 @@ export function termsWallet(
   accounts: readonly Account[],
   now: bigint,
   utcOffsetMinutes: number,
+  contacts: readonly Contact[] = [],
 ): Wallet {
   const shown = tokens.filter(({ ledger, token }, index) => {
     if (tokens.findIndex((other) => other.ledger === ledger) !== index) return false
@@ -87,7 +91,16 @@ export function termsWallet(
       nameKey(account.label) !== "" &&
       isAccount(account.address),
   )
-  const labels = counts(own.map((account) => nameKey(account.label)))
+  const payees = [
+    ...own.map((account) => ({ name: account.label, address: account.address })),
+    ...contacts.flatMap((contact) => {
+      const address = contact.addresses.find((address) => address.kind.tag === "InternetComputer")
+      return address !== undefined && nameKey(contact.name) !== "" && isAccount(address.address)
+        ? [{ name: contact.name, address: address.address }]
+        : []
+    }),
+  ]
+  const names = counts(payees.map((payee) => nameKey(payee.name)))
   return {
     tokens: Object.fromEntries(
       known.map(({ ledger, token }) => [
@@ -96,9 +109,9 @@ export function termsWallet(
       ]),
     ),
     apps: Object.fromEntries(
-      own
-        .filter((account) => labels.get(nameKey(account.label)) === 1)
-        .map((account) => [account.label, account.address]),
+      payees
+        .filter((payee) => names.get(nameKey(payee.name)) === 1)
+        .map((payee) => [payee.name, payee.address]),
     ),
     now,
     utcOffsetMinutes,
@@ -128,8 +141,9 @@ export function readDraft(
   tokens: readonly LedgerToken[],
   accounts: readonly Account[],
   utcOffsetMinutes: number = zoneAt(terms.drafted_at_ns),
+  contacts: readonly Contact[] = [],
 ): DraftRead {
-  const wallet = termsWallet(tokens, accounts, terms.drafted_at_ns, utcOffsetMinutes)
+  const wallet = termsWallet(tokens, accounts, terms.drafted_at_ns, utcOffsetMinutes, contacts)
   try {
     const read = readTerms(
       {
@@ -210,7 +224,9 @@ export function transferGrant(action: Action, from: Account | undefined): Grant 
 
 /**
  * Whether a transfer fits the terms an owner confirmed, at `now`, and if not,
- * why, in words. Names in the reasons are the wallet's own accounts.
+ * why, in words. Names in the reasons are the wallet's own accounts and the
+ * owners' contacts as they are now: a contact whose address changed after
+ * the terms were confirmed no longer names the address the terms hold.
  */
 export function checkTransfer(
   confirmed: ConfirmedTerms,
@@ -218,6 +234,7 @@ export function checkTransfer(
   from: Account | undefined,
   accounts: readonly Account[],
   now: bigint,
+  contacts: readonly Contact[] = [],
 ): { fits: boolean; reasons: string[] } {
   const token = { symbol: confirmed.symbol, decimals: confirmed.decimals, fee: null }
   const wallet = termsWallet(
@@ -225,6 +242,7 @@ export function checkTransfer(
     accounts,
     now,
     confirmed.utcOffsetMinutes,
+    contacts,
   )
   try {
     return checkGrant(confirmed, transferGrant(action, from), wallet)

@@ -9,13 +9,17 @@
 //! the logits (within 1e-3) and the answers of all its cases; skipped without them, since the weights (44 MB) are
 //! not in the repository.
 //!
+//! `contacts`: the comparator with the owners' contacts in the context (B3Wallet decision 0015) against the same
+//! Python code, on `tests/data/contacts.jsonl` (`fixtures.py --contacts --data data-r10q --every 8`: the benchmark
+//! test set's requests that name the recipient by a person's name, the name made a contact in four ways).
+//!
 //! `names`: the swap of the wallet's names (`Tokenizer::swap_names`) against candid-profile's `guard/names.py` on
 //! `tests/data/names.jsonl` (`names_dev.py --fixtures`: 608 requests of round 6's dev split `.w`, as written and with
 //! token words in the labels), and with GUARD_BIN also the answers (`Guard::answer_named`).
 
 use guard::{
-    Account, Chain, Context, Guard, Manip, Overall, Piece, Proposal, RequestRule, Tables, Token,
-    Tokenizer, Verdict, compare,
+    Account, Chain, Contact, Context, Guard, Manip, Overall, Piece, Proposal, RequestRule, Tables,
+    Token, Tokenizer, Verdict, compare,
 };
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -63,6 +67,28 @@ fn context(v: &Value) -> Context {
                 decimals: t["decimals"].as_u64().expect("decimals") as u32,
             })
             .collect(),
+        contacts: v["contacts"]
+            .as_array()
+            .map(|contacts| {
+                contacts
+                    .iter()
+                    .map(|c| Contact {
+                        name: c["name"].as_str().expect("a name").into(),
+                        addresses: c["addresses"]
+                            .as_array()
+                            .expect("addresses")
+                            .iter()
+                            .map(|a| {
+                                (
+                                    chain(&a["chain"]),
+                                    a["address"].as_str().expect("an address").into(),
+                                )
+                            })
+                            .collect(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
     }
 }
 
@@ -102,6 +128,21 @@ fn overall(o: Overall) -> &'static str {
 
 #[test]
 fn checks() {
+    let path = std::env::var("GUARD_CHECKS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| data("checks.jsonl"));
+    let n = run(&path);
+    assert!(n.iter().all(|&k| k > 0), "every kind is checked");
+}
+
+#[test]
+fn contacts() {
+    let n = run(&data("contacts.jsonl"));
+    assert!(n[0] > 1_000, "the contact cases are read: {n:?}");
+}
+
+/// Checks every case of a checks file, and returns how many proposals, requests and texts it checked.
+fn run(path: &std::path::Path) -> [usize; 3] {
     let vocab: Vec<String> = std::fs::read_to_string(data("vocab.txt"))
         .expect("vocab.txt")
         .split('\n')
@@ -109,10 +150,7 @@ fn checks() {
         .collect();
     let rule = RequestRule::new(&vocab);
     let manip = Manip::default();
-    let path = std::env::var("GUARD_CHECKS")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| data("checks.jsonl"));
-    let text = std::fs::read_to_string(&path).expect("the checks file");
+    let text = std::fs::read_to_string(path).expect("the checks file");
     let (mut n, mut wrong) = ([0usize; 3], Vec::new());
     for line in text.lines().filter(|l| !l.trim().is_empty()) {
         let c: Value = serde_json::from_str(line).expect("a JSON line");
@@ -199,7 +237,6 @@ fn checks() {
         n[2],
         path.display()
     );
-    assert!(n.iter().all(|&k| k > 0), "every kind is checked");
     assert!(
         wrong.is_empty(),
         "{} of {} differ:\n{}",
@@ -212,6 +249,7 @@ fn checks() {
             .collect::<Vec<_>>()
             .join("\n")
     );
+    n
 }
 
 #[test]

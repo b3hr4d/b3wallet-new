@@ -180,6 +180,46 @@ pub enum Action {
         controller_module_hash: ByteBuf,
         controller_policy_sha256: ByteBuf,
     },
+    /// Adds a contact (no `id`) or changes contact `id`: its name and all its
+    /// addresses (decision 0015).
+    SetContact {
+        id: Option<ContactId>,
+        name: String,
+        addresses: Vec<ContactAddress>,
+    },
+    RemoveContact(ContactId),
+}
+
+pub type ContactId = u32;
+
+/// One address of a contact, for one kind of account.
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ContactAddress {
+    pub kind: AccountKind,
+    pub address: String,
+}
+
+/// One of the owners' contacts (decision 0015): a name and its addresses,
+/// nothing else.
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct Contact {
+    pub id: ContactId,
+    pub name: String,
+    pub addresses: Vec<ContactAddress>,
+    pub added_at_ns: u64,
+    pub added_by: Principal,
+    pub changed_at_ns: Option<u64>,
+    pub changed_by: Option<Principal>,
+}
+
+/// Whom a proposer's transfer may pay (decision 0015).
+#[derive(CandidType, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProposerRecipients {
+    /// One of the wallet's own accounts, a contact, or an address the owner's
+    /// request writes.
+    Known,
+    /// Any recipient.
+    Any,
 }
 
 #[derive(CandidType, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -192,6 +232,8 @@ pub enum ActionKind {
     UninstallExtension,
     SetPolicy,
     Upgrade,
+    SetContact,
+    RemoveContact,
 }
 
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -211,6 +253,16 @@ pub struct PolicyRule {
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Policy {
     pub rules: Vec<PolicyRule>,
+    /// Absent in a policy stored before decision 0015, and then `Known`.
+    pub proposer_recipients: Option<ProposerRecipients>,
+}
+
+impl Policy {
+    /// Whom a proposer's transfer may pay under this policy.
+    pub fn proposer_recipients(&self) -> ProposerRecipients {
+        self.proposer_recipients
+            .unwrap_or(ProposerRecipients::Known)
+    }
 }
 
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -321,7 +373,7 @@ pub enum AuditEvent {
     Claimed,
     JoinRequested(Principal),
     AccountAdded(AccountId),
-    /// An owner renamed an account (decision 0015).
+    /// An owner renamed an account (decision 0016).
     AccountRenamed {
         account: AccountId,
         from: String,
@@ -387,12 +439,14 @@ impl Action {
             // strongest rule.
             Action::SetPolicy(_) | Action::HandOverControl { .. } => ActionKind::SetPolicy,
             Action::Upgrade { .. } => ActionKind::Upgrade,
+            Action::SetContact { .. } => ActionKind::SetContact,
+            Action::RemoveContact(_) => ActionKind::RemoveContact,
         }
     }
 }
 
 impl ActionKind {
-    pub const ALL: [ActionKind; 8] = [
+    pub const ALL: [ActionKind; 10] = [
         ActionKind::Transfer,
         ActionKind::AddMember,
         ActionKind::RemoveMember,
@@ -401,6 +455,8 @@ impl ActionKind {
         ActionKind::UninstallExtension,
         ActionKind::SetPolicy,
         ActionKind::Upgrade,
+        ActionKind::SetContact,
+        ActionKind::RemoveContact,
     ];
 }
 
