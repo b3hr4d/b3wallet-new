@@ -153,6 +153,12 @@ export function actionText(
       return `Upgrade the wallet to version ${action.value.version}`
     case "HandOverControl":
       return `Hand control of the wallet's code to the recovery controller ${action.value.controller}`
+    case "SetContact":
+      return action.value.id === null
+        ? `Add the contact “${action.value.name}”`
+        : `Change contact ${action.value.id}, “${action.value.name}”`
+    case "RemoveContact":
+      return `Remove contact ${action.value}`
   }
 }
 
@@ -171,7 +177,12 @@ export function actionDetails(action: Action): string[] {
       return [...granted.map(permissionText), ...budgets.map(budgetText)]
     }
     case "SetPolicy":
-      return action.value.rules.flatMap(ruleText)
+      return [
+        ...action.value.rules.flatMap(ruleText),
+        action.value.proposer_recipients?.tag === "Any"
+          ? "A proposer's transfer may pay any address."
+          : "A proposer's transfer may pay only the wallet's own accounts, its contacts and addresses written in the owner's request it answers.",
+      ]
     case "Upgrade":
       return [`The new version's Wasm has the SHA-256 ${hexOf(action.value.wasm_sha256)}.`]
     case "HandOverControl":
@@ -184,6 +195,8 @@ export function actionDetails(action: Action): string[] {
     case "RemoveMember":
     case "ChangeRole":
     case "UninstallExtension":
+    case "SetContact":
+    case "RemoveContact":
       return []
   }
 }
@@ -227,6 +240,8 @@ const KIND_TEXT: Record<ActionKind["tag"], string> = {
   UninstallExtension: "Uninstalling an extension",
   SetPolicy: "Changing the policy",
   Upgrade: "An upgrade",
+  SetContact: "Adding or changing a contact",
+  RemoveContact: "Removing a contact",
 }
 
 /**

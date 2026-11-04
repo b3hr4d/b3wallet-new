@@ -179,7 +179,7 @@ type Action = variant {
   };
   // Adds a contact (no id) or changes one (decision 0015). A change of an
   // address is as strict as adding a contact: both are this action, under
-  // its rule. Owners and admins only; a proposer cannot propose it.
+  // its rule. Only owners propose it; a proposer cannot.
   SetContact : record {
     id : opt ContactId;
     name : text;

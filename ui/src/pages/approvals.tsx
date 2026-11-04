@@ -19,6 +19,7 @@ import { dateOf } from "../logic/time.ts"
 import { transferAsset } from "../logic/tokens.ts"
 import { ApprovalDots, OutcomeLine, StateChip, useDecide } from "../parts/decide.tsx"
 import { GuardLine, Requests } from "../parts/guard.tsx"
+import { ContactLines, useContacts } from "../parts/contacts.tsx"
 import { CheckIcon } from "../parts/icons.tsx"
 import { AsMember, Reading } from "../parts/member.tsx"
 import { useNowNs } from "../parts/now.ts"
@@ -133,6 +134,7 @@ function OpenAction({
   // A transfer outside the terms an owner confirmed is offered no Approve and no Run (decision 0014).
   const terms = useTermsCheck({ wallet, pending, from, accounts, now, active: approves })
   const allowed = termsAllow(terms)
+  const contacts = useContacts(wallet)
   return (
     <li className="item">
       <p className="item-head">
@@ -148,6 +150,7 @@ function OpenAction({
           ))}
         </ul>
       )}
+      <ContactLines action={action} from={from} accounts={accounts} contacts={contacts} />
       {approves && <GuardLine wallet={wallet} pending={pending} me={me} />}
       <TermsLine check={terms} />
       {join && (

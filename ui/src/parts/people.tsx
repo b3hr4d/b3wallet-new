@@ -32,6 +32,8 @@ const KINDS: ReadonlyArray<[ActionKind["tag"], string]> = [
   ["ChangeRole", "Role changes"],
   ["InstallExtension", "New extensions"],
   ["UninstallExtension", "Removing extensions"],
+  ["SetContact", "New or changed contacts"],
+  ["RemoveContact", "Removing contacts"],
 ]
 
 /**
@@ -108,6 +110,11 @@ export function Rules({
               </p>
             </div>
           )}
+          <p className="quiet small">
+            {policy.data.proposer_recipients?.tag === "Any"
+              ? "A proposer's transfer may pay any address."
+              : "A proposer's transfer may pay only the wallet's own accounts, its contacts, and an address written in the owner's request it answers."}
+          </p>
           {transfer?.quorum === 1 && approvers !== undefined && approvers > 1 && (
             <p className="hint">
               One approval moves funds, though {approvers} members can approve. A policy change can
