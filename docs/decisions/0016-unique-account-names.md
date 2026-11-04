@@ -34,7 +34,9 @@ one account.
   wallet 2").
 - **The upgrade.** It renames only accounts the wallet made (no `added_by`)
   that are still called "Main". An account an owner added, even one called
-  "Main", keeps its name. Labels that already repeat between owners'
+  "Main", keeps its name, and so does one an owner renamed: `rename_account`
+  records who renamed it (`renamed_by`), so a later upgrade leaves even an
+  owner's chosen "Main" alone. Labels that already repeat between owners'
   accounts stay until an owner renames one, and the tools keep refusing
   such a name as ambiguous.
 - **Why no approval.** A rename moves nothing. Every screen shows the

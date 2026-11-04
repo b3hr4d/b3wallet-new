@@ -229,6 +229,7 @@ fn rename_account(args: RenameAccountArgs) -> Result<Account, WalletError> {
     accounts::check_unique(&args.label, Some(id), all.iter().map(|(id, a)| (*id, a)))?;
     contacts::check_label_free(&args.label, &storage::contacts())?;
     let from = std::mem::replace(&mut account.label, args.label.trim().to_string());
+    account.renamed_by = Some(caller);
     storage::set_account(id, account.clone());
     let now = ic_cdk::api::time();
     audit(

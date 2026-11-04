@@ -94,13 +94,17 @@ pub fn free_label<'a>(
 }
 
 /// The accounts the wallet made itself that still have the old name "Main", renamed to their kind's default label (or
-/// the next free one), in id order: what an upgrade stores (decision 0016). Accounts people added or named keep theirs.
+/// the next free one), in id order: what an upgrade stores (decision 0016). Accounts people added or renamed keep
+/// theirs, even one an owner renamed "Main".
 pub fn rename_defaults(accounts: &[(AccountId, StoredAccount)]) -> Vec<(AccountId, StoredAccount)> {
     let mut all = accounts.to_vec();
     let mut renamed = Vec::new();
     for k in 0..all.len() {
         let (id, account) = &all[k];
-        if account.added_by.is_some() || !account.is_listed() || account.label != OLD_DEFAULT_LABEL
+        if account.added_by.is_some()
+            || account.renamed_by.is_some()
+            || !account.is_listed()
+            || account.label != OLD_DEFAULT_LABEL
         {
             continue;
         }
@@ -143,6 +147,9 @@ pub struct StoredAccount {
     /// and an ICRC account with the same index were one subaccount. Its id
     /// leads there, and it is no longer listed.
     pub merged_into: Option<AccountId>,
+    /// The owner who last renamed it (`rename_account`), absent if nobody
+    /// has. An upgrade never renames an account an owner named.
+    pub renamed_by: Option<Principal>,
 }
 
 impl StoredAccount {
@@ -165,6 +172,7 @@ impl StoredAccount {
             added_by,
             public_key: public_key.map(ByteBuf::from),
             merged_into: None,
+            renamed_by: None,
         }
     }
 
@@ -606,12 +614,16 @@ mod tests {
         taken.label = "bitcoin WALLET".into(); // an owner took the default name already
         let mut kept = stored(EVM, 1);
         kept.label = OLD_DEFAULT_LABEL.into(); // an owner named it "Main": it keeps the name
+        // A wallet-made account an owner renamed "Main" keeps it on every later upgrade.
+        let mut chosen = made(IC, 1);
+        chosen.renamed_by = Some(Principal::anonymous());
         let all = [
             (1, made(IC, 0)),
             (2, made(REGTEST, 0)),
             (3, made(EVM, 0)),
             (4, taken),
             (5, kept),
+            (6, chosen),
         ];
         let renamed: Vec<(AccountId, String)> = rename_defaults(&all)
             .into_iter()

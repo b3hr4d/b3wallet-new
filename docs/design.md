@@ -456,7 +456,7 @@ is never reused or renumbered, even after its store goes away; the audit log's
 | 0 | Config | claim key until claimed, release channel, release signer keys and threshold, factory | `StableCell` | Kept |
 | 1 | Policy | action kind to quorum, daily limit, timelock; whom a proposer's transfer may pay (decision 0015) | `StableCell` | Kept; changed only by a `SetPolicy` action |
 | 2 | Members | principal to role, label, added at, added by | `StableBTreeMap` | Kept |
-| 3 | Accounts | account id to kind, label, derivation index, holder, added at and by, a Bitcoin account's public key, and the account an ICP or ICRC account became when accounts got kinds; never deleted | `StableBTreeMap` | Kept; addresses derived from the index or the key |
+| 3 | Accounts | account id to kind, label, derivation index, holder, added at and by, who last renamed it, a Bitcoin account's public key, and the account an ICP or ICRC account became when accounts got kinds; never deleted | `StableBTreeMap` | Kept; addresses derived from the index or the key |
 | 4 | Pending actions | action id to action, approvals, earliest execution, state, and a Bitcoin transfer's transaction, whether it may have been sent, how often and when it was last sent, and from which block its inputs were spent; never deleted, so an id never names another action | `StableBTreeMap` | Kept; timelocks keep running |
 | 5 | Extensions | extension canister id to origin, permissions, budgets, spent this window | `StableBTreeMap` | Kept |
 | 6 | History | sequence to a transfer the wallet sent: account, chain, recipient, amount, ledger block or Bitcoin txid, Bitcoin fee, action | `StableBTreeMap` | Kept; the daily limit reads its last 24 hours |
