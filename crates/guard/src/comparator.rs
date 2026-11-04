@@ -124,8 +124,18 @@ fn fold(text: &str) -> String {
     text.to_lowercase()
 }
 
+/// A name as names are compared (candid-profile D-045): lowercase, White_Space runs as one space, trimmed. The
+/// wallet keeps contact names unique by the same key (`contacts.rs` `name_key`).
+// shortcut: D-045 applies NFKC first; this crate has no normalization tables, and neither does the Python reference,
+// so a name in compatibility forms (full-width "Ｄａｎａ") matches no contact and the recipient is not checked, never
+// a wrong match. Upgrade by giving both NFKC in the same change.
+fn name_key(text: &str) -> String {
+    fold(text).split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// An account label as the request names it: `name_key`, and a leading "the " dropped.
 fn norm(text: &str) -> String {
-    let out = fold(text).split_whitespace().collect::<Vec<_>>().join(" ");
+    let out = name_key(text);
     match out.strip_prefix("the ") {
         Some(rest) => rest.to_owned(),
         None => out,
@@ -317,15 +327,16 @@ pub fn kind_key(c: &Chain) -> String {
 }
 
 /// What a name in the request means for the recipient: an own account's address or a contact's address of the
-/// transfer's kind, when exactly one account label or contact name is that name. A contact named by an address
-/// never matches.
+/// transfer's kind, when exactly one account label or contact name is that name. Labels are read by `norm`, contact
+/// names by `name_key`, as the Python reference reads them. A contact named by an address never matches.
 fn named_address<'a>(text: &str, p: &Proposal, ctx: &'a Context) -> Option<&'a str> {
     let word = norm(text);
     let mut accounts = ctx.accounts.iter().filter(|a| norm(&a.label) == word);
+    let key = name_key(text);
     let mut contacts = ctx
         .contacts
         .iter()
-        .filter(|c| !is_address(&c.name) && norm(&c.name) == word);
+        .filter(|c| !is_address(&c.name) && name_key(&c.name) == key);
     match (accounts.next(), contacts.next()) {
         (Some(a), None) if accounts.next().is_none() => Some(&a.address),
         (None, Some(c)) if contacts.next().is_none() => {
@@ -486,5 +497,32 @@ mod tests {
         assert_eq!(e("1k", 8), "not a number");
         assert_eq!(e(".", 8), "not a number");
         assert_eq!(e("1.2.3", 8), "not a number");
+    }
+
+    #[test]
+    fn names_are_lowercased_not_folded() {
+        // D-045 as the Python reference's `name_key` reads it (its test_contact_names_are_lowercased_not_folded).
+        assert_eq!(name_key("STRAßE"), name_key("Straße"));
+        assert_ne!(
+            name_key("STRASSE"),
+            name_key("Straße"),
+            "case folding would match"
+        );
+        assert_eq!(
+            name_key(" The\u{a0} Smiths "),
+            "the smiths",
+            "no-break space is White_Space"
+        );
+        assert_eq!(
+            norm("The Smiths"),
+            "smiths",
+            "a label drops a leading \"the \""
+        );
+        assert_ne!(
+            name_key("Dana\u{1c}"),
+            name_key("Dana"),
+            "U+001C is not White_Space"
+        );
+        assert_ne!(name_key("Ｄａｎａ"), name_key("Dana"), "shortcut: no NFKC");
     }
 }
