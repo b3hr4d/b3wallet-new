@@ -50,6 +50,47 @@ const transfer: Pending = {
   request: null,
 }
 
+test("an approval shows the wallet's own name beside an address or a principal, never instead of it", () => {
+  const savings = {
+    ...main,
+    id: 2,
+    label: "BTC Savings",
+    address: "efadq-gl777-77774-aaaba-cai-6cc627i.2",
+  }
+  const icp = { symbol: "ICP", decimals: 8, fee: 10_000n }
+  const to = (address: string): Action => ({
+    tag: "Transfer",
+    value: { from: 1, asset: null, to: address, amount: 150_000_000n, fee: null, memo: null },
+  })
+  assert.equal(
+    actionText(to(savings.address), main, icp, { accounts: [main, savings] }),
+    `Send 1.5 ICP from “Main” to “BTC Savings” (${savings.address})`,
+  )
+  assert.equal(
+    actionText(to(owner), main, icp, { accounts: [main, savings] }),
+    `Send 1.5 ICP from “Main” to ${owner}`,
+  )
+  const phone = {
+    id: device,
+    label: "Behrad's phone",
+    role: { tag: "Owner" },
+    added_at_ns: NOW,
+    added_by: null,
+  } as Member
+  assert.equal(
+    actionText({ tag: "RemoveMember", value: device } as Action, undefined, undefined, {
+      members: [phone],
+    }),
+    `Remove the member “Behrad's phone” (${device})`,
+  )
+  assert.equal(
+    actionText({ tag: "RemoveMember", value: owner } as Action, undefined, undefined, {
+      members: [phone],
+    }),
+    `Remove the member ${owner}`,
+  )
+})
+
 test("a transfer names its amount and account once they are known", () => {
   const icp = { symbol: "ICP", decimals: 8, fee: 10_000n }
   assert.equal(actionText(transfer.action, main, icp), `Send 1.5 ICP from “Main” to ${owner}`)

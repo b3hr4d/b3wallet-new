@@ -1,6 +1,6 @@
 import { isReactorError, type ReactorError } from "@ic-reactor/core"
 import { AgentError, CertifiedRejectErrorCode } from "@icp-sdk/core/agent"
-import { displayBytes } from "@meantjs/format"
+import { displayBytes, ownerOf } from "@meantjs/format"
 import type {
   Account,
   AccountKind,
@@ -119,10 +119,30 @@ export function isJoinRequest(pending: Pending): boolean {
  * Bitcoin transfer spends it on top of the amount, and an EVM transfer pays
  * at most it.
  */
+/** The wallet's own names (candid-profile decision D-045): its accounts' labels and its members' labels. */
+export type Names = {
+  accounts?: readonly Account[] | undefined
+  members?: readonly Member[] | undefined
+}
+
+/**
+ * `value` with its name in this wallet beside it, “BTC Savings” (address), when exactly one account or member has that
+ * address or principal; the value alone otherwise. A name is a label someone chose, so the value is always shown too.
+ */
+function withName(value: string, entries: { name: string; value: string }[]): string {
+  const owner = ownerOf(entries, value)
+  return owner ? `“${owner.name}” (${value})` : value
+}
+const accountNames = (names: Names) =>
+  (names.accounts ?? []).map((account) => ({ name: account.label, value: account.address }))
+const memberNames = (names: Names) =>
+  (names.members ?? []).map((member) => ({ name: member.label, value: String(member.id) }))
+
 export function actionText(
   action: Action,
   from: Account | undefined,
   token: Token | undefined,
+  names: Names = {},
 ): string {
   switch (action.tag) {
     case "Transfer": {
@@ -135,14 +155,14 @@ export function actionText(
           : action.value.asset?.tag === "Evm"
             ? `, paying at most ${units(fee)} in fees`
             : `, paying a fee of ${units(fee)}`
-      return `Send ${units(amount)} from ${source} to ${to}${paying}`
+      return `Send ${units(amount)} from ${source} to ${withName(to, accountNames(names))}${paying}`
     }
     case "AddMember":
       return `Add ${action.value.id} as ${roleText(action.value.role)}, “${action.value.label}”`
     case "RemoveMember":
-      return `Remove the member ${action.value}`
+      return `Remove the member ${withName(String(action.value), memberNames(names))}`
     case "ChangeRole":
-      return `Make ${action.value.id} ${roleText(action.value.role)}`
+      return `Make ${withName(String(action.value.id), memberNames(names))} ${roleText(action.value.role)}`
     case "InstallExtension":
       return `Install the extension ${action.value.canister}`
     case "UninstallExtension":

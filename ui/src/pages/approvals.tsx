@@ -142,7 +142,9 @@ function OpenAction({
         <StateChip pending={pending} now={now} />
         <ApprovalDots pending={pending} />
       </p>
-      <p>{join ? joinRequestText(pending) : actionText(action, from, token)}.</p>
+      <p>
+        {join ? joinRequestText(pending) : actionText(action, from, token, { accounts, members })}.
+      </p>
       {details.length > 0 && (
         <ul className="details">
           {details.map((line, index) => (

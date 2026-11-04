@@ -263,7 +263,7 @@ function Ticket({
         <StateChip pending={pending} now={now} />
       </p>
       <p className="ticket-text">
-        {join ? joinRequestText(pending) : actionText(action, from, token)}.
+        {join ? joinRequestText(pending) : actionText(action, from, token, { accounts, members })}.
       </p>
       {details.length > 0 && (
         <ul className="details">
