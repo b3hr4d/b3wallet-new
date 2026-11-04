@@ -174,3 +174,22 @@ Not covered:
     with the label reading today: 0 of 32,044 changes missed, and 275 of
     5,440 correct transfers flagged (5.1%, all memo reads). The false flags
     must not rise.
+
+## Results, 2026-11-04
+
+candid-profile branch `claude/project-thread-dhw2se`,
+`guard/bench/contacts/` (protocol committed before either run; not
+published). The plumbing check reproduced v0's and v1's figures first.
+
+| Measure | Before | With contacts |
+| --- | --- | --- |
+| Follower's tricked proposals flagged by round 9 | 180 of 276 | 221 of 276 |
+| Of those, the request names a person | 22 of 96 | 63 of 96 |
+| Flagged by round 9 or refused by the recipient rule | | 253 of 276 (86 of 96 named) |
+| Guard benchmark, round 9 label reading, missed | 0 of 32,044 | 0 of 32,044 |
+| Guard benchmark, false flags | 275 of 5,440 | 275 of 5,440 |
+| Guard benchmark, named-recipient changes flagged | 154 of 3,652 | 2,650 of 3,652 |
+
+Swapping contact names before the model reads raised the false flags to 288
+of 5,440, so the wallet does not swap them. The 23 tricked proposals that
+neither check catches change the amount or the asset.
