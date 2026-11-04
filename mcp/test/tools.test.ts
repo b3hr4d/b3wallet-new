@@ -10,6 +10,7 @@ import {
   type Action,
   type Actor as Wallet,
   type Chain,
+  type Contact,
   type Pending,
   type Request,
   type TermsDraft,
@@ -88,7 +89,14 @@ const base: Chain = { tag: "Evm", value: 8_453n }
  * A wallet that keeps what is proposed and refuses what the real one refuses
  * a proposer, and records every method called on it.
  */
-function setUp(options: { member?: boolean; accounts?: Account[]; requests?: Request[] } = {}) {
+function setUp(
+  options: {
+    member?: boolean
+    accounts?: Account[]
+    contacts?: Contact[]
+    requests?: Request[]
+  } = {},
+) {
   const agent = Ed25519KeyIdentity.generate(new Uint8Array(32).fill(7))
   const { client, mock, requests } = createTestClient({ identity: agent })
   const calls: string[] = []
@@ -160,6 +168,7 @@ function setUp(options: { member?: boolean; accounts?: Account[]; requests?: Req
       tag: "Ok",
       value: options.accounts ?? [icp, btc, evm],
     })),
+    contacts: record("contacts", () => ({ tag: "Ok", value: options.contacts ?? [] })),
     assets: record("assets", () => ({
       tag: "Ok",
       value: [{ tag: "Icp" }, { tag: "Evm", value: 1n }, token, base],
@@ -278,6 +287,7 @@ test("the tools read and propose, and none approves, runs or rejects", async () 
       "wallet_whoami",
       "wallet_join",
       "wallet_accounts",
+      "wallet_contacts",
       "wallet_balance",
       "wallet_activity",
       "wallet_pending",
@@ -448,9 +458,56 @@ test("a transfer takes the wallet's own account names, by the names rule", async
   })
   const before = proposals.length
   await assert.rejects(propose({ from: 1, to: "Vault" }), {
-    message: /no account is named “Vault”/,
+    message: /no account or contact is named “Vault”/,
   })
   assert.equal(proposals.length, before)
+  client.dispose()
+})
+
+/** An owners' contact (decision 0015). */
+function contact(id: number, name: string, addresses: Contact["addresses"]): Contact {
+  return {
+    id,
+    name,
+    addresses,
+    added_at_ns: 1_700_000_000n * SECOND,
+    added_by: OWNER as Pending["proposed_by"],
+    changed_at_ns: null,
+    changed_by: null,
+  }
+}
+
+const DANA = "rrkah-fqaaa-aaaaa-aaaaq-cai"
+
+test("a transfer takes a contact's name, for its address of the kind sent from", async () => {
+  const dana = contact(1, "Dana", [{ kind: { tag: "InternetComputer" }, address: DANA }])
+  const vault = contact(2, "vault", [{ kind: btc.kind, address: btc.address }])
+  const twin = contact(3, "MAIN", [{ kind: { tag: "InternetComputer" }, address: FRIEND }])
+  const { client, run, proposals } = setUp({ member: true, contacts: [dana, vault, twin] })
+  const propose = async (args: Record<string, unknown>) =>
+    JSON.parse(await run("wallet_propose_transfer", { amount: "1.5", ...args }))
+
+  const sent = await propose({ from: 1, to: " dana " })
+  assert.equal((proposals.at(-1) as { value: { to: string } }).value.to, DANA)
+  assert.deepEqual(sent.names, [`to “dana” is the contact “Dana”, ${DANA}`])
+  // A contact with no address of the kind sent from names none.
+  const before = proposals.length
+  await assert.rejects(propose({ from: 1, to: "Vault" }), {
+    message: /the contact “vault” has no Internet Computer address/,
+  })
+  // A name an account and a contact share, or two contacts, is the person's to settle.
+  await assert.rejects(propose({ from: 1, to: "main" }), {
+    message: /4 accounts or contacts are named “main” .*contact 3\): ask the person which one/,
+  })
+  assert.equal(proposals.length, before)
+
+  const listed = JSON.parse(await run("wallet_contacts"))
+  assert.deepEqual(listed[0], {
+    id: 1,
+    name: "Dana",
+    addresses: [{ kind: "Internet Computer", address: DANA }],
+    since: "2023-11-14T22:13:20.000Z",
+  })
   client.dispose()
 })
 
@@ -757,4 +814,11 @@ test("the terms name ICP only by ICP's own ledger, read or not", () => {
   })
   // Only the Internet Computer account is named; the Bitcoin and EVM accounts called Main are not.
   assert.deepEqual(termsWallet([real], [icp, btc, evm], 0n).apps, { main: WALLET })
+  // A contact with an Internet Computer address is named too, unless an account or another contact shares its name.
+  const dana = contact(1, "Dana", [{ kind: { tag: "InternetComputer" }, address: DANA }])
+  const twin = contact(2, "Main", [{ kind: { tag: "InternetComputer" }, address: FRIEND }])
+  const vault = contact(3, "Vault", [{ kind: btc.kind, address: btc.address }])
+  assert.deepEqual(termsWallet([real], [icp, btc, evm], 0n, [dana, twin, vault]).apps, {
+    Dana: DANA,
+  })
 })

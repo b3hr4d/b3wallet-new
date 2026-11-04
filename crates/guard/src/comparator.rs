@@ -8,8 +8,10 @@
 //!   Anything else, or no span: not checked. A fee span against a proposal without a fee: not checked.
 //! - asset and chain: the span, case aside, against fixed aliases and the wallet's token symbols. Another known
 //!   asset or chain differs; a word that names none is not checked, so an unknown word is never a flag.
-//! - to: an address must equal the proposal's `to` (an EVM address case aside); one own account's label means its
-//!   address; anything else, such as a person's name, is not checked. from: an account's label or address.
+//! - to: an address must equal the proposal's `to` (an EVM address case aside). Other words are read as a name
+//!   against the own accounts' labels and the owners' contacts together (B3Wallet decision 0015): exactly one match
+//!   means that account's address, or the contact's address of the transfer's kind of account; no match, two or
+//!   more, or a contact without an address of that kind is not checked. from: an account's label or address.
 //! - memo: the span's UTF-8 bytes against the proposal's memo; a memo the request never mentions differs.
 //! - request flags (`request_rule.rs`) make the overall verdict "differs", also when the guard abstained.
 
@@ -45,11 +47,20 @@ pub struct Token {
     pub decimals: u32,
 }
 
+/// One of the owners' contacts (B3Wallet decision 0015): a name and at most one address per kind of account, each
+/// with the chain of its kind (`Chain::Icp` for the Internet Computer kind, `Chain::Evm(None)` for the EVM kind).
+#[derive(Clone, Debug)]
+pub struct Contact {
+    pub name: String,
+    pub addresses: Vec<(Chain, String)>,
+}
+
 /// The wallet as the comparator reads it.
 #[derive(Clone, Debug, Default)]
 pub struct Context {
     pub accounts: Vec<Account>,
     pub tokens: Vec<Token>,
+    pub contacts: Vec<Contact>,
 }
 
 /// A proposed transfer: amounts and fees in base units as decimal digits, the memo's bytes (empty: none).
@@ -295,6 +306,41 @@ fn account_by_label<'a>(text: &str, ctx: &'a Context) -> Option<&'a Account> {
     unique(ctx.accounts.iter().filter(|a| norm(&a.label) == word))
 }
 
+/// The kind of account a chain value belongs to: ICP and every ICRC-1 token the Internet Computer kind, every EVM
+/// chain the EVM kind, Bitcoin its network.
+pub fn kind_key(c: &Chain) -> String {
+    match c {
+        Chain::Icp | Chain::Icrc(_) => "ic".into(),
+        Chain::Evm(_) => "evm".into(),
+        Chain::Bitcoin(network) => format!("btc:{network}"),
+    }
+}
+
+/// What a name in the request means for the recipient: an own account's address or a contact's address of the
+/// transfer's kind, when exactly one account label or contact name is that name. A contact named by an address
+/// never matches.
+fn named_address<'a>(text: &str, p: &Proposal, ctx: &'a Context) -> Option<&'a str> {
+    let word = norm(text);
+    let mut accounts = ctx.accounts.iter().filter(|a| norm(&a.label) == word);
+    let mut contacts = ctx
+        .contacts
+        .iter()
+        .filter(|c| !is_address(&c.name) && norm(&c.name) == word);
+    match (accounts.next(), contacts.next()) {
+        (Some(a), None) if accounts.next().is_none() => Some(&a.address),
+        (None, Some(c)) if contacts.next().is_none() => {
+            let kind = kind_key(&asset_of(p, ctx)?);
+            let mut found = c
+                .addresses
+                .iter()
+                .filter(|(chain, _)| kind_key(chain) == kind);
+            let (_, address) = found.next()?;
+            found.next().is_none().then_some(address.as_str())
+        }
+        _ => None,
+    }
+}
+
 fn to_verdict(text: Option<&str>, p: &Proposal, ctx: &Context) -> Verdict {
     let Some(text) = text else {
         return Verdict::NotChecked;
@@ -302,9 +348,10 @@ fn to_verdict(text: Option<&str>, p: &Proposal, ctx: &Context) -> Verdict {
     let address = if is_address(text) {
         text
     } else {
-        match account_by_label(text, ctx) {
-            Some(a) => &a.address,
-            None => return Verdict::NotChecked, // a person's name, or words the wallet cannot resolve
+        match named_address(text, p, ctx) {
+            Some(address) => address,
+            // a person's name the wallet does not know, an ambiguous name, or other words
+            None => return Verdict::NotChecked,
         }
     };
     if same_address(address, &p.to) {
