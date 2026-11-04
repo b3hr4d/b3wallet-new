@@ -60,16 +60,25 @@ impl StoredContact {
 }
 
 /// A name as names are compared: lowercase, whitespace runs as one space,
-/// trimmed (candid-profile D-045).
-// shortcut: D-045 applies NFKC first; the wallet has no normalization tables,
-// so two names that differ only in compatibility forms both save. The pages
-// and the agent's tools resolve with `@meantjs/format`'s `resolveName`, which
-// applies NFKC and finds them ambiguous. Upgrade by adding the tables.
+/// trimmed (candid-profile D-045). D-045 applies NFKC first, which changes no
+/// ASCII text, and a contact's name is ASCII (`plain_name`), so the key is
+/// D-045's for every contact.
 pub fn name_key(name: &str) -> String {
     name.to_lowercase()
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Whether `name` is plain English, as the first version takes a contact's
+/// name: printable ASCII (letters, digits, spaces and punctuation) with at
+/// least one letter. Owners write requests in English, and an ASCII name needs
+/// no Unicode normalization to compare, in the wallet, the guard or the pages.
+// shortcut: names in other scripts are refused, not normalized. Upgrade by
+// giving the wallet and the guard NFKC tables in the same change.
+pub fn plain_name(name: &str) -> bool {
+    name.chars().all(|c| c == ' ' || c.is_ascii_graphic())
+        && name.chars().any(|c| c.is_ascii_alphabetic())
 }
 
 /// The canonical text of `text` as an address of `kind`, or why it is none.
@@ -175,6 +184,12 @@ pub fn check(
             if trimmed != name || name.chars().any(char::is_control) {
                 return invalid(
                     "a contact's name has no control characters and no space at either end"
+                        .to_string(),
+                );
+            }
+            if !plain_name(name) {
+                return invalid(
+                    "a contact's name is written in plain English letters: A to Z, digits, spaces and ASCII punctuation"
                         .to_string(),
                 );
             }
@@ -359,6 +374,13 @@ mod tests {
         assert!(refused(ACCOUNT, ic()), "an address as a name");
         assert!(refused(BTC, ic()), "an address as a name");
         assert!(refused("", ic()));
+        assert!(refused("Straße", ic()), "not plain English");
+        assert!(refused("Ｄａｎａ", ic()), "full-width letters");
+        assert!(refused("بهراد", ic()), "another script");
+        assert!(refused("Dana\u{a0}Lee", ic()), "a no-break space");
+        assert!(refused("Dana\tLee", ic()), "a tab");
+        assert!(refused("1234", ic()), "no letter");
+        assert!(check_new("Dana Lee-Smith (work)", ic()).is_ok());
         assert!(refused(&"x".repeat(MAX_NAME_BYTES + 1), ic()));
         assert!(refused("Lee", vec![]), "no address");
         assert!(refused("Lee", [ic(), ic()].concat()), "two of a kind");

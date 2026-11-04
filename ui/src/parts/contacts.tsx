@@ -11,7 +11,7 @@ import type {
   Pending,
 } from "../generated/wallet.ts"
 import { useWallet } from "../ic/canister.ts"
-import { contactChange, recipientText } from "../logic/contacts.ts"
+import { contactChange, plainName, recipientText } from "../logic/contacts.ts"
 import { failureText } from "../logic/describe.ts"
 import { dateOf } from "../logic/time.ts"
 import { kindText } from "../logic/tokens.ts"
@@ -137,9 +137,11 @@ export function Contacts({ wallet: id, me }: { wallet: Principal; me: Member }) 
   const refusal =
     name.trim() === ""
       ? "Give the contact a name."
-      : filled.length === 0
-        ? "Give it at least one address."
-        : undefined
+      : !plainName(name.trim())
+        ? "Write the name in plain English letters: A to Z, digits, spaces and punctuation."
+        : filled.length === 0
+          ? "Give it at least one address."
+          : undefined
   return (
     <section id="contacts" className="card">
       <div className="card-head">
@@ -255,6 +257,7 @@ export function Contacts({ wallet: id, me }: { wallet: Principal; me: Member }) 
               </button>
             )}
           </div>
+          {name.trim() !== "" && refusal !== undefined && <p className="quiet small">{refusal}</p>}
           {propose.isError && <p className="error small">{failureText(propose.error)}</p>}
         </form>
       )}

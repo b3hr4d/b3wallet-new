@@ -6,6 +6,15 @@ import { kindText, transferAsset } from "./tokens.ts"
 // SetContact rule's timelock, so the Approvals page shows exactly what
 // changes, and warns when an address looks like one the owners already pay.
 
+/**
+ * Whether a contact's name is plain English, as the wallet takes it in the
+ * first version: printable ASCII with at least one letter (`contacts.rs`
+ * `plain_name`).
+ */
+export function plainName(name: string): boolean {
+  return /^[\x20-\x7e]*$/.test(name) && /[A-Za-z]/.test(name)
+}
+
 export function sameKind(a: AccountKind, b: AccountKind): boolean {
   if (a.tag !== b.tag) return false
   return a.tag !== "Bitcoin" || b.tag !== "Bitcoin" || a.value.tag === b.value.tag

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import type { Account, Action, Contact } from "../src/generated/wallet.ts"
-import { contactChange, looksLike, recipientText } from "../src/logic/contacts.ts"
+import { contactChange, looksLike, plainName, recipientText } from "../src/logic/contacts.ts"
 
 const DANA = "rrkah-fqaaa-aaaaa-aaaaq-cai"
 const LEE = "ryjl3-tyaaa-aaaaa-aaaba-cai"
@@ -126,4 +126,13 @@ test("a transfer names its recipient as a contact, an own account, or neither", 
     "To an address that is not a contact and not one of the wallet's accounts.",
   )
   assert.equal(recipientText(to(DANA), main, undefined, [dana]), undefined)
+})
+
+test("a contact's name is plain English, as the wallet takes it", () => {
+  assert.ok(plainName("Dana Lee-Smith (work)"))
+  assert.ok(!plainName("Straße"))
+  assert.ok(!plainName("Ｄａｎａ"))
+  assert.ok(!plainName("Dana\u00a0Lee"))
+  assert.ok(!plainName("Dana\tLee"))
+  assert.ok(!plainName("1234"), "no letter")
 })

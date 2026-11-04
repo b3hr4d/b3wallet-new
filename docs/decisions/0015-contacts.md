@@ -93,6 +93,16 @@ Chosen: A.
   `@meantjs/format` ([decision 0013](0013-meant-format.md)) over the
   accounts and the contacts together; the wallet's Rust code and the guard
   apply the same rule.
+
+  In the first version a contact's name is plain English: printable ASCII,
+  with at least one letter (`contacts.rs` `plain_name`). Owners write their
+  requests in English, and NFKC changes no ASCII text, so the wallet and the
+  guard, which have no Unicode normalization tables, compare every contact
+  name exactly as D-045 does: lowercase (not case folding), whitespace runs
+  as one space, trimmed. Names in other scripts are refused, not normalized;
+  supporting them means giving the wallet and the guard NFKC together.
+  Behrad, 2026-11-04: "for the first version need to focus on the basics and
+  force user to enter normally in english".
 - **Actions.** `SetContact { id : opt ContactId; name; addresses }` adds a
   contact (no id) or changes one; `RemoveContact : ContactId` removes one.
   Each has its own policy rule. The default policy: `SetContact` takes one
