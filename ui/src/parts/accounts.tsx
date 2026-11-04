@@ -539,6 +539,66 @@ function TokenChip({
 type Kind = AccountKind["tag"]
 
 /**
+ * Renames an account, for owners. It moves nothing, so it needs no approval,
+ * and the wallet refuses a name another account has (decision 0015); the
+ * rename is in the activity log.
+ */
+export function RenameAccount({
+  wallet: id,
+  account,
+  onDone,
+}: {
+  wallet: Principal
+  account: Account
+  onDone: () => void
+}) {
+  const { client, wallet } = useWallet(id)
+  const rename = useMutation(
+    client.mutationOptions(wallet, "rename_account", {
+      invalidates: [
+        [wallet, "accounts"],
+        [wallet, "audit_log"],
+      ],
+    }),
+  )
+  const [label, setLabel] = useState(account.label)
+  const unchanged = label.trim() === account.label
+  return (
+    <form
+      className="form panel"
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (!label.trim() || unchanged) return
+        rename.mutate({ account: account.id, label: label.trim() }, { onSuccess: onDone })
+      }}
+    >
+      <label>
+        Name
+        <input
+          value={label}
+          onChange={(event) => setLabel(event.target.value)}
+          autoComplete="off"
+        />
+      </label>
+      <p className="quiet small">Each account needs a name no other account has.</p>
+      <div className="buttons">
+        <button
+          type="submit"
+          className="primary"
+          disabled={!label.trim() || unchanged || rename.isPending}
+        >
+          {rename.isPending ? "Renaming…" : "Rename"}
+        </button>
+        <button type="button" className="ghost" disabled={rename.isPending} onClick={onDone}>
+          Cancel
+        </button>
+      </div>
+      {rename.isError && <p className="error">{failureText(rename.error)}</p>}
+    </form>
+  )
+}
+
+/**
  * Adds another account of a kind, with an address of its own; it moves
  * nothing, so it needs no approval. Bitcoin accounts are of the wallet's
  * network; an EVM account has one address on every EVM chain.

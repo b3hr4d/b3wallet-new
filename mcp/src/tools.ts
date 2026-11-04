@@ -239,6 +239,8 @@ export function eventText(event: AuditEvent): string {
       return "asked to join"
     case "AccountAdded":
       return `added account ${event.value}`
+    case "AccountRenamed":
+      return `renamed account ${event.value.account} from “${event.value.from}” to “${event.value.to}”`
     case "AssetTracked":
       return `tracked ${event.value.tag === "Evm" ? "" : "the "}${chainText(event.value)}`
     case "AssetUntracked":

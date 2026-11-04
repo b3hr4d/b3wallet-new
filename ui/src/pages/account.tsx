@@ -16,7 +16,7 @@ import {
   kindText,
   transferAsset,
 } from "../logic/tokens.ts"
-import { KindAvatar, receivesText } from "../parts/accounts.tsx"
+import { KindAvatar, receivesText, RenameAccount } from "../parts/accounts.tsx"
 import { CopyButton } from "../parts/copy.tsx"
 import { StateChip } from "../parts/decide.tsx"
 import { ReceiveIcon, RefreshIcon, SendIcon } from "../parts/icons.tsx"
@@ -54,6 +54,7 @@ function AccountView({ wallet: id, me }: { wallet: Principal; me: Member }) {
     ),
   })
   const now = useNowNs()
+  const [renaming, setRenaming] = useState(false)
 
   if (accounts.isError) return <p className="card error">{failureText(accounts.error)}</p>
   if (accounts.data === undefined) {
@@ -78,6 +79,7 @@ function AccountView({ wallet: id, me }: { wallet: Principal; me: Member }) {
     )
   }
   const sends = me.role.tag === "Owner" || me.role.tag === "Proposer"
+  const owner = me.role.tag === "Owner"
   const fetching = reads.some((read) => read.isFetching)
   const open = (pending.data ?? []).filter(
     (action) => action.action.tag === "Transfer" && action.action.value.from === account.id,
@@ -118,6 +120,11 @@ function AccountView({ wallet: id, me }: { wallet: Principal; me: Member }) {
             <ReceiveIcon />
             Receive
           </a>
+          {owner && !renaming && (
+            <button type="button" className="ghost" onClick={() => setRenaming(true)}>
+              Rename
+            </button>
+          )}
           {reads.length > 0 && (
             <button
               type="button"
@@ -130,6 +137,9 @@ function AccountView({ wallet: id, me }: { wallet: Principal; me: Member }) {
             </button>
           )}
         </div>
+        {renaming && (
+          <RenameAccount wallet={id} account={account} onDone={() => setRenaming(false)} />
+        )}
       </section>
 
       <section className="card">

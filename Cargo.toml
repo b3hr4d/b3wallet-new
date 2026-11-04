@@ -60,6 +60,8 @@ sha2 = { version = "=0.10.9", default-features = false }
 tiny-keccak = { version = "=2.0.2", features = ["keccak"] }
 # The guard tokenizer's letter, digit and number classes (Python's str methods).
 unicode-general-category = "=1.1.0"
+# NFKC, for comparing account labels by candid-profile's names rule (decision 0015).
+unicode-normalization = "=0.1.25"
 
 [profile.release]
 codegen-units = 1

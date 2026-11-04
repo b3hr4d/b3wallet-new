@@ -24,8 +24,8 @@ use wallet::{
     Account, AccountHolder, AccountKind, Action, ActionId, ActionKind, ActionState, AddAccountArgs,
     AuditEntry, AuditEvent, AuditRequest, Balance, BitcoinNetwork, Chain, ClaimArgs, DailyLimit,
     InitArgs, Member, NOT_A_MEMBER, NOT_A_PROPOSER, NOT_AN_APPROVER, NOT_AN_OWNER, NOT_CLAIMED,
-    Outcome, Pending, Policy, Role, Status, TransferRequest, UpgradeArgs, UpgradeState, WalletArg,
-    WalletError,
+    Outcome, Pending, Policy, RenameAccountArgs, Role, Status, TransferRequest, UpgradeArgs,
+    UpgradeState, WalletArg, WalletError,
 };
 
 const DAY_NS: u64 = 24 * 60 * 60 * 1_000_000_000;
@@ -509,6 +509,7 @@ fn before_the_claim_only_the_public_methods_answer() {
                 "propose_terms",
                 "reject",
                 "release_available",
+                "rename_account",
                 "request",
                 "request_join",
                 "requests",
@@ -556,6 +557,7 @@ fn a_non_member_is_refused_by_every_method_for_members() {
                 "propose_terms",
                 "reject",
                 "release_available",
+                "rename_account",
                 "request",
                 "requests",
                 "track_asset",
@@ -1014,12 +1016,15 @@ fn each_role_is_refused_what_it_may_not_do() {
         (approver, "propose", NOT_A_PROPOSER),
         (approver, "reject", NOT_AN_OWNER),
         (approver, "add_account", NOT_AN_OWNER),
+        (approver, "rename_account", NOT_AN_OWNER),
         (viewer, "propose", NOT_A_PROPOSER),
         (viewer, "add_account", NOT_AN_OWNER),
+        (viewer, "rename_account", NOT_AN_OWNER),
         (viewer, "reject", NOT_AN_OWNER),
         (viewer, "approve", NOT_AN_APPROVER),
         (viewer, "execute", NOT_AN_APPROVER),
         (proposer, "add_account", NOT_AN_OWNER),
+        (proposer, "rename_account", NOT_AN_OWNER),
         (proposer, "reject", NOT_AN_OWNER),
         (proposer, "approve", NOT_AN_APPROVER),
         (proposer, "execute", NOT_AN_APPROVER),
@@ -1151,7 +1156,8 @@ fn a_wallet_from_the_previous_release_upgrades_to_this_one() {
             assert_eq!(added.map(|a| (a.id, a.index)), Ok((4, 2)));
         }
         None => {
-            assert_eq!(listed()[0], ic(1, "Main", 0));
+            // The account the previous release made as "Main" has a name of its own now (decision 0015).
+            assert_eq!(listed()[0], ic(1, "ICP wallet", 0));
             assert_eq!(assets(&pic, id, owner), [Chain::Icp, Chain::Evm(ETHEREUM)]);
             assert_eq!(pending(&pic, id, owner), std::slice::from_ref(&open));
         }
@@ -1813,6 +1819,20 @@ fn add_account(
     update(pic, id, caller, "add_account", &args)
 }
 
+fn rename_account(
+    pic: &PocketIc,
+    id: Principal,
+    caller: Principal,
+    account: u32,
+    label: &str,
+) -> Result<Account, WalletError> {
+    let args = RenameAccountArgs {
+        account,
+        label: label.to_string(),
+    };
+    update(pic, id, caller, "rename_account", &args)
+}
+
 fn track(
     pic: &PocketIc,
     id: Principal,
@@ -1931,7 +1951,7 @@ fn a_wallet_starts_with_an_internet_computer_account_and_counts_indices_per_kind
     let main = Account {
         id: 1,
         kind: AccountKind::InternetComputer,
-        label: "Main".to_string(),
+        label: "ICP wallet".to_string(),
         index: 0,
         holder: AccountHolder::Wallet,
         address: id.to_text(),
@@ -2987,7 +3007,10 @@ fn a_bitcoin_account_receives_at_its_keys_address_and_sends_once() {
     // account 3 its EVM account, made after the Bitcoin one.
     let ic = accounts(&net.pic, net.wallet, net.owner).remove(0);
     assert_eq!((ic.id, ic.kind), (1, AccountKind::InternetComputer));
-    assert_eq!((main.id, main.index, main.label.as_str()), (2, 0, "Main"));
+    assert_eq!(
+        (main.id, main.index, main.label.as_str()),
+        (2, 0, "Bitcoin wallet")
+    );
     assert_eq!((savings.id, savings.index), (4, 1));
     assert_ne!(main.address, savings.address);
     for account in [&main, &savings] {
@@ -3740,7 +3763,7 @@ fn a_wallet_makes_an_evm_account_and_reads_its_balance_on_each_tracked_chain() {
     let address = &evm.account.address;
     assert_eq!((address.len(), &address[..2]), (42, "0x"));
     assert_ne!(address.to_lowercase(), *address);
-    assert_eq!(evm.account.label, "Main");
+    assert_eq!(evm.account.label, "Ethereum wallet");
     assert_eq!(
         assets(pic, wallet, owner),
         [Chain::Icp, Chain::Evm(ETHEREUM)]
@@ -4857,4 +4880,58 @@ fn the_guard_reads_the_wallets_own_account_names() {
             .iter()
             .any(|f| f.field == "to" && f.verdict == wallet::GuardVerdict::Differs)
     );
+}
+
+#[test]
+fn account_names_are_unique_and_owners_rename_them() {
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    let savings = add_account(
+        &pic,
+        id,
+        owner,
+        AccountKind::InternetComputer,
+        "BTC Savings",
+    )
+    .unwrap();
+    // The same name, as the names rule compares names: case and spaces aside (decision 0015).
+    for taken in [" btc  savings ", "ICP WALLET"] {
+        assert!(
+            matches!(
+                add_account(&pic, id, owner, AccountKind::InternetComputer, taken),
+                Err(WalletError::InvalidArgument(_))
+            ),
+            "{taken}"
+        );
+    }
+    assert!(matches!(
+        rename_account(&pic, id, owner, 1, "btc savings"),
+        Err(WalletError::InvalidArgument(_))
+    ));
+    // Its own name in another case is no clash.
+    assert_eq!(
+        rename_account(&pic, id, owner, savings.id, "BTC savings")
+            .unwrap()
+            .label,
+        "BTC savings"
+    );
+    let renamed = rename_account(&pic, id, owner, 1, "  Daily ").unwrap();
+    assert_eq!((renamed.id, renamed.label.as_str()), (1, "Daily"));
+    assert_eq!(
+        audit(&pic, id, owner).last(),
+        Some(&(
+            Some(owner),
+            AuditEvent::AccountRenamed {
+                account: 1,
+                from: "ICP wallet".to_string(),
+                to: "Daily".to_string()
+            }
+        ))
+    );
+    // Its old name is free again.
+    add_account(&pic, id, owner, AccountKind::InternetComputer, "ICP wallet").unwrap();
+    assert!(matches!(
+        rename_account(&pic, id, owner, 99, "Elsewhere"),
+        Err(WalletError::NotFound(_))
+    ));
 }

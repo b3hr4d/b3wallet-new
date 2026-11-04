@@ -202,6 +202,34 @@ async fn add_account(args: AddAccountArgs) -> Result<Account, WalletError> {
     Ok(account.view(id, ic_cdk::api::canister_self()))
 }
 
+/// Renames an account. Its name is only how people find it, and every
+/// screen shows its address beside it, so owners rename without approval;
+/// the name must be one no other account has (decision 0015).
+#[ic_cdk::update(guard = "access::owner")]
+fn rename_account(args: RenameAccountArgs) -> Result<Account, WalletError> {
+    let caller = ic_cdk::api::msg_caller();
+    check_not_installing(ic_cdk::api::time())?;
+    let (id, mut account) = storage::listed_account(args.account)
+        .filter(|(id, _)| *id == args.account)
+        .ok_or_else(|| WalletError::NotFound(format!("account {}", args.account)))?;
+    governance::check_label(&args.label)?;
+    let all = storage::accounts();
+    accounts::check_unique(&args.label, Some(id), all.iter().map(|(id, a)| (*id, a)))?;
+    let from = std::mem::replace(&mut account.label, args.label.trim().to_string());
+    storage::set_account(id, account.clone());
+    let now = ic_cdk::api::time();
+    audit(
+        caller,
+        AuditEvent::AccountRenamed {
+            account: id,
+            from,
+            to: account.label.clone(),
+        },
+        now,
+    );
+    Ok(account.view(id, ic_cdk::api::canister_self()))
+}
+
 /// The public key of account `index` of `kind`, checked to make an
 /// address; an Internet Computer account has none. An EVM account's key is
 /// under the subnet key of the wallet's network.
@@ -258,14 +286,12 @@ fn add_default(kind: AccountKind, public_key: Option<Vec<u8>>, now: u64) {
     if accounts::next_index(kind, accounts.iter().map(|(_, a)| a)) != 0 {
         return;
     }
-    let account = StoredAccount::new(
-        kind,
-        accounts::DEFAULT_LABEL.to_string(),
-        0,
-        public_key,
-        None,
-        now,
+    // One name per account (decision 0015): an owner may have taken the default name meanwhile.
+    let label = accounts::free_label(
+        accounts::default_label(kind),
+        accounts.iter().map(|(_, a)| a),
     );
+    let account = StoredAccount::new(kind, label, 0, public_key, None, now);
     storage::add_account(account);
 }
 

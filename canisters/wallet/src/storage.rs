@@ -450,6 +450,11 @@ pub fn add_account(account: StoredAccount) -> AccountId {
     })
 }
 
+/// Replaces account `id` as stored: only its label changes after it is added.
+pub fn set_account(id: AccountId, account: StoredAccount) {
+    ACCOUNTS.with_borrow_mut(|accounts| accounts.insert(id, account));
+}
+
 pub fn account(id: AccountId) -> Option<StoredAccount> {
     ACCOUNTS.with_borrow(|accounts| accounts.get(&id))
 }
@@ -695,6 +700,10 @@ pub fn migrate(network: Option<BitcoinNetwork>) -> Result<(), String> {
             stored.insert(*id, account.clone());
         }
     });
+    // The accounts the wallet made itself as "Main" get names of their own (decision 0015).
+    for (id, account) in accounts::rename_defaults(&accounts()) {
+        set_account(id, account);
+    }
     let mut config = config().ok_or("stable memory holds no configuration")?;
     // `post_upgrade` refuses a `network` other than a fixed one.
     let chosen = fixed_bitcoin_network()

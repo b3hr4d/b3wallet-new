@@ -382,6 +382,12 @@ test("the audit log names who did what", () => {
   assert.equal(whoText(null, me, [me]), "The wallet")
   assert.equal(auditText({ tag: "Proposed", value: 4n }, undefined), "proposed action 4")
   assert.equal(auditText({ tag: "AccountAdded", value: 1 }, [main]), "added the account “Main”")
+  assert.equal(
+    auditText({ tag: "AccountRenamed", value: { account: 1, from: "Main", to: "ICP wallet" } }, [
+      main,
+    ]),
+    "renamed the account “Main” to “ICP wallet”",
+  )
   assert.equal(auditText({ tag: "AccountAdded", value: 2 }, [main]), "added account 2")
   const ledger = "mxzaz-hqaaa-aaaar-qaada-cai" as never
   assert.equal(

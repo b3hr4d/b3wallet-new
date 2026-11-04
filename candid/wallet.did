@@ -97,6 +97,12 @@ type AddAccountArgs = record {
   label : text;
 };
 
+// A new name for an account: one no other account has (decision 0015).
+type RenameAccountArgs = record {
+  account : AccountId;
+  label : text;
+};
+
 type Balance = record {
   account : AccountId;
   asset : Chain;
@@ -396,6 +402,8 @@ type AuditEvent = variant {
   Claimed;
   JoinRequested : principal;
   AccountAdded : AccountId;
+  // An owner renamed an account.
+  AccountRenamed : record { account : AccountId; from : text; to : text };
   AssetTracked : Chain;
   AssetUntracked : Chain;
   Proposed : ActionId;
@@ -569,9 +577,12 @@ service : (WalletArg) -> {
   // role. Asking again returns the open request.
   request_join : (text, opt Role) -> (PendingResult);
 
-  // Accounts. add_account is for owners and needs no approval: it moves nothing.
+  // Accounts. add_account and rename_account are for owners and need no
+  // approval: they move nothing. Each account's label is a name no other
+  // account has, compared without case or extra spaces (decision 0015).
   accounts : () -> (AccountsResult) query;
   add_account : (AddAccountArgs) -> (AccountResult);
+  rename_account : (RenameAccountArgs) -> (AccountResult);
   // Update: asks the ledger, the Bitcoin canister or the EVM RPC canister for
   // what an account holds of an asset: none is ICP, or the account's bitcoin;
   // an EVM account names its chain.

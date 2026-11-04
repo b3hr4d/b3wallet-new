@@ -210,7 +210,9 @@ action that the policy module releases only after its quorum and timelock.
 1. Every wallet has account 0 of each kind ([decision
    0008](decisions/0008-account-kinds.md)); an owner adds more with
    `add_account`: a kind and a label. It needs no approval, since it moves
-   nothing, and a wallet has at most 64 accounts. An Internet Computer
+   nothing, and a wallet has at most 64 accounts. Each label is a name no
+   other account has, and owners rename an account with `rename_account`
+   ([decision 0015](decisions/0015-unique-account-names.md)). An Internet Computer
    account is an ICRC-1 account of the wallet's own principal and holds ICP
    and every ICRC-1 token the owners track: index `n` is subaccount `n` as
    32 big-endian bytes, so index 0 is the plain principal ([decision

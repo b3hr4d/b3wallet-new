@@ -370,6 +370,8 @@ export function auditText(event: AuditEvent, accounts: readonly Account[] | unde
       const account = accounts?.find((candidate) => candidate.id === event.value)
       return account ? `added the account “${account.label}”` : `added account ${event.value}`
     }
+    case "AccountRenamed":
+      return `renamed the account “${event.value.from}” to “${event.value.to}”`
     case "AssetTracked":
       return `tracked ${trackedText(event.value)}`
     case "AssetUntracked":
