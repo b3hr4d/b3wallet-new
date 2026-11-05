@@ -11,6 +11,7 @@ import { initialOf } from "../logic/mark.ts"
 import { leftText } from "../logic/time.ts"
 import { LOW_CYCLES } from "../logic/tokens.ts"
 import { CheckList } from "../parts/checks.tsx"
+import { Contacts } from "../parts/contacts.tsx"
 import { CopyButton } from "../parts/copy.tsx"
 import { KeyIcon, LayersIcon, PeopleIcon, ShieldIcon } from "../parts/icons.tsx"
 import { AsMember } from "../parts/member.tsx"
@@ -38,6 +39,7 @@ export function Settings({ wallet, local }: { wallet: Principal; local: boolean 
       </div>
       <nav className="section-nav" aria-label="Settings">
         <a href="#members">Members</a>
+        <a href="#contacts">Contacts</a>
         <a href="#security">Security</a>
         <a href="#wallet">Wallet</a>
         <a href="#session">Session</a>
@@ -112,6 +114,8 @@ function Sections({ wallet: id, me, local }: { wallet: Principal; me: Member; lo
           </div>
         )}
       </section>
+
+      <Contacts wallet={id} me={me} />
 
       <section id="security" className="card">
         <div className="card-head">

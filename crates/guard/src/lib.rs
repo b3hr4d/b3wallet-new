@@ -20,7 +20,8 @@ mod request_rule;
 mod tokenizer;
 
 pub use comparator::{
-    Account, Chain, Check, Context, FIELDS, Overall, Proposal, Token, Verdict, compare,
+    Account, Chain, Check, Contact, Context, FIELDS, Overall, Proposal, Token, Verdict, compare,
+    kind_key,
 };
 pub use manip::{Flags, Manip, Matched};
 pub use request_rule::RequestRule;

@@ -25,6 +25,7 @@ const rule = (
 /** The wallet's default policy: one approval everywhere. */
 const defaults: Policy = {
   rules: [rule("Transfer", 1, 0n), rule("AddMember", 1, 0n), rule("Upgrade", 1, 7n * DAY)],
+  proposer_recipients: null,
 }
 
 const levels = (checks: ReturnType<typeof checkupOf>) =>
@@ -49,6 +50,7 @@ test("a new wallet on the default policy is told what is missing", () => {
 
 test("a wallet set up with care passes", () => {
   const careful: Policy = {
+    proposer_recipients: null,
     rules: [
       {
         ...rule("Transfer", 2, 0n),
@@ -72,7 +74,7 @@ test("a wallet set up with care passes", () => {
   const noWait = checkupOf({
     wallet,
     members: undefined,
-    policy: { rules: [rule("AddMember", 2, 0n)] },
+    policy: { rules: [rule("AddMember", 2, 0n)], proposer_recipients: null },
     controllers: undefined,
   })
   assert.equal(noWait[0]?.text, "2 approvals, and no wait.")

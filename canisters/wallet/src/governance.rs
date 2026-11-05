@@ -116,6 +116,13 @@ impl Governance {
                     "HandOverControl is not a change to the members or the policy".to_string(),
                 ));
             }
+            // `execute` writes a contact; `contacts` checks one.
+            Action::SetContact { .. } | Action::RemoveContact(_) => {
+                return Err(WalletError::InvalidArgument(format!(
+                    "{:?} is not a change to the members or the policy",
+                    action.kind()
+                )));
+            }
             // Extensions arrive in a later step.
             Action::InstallExtension { .. } | Action::UninstallExtension(_) => {
                 return Err(WalletError::InvalidArgument(format!(

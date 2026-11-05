@@ -32,6 +32,7 @@ import { useNowNs } from "./now.ts"
 import { readSeen, subscribeSeen, writeSeen } from "./seen.ts"
 import { useHealth } from "./session.tsx"
 import { SignIn } from "./sign-in.tsx"
+import { ContactLines, useContacts } from "./contacts.tsx"
 import { TermsLine, termsAllow, useTermsCheck } from "./terms.tsx"
 
 /**
@@ -204,6 +205,8 @@ function kindOf(pending: Pending): string {
     InstallExtension: "New extension",
     UninstallExtension: "Remove extension",
     HandOverControl: "Hand-over",
+    SetContact: "Contact",
+    RemoveContact: "Remove contact",
   }
   return isJoinRequest(pending) ? "Join request" : names[pending.action.tag]
 }
@@ -250,6 +253,7 @@ function Ticket({
   const approves = me.role.tag === "Owner" || me.role.tag === "Approver"
   const terms = useTermsCheck({ wallet, pending, from, accounts, now, active: approves })
   const allowed = termsAllow(terms)
+  const contacts = useContacts(wallet)
   const tone = join || action.tag !== "Transfer" ? "ticket watch" : "ticket"
   return (
     <li className={ready ? `${tone} ready` : tone}>
@@ -268,6 +272,7 @@ function Ticket({
           ))}
         </ul>
       )}
+      <ContactLines action={action} from={from} accounts={accounts} contacts={contacts} />
       <TermsLine check={terms} />
       {join && (
         <div className="ticket-code">

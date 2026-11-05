@@ -22,10 +22,10 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant, SystemTime};
 use wallet::{
     Account, AccountHolder, AccountKind, Action, ActionId, ActionKind, ActionState, AddAccountArgs,
-    AuditEntry, AuditEvent, AuditRequest, Balance, BitcoinNetwork, Chain, ClaimArgs, DailyLimit,
-    InitArgs, Member, NOT_A_MEMBER, NOT_A_PROPOSER, NOT_AN_APPROVER, NOT_AN_OWNER, NOT_CLAIMED,
-    Outcome, Pending, Policy, Role, Status, TransferRequest, UpgradeArgs, UpgradeState, WalletArg,
-    WalletError,
+    AuditEntry, AuditEvent, AuditRequest, Balance, BitcoinNetwork, Chain, ClaimArgs, Contact,
+    ContactAddress, DailyLimit, InitArgs, Member, NOT_A_MEMBER, NOT_A_PROPOSER, NOT_AN_APPROVER,
+    NOT_AN_OWNER, NOT_CLAIMED, Outcome, Pending, Policy, ProposerRecipients, Role, Status,
+    TransferRequest, UpgradeArgs, UpgradeState, WalletArg, WalletError,
 };
 
 const DAY_NS: u64 = 24 * 60 * 60 * 1_000_000_000;
@@ -495,6 +495,7 @@ fn before_the_claim_only_the_public_methods_answer() {
                 "balance",
                 "close_request",
                 "confirm_terms",
+                "contacts",
                 "decline_terms",
                 "execute",
                 "guard_check",
@@ -542,6 +543,7 @@ fn a_non_member_is_refused_by_every_method_for_members() {
                 "balance",
                 "close_request",
                 "confirm_terms",
+                "contacts",
                 "decline_terms",
                 "execute",
                 "guard_check",
@@ -654,7 +656,7 @@ fn a_new_wallet_has_the_default_policy() {
     let pic = PocketIc::new();
     let (id, owner) = claimed_wallet(&pic);
     let policy = policy(&pic, id, owner);
-    assert_eq!(policy.rules.len(), 8);
+    assert_eq!(policy.rules.len(), 10);
     assert!(policy.rules.iter().all(|rule| rule.quorum == 1));
     let timelock = |kind: &str| {
         policy
@@ -668,6 +670,9 @@ fn a_new_wallet_has_the_default_policy() {
     assert_eq!(timelock("RemoveMember"), 24 * HOUR_NS);
     assert_eq!(timelock("SetPolicy"), 7 * DAY_NS);
     assert_eq!(timelock("Upgrade"), 7 * DAY_NS);
+    assert_eq!(timelock("SetContact"), DAY_NS);
+    assert_eq!(timelock("RemoveContact"), 0);
+    assert_eq!(policy.proposer_recipients, Some(ProposerRecipients::Known));
 }
 
 #[test]
@@ -1120,6 +1125,17 @@ fn a_wallet_from_the_previous_release_upgrades_to_this_one() {
     upgrade(&pic, id, &WalletArg::Upgrade(None)).unwrap();
     assert!(status(&pic, id).claimed);
     assert_eq!(whoami(&pic, id, owner).map(|m| m.role), Some(Role::Owner));
+    // A wallet from before contacts has none, and gets their rules (decision 0015).
+    let rules = policy(&pic, id, owner).rules;
+    let rule = |kind: ActionKind| {
+        rules
+            .iter()
+            .find(|r| r.kind == kind)
+            .map(|r| (r.quorum, r.timelock_ns))
+    };
+    assert_eq!(rule(ActionKind::SetContact), Some((1, DAY_NS)));
+    assert_eq!(rule(ActionKind::RemoveContact), Some((1, 0)));
+    assert_eq!(contacts(&pic, id, owner), []);
     assert_eq!(members(&pic, id, owner).unwrap().len(), 1);
     let ic = |id, label: &str, index| (id, AccountKind::InternetComputer, label.to_string(), index);
     let listed = || -> Vec<_> {
@@ -2480,6 +2496,8 @@ fn a_proposers_transfer_waits_for_an_owner() {
         add_member_action(agent, Role::Proposer),
     );
     let friend = LedgerAccount::from(user(20));
+    // A proposer pays only a recipient the owners know (decision 0015).
+    add_contact(&pic, wallet, owner, "Friend", friend);
     let before = audit(&pic, wallet, owner).len();
 
     let proposed = propose(&pic, wallet, agent, transfer_action(1, friend, E8S)).unwrap();
@@ -4644,6 +4662,7 @@ fn the_guard_loads_only_its_pinned_file() {
     let agent = user(30);
     run_at_once(&pic, id, owner, add_member_action(agent, Role::Proposer));
     let friend = LedgerAccount::from(user(20));
+    add_contact(&pic, id, owner, "Friend", friend);
     let unasked = propose(&pic, id, agent, transfer_action(1, friend, E8S)).unwrap();
     let request = ask(&pic, id, owner, "send 1 ICP").unwrap().unwrap();
     let transfer =
@@ -4857,4 +4876,179 @@ fn the_guard_reads_the_wallets_own_account_names() {
             .iter()
             .any(|f| f.field == "to" && f.verdict == wallet::GuardVerdict::Differs)
     );
+}
+
+// ---- Contacts (decision 0015) ----------------------------------------------
+
+fn contacts(pic: &PocketIc, id: Principal, caller: Principal) -> Vec<Contact> {
+    query::<Result<Vec<Contact>, WalletError>>(pic, id, caller, "contacts").unwrap()
+}
+
+fn set_contact(id: Option<u32>, name: &str, to: LedgerAccount) -> Action {
+    Action::SetContact {
+        id,
+        name: name.to_string(),
+        addresses: vec![ContactAddress {
+            kind: AccountKind::InternetComputer,
+            address: to.to_string(),
+        }],
+    }
+}
+
+/// Adds a contact as an owner does: proposed, then executed once its 24 hours have passed.
+fn add_contact(pic: &PocketIc, id: Principal, owner: Principal, name: &str, to: LedgerAccount) {
+    let proposed = propose(pic, id, owner, set_contact(None, name, to)).unwrap();
+    pic.advance_time(Duration::from_nanos(DAY_NS));
+    let executed = act(pic, id, owner, "execute", proposed.id).unwrap();
+    assert_eq!(executed.state, ActionState::Executed(Outcome::Done));
+}
+
+/// A contact waits out its timelock, a proposer can neither add nor remove one, an upgrade keeps them, and a
+/// removed one is gone at once.
+#[test]
+fn contacts_are_added_behind_a_timelock_and_removed_at_once() {
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    let agent = user(30);
+    run_at_once(&pic, id, owner, add_member_action(agent, Role::Proposer));
+    let dana = LedgerAccount::from(user(20));
+
+    let proposed = propose(&pic, id, owner, set_contact(None, "Dana", dana)).unwrap();
+    assert_eq!(
+        proposed.executable_after_ns,
+        proposed.proposed_at_ns + DAY_NS
+    );
+    assert_eq!(
+        act(&pic, id, owner, "execute", proposed.id),
+        Err(WalletError::TimelockActive {
+            executable_after_ns: proposed.executable_after_ns
+        })
+    );
+    for action in [set_contact(None, "Lee", dana), Action::RemoveContact(1)] {
+        assert_eq!(
+            propose(&pic, id, agent, action),
+            Err(WalletError::Forbidden(
+                "a proposer proposes only transfers".to_string()
+            ))
+        );
+    }
+    // Checked when proposed: a name that is an address, and two of a kind.
+    assert!(matches!(
+        propose(&pic, id, owner, set_contact(None, &dana.to_string(), dana)),
+        Err(WalletError::InvalidArgument(_))
+    ));
+    let twice = Action::SetContact {
+        id: None,
+        name: "Lee".to_string(),
+        addresses: vec![
+            ContactAddress {
+                kind: AccountKind::InternetComputer,
+                address: dana.to_string(),
+            };
+            2
+        ],
+    };
+    assert!(matches!(
+        propose(&pic, id, owner, twice),
+        Err(WalletError::InvalidArgument(_))
+    ));
+
+    pic.advance_time(Duration::from_nanos(DAY_NS));
+    let executed = act(&pic, id, owner, "execute", proposed.id).unwrap();
+    assert_eq!(executed.state, ActionState::Executed(Outcome::Done));
+    let listed = contacts(&pic, id, agent);
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        (listed[0].id, listed[0].name.as_str(), listed[0].added_by),
+        (1, "Dana", owner)
+    );
+    assert_eq!(listed[0].addresses[0].address, dana.to_string());
+    // A second contact of the same name, case aside, is refused.
+    assert!(matches!(
+        propose(&pic, id, owner, set_contact(None, "DANA", dana)),
+        Err(WalletError::InvalidArgument(reason)) if reason.contains("contact 1")
+    ));
+
+    upgrade(&pic, id, &WalletArg::Upgrade(None)).unwrap();
+    assert_eq!(contacts(&pic, id, owner), listed);
+
+    // Changing an address is a SetContact, under the same timelock.
+    let lee = LedgerAccount::from(user(21));
+    let change = propose(&pic, id, owner, set_contact(Some(1), "Dana", lee)).unwrap();
+    assert_eq!(change.executable_after_ns, change.proposed_at_ns + DAY_NS);
+
+    let removed = propose(&pic, id, owner, Action::RemoveContact(1)).unwrap();
+    assert_eq!(removed.executable_after_ns, removed.proposed_at_ns);
+    let executed = act(&pic, id, owner, "execute", removed.id).unwrap();
+    assert_eq!(executed.state, ActionState::Executed(Outcome::Done));
+    assert_eq!(contacts(&pic, id, owner), []);
+    // The change of a removed contact fails when it runs.
+    pic.advance_time(Duration::from_nanos(DAY_NS));
+    let failed = act(&pic, id, owner, "execute", change.id).unwrap();
+    assert!(matches!(failed.state, ActionState::Failed(_)), "{failed:?}");
+    // Ids are never reused.
+    add_contact(&pic, id, owner, "Dana", dana);
+    assert_eq!(contacts(&pic, id, owner)[0].id, 2);
+}
+
+/// Under `Known`, a proposer's transfer pays only a contact, one of the wallet's own accounts or an address the
+/// owner's request writes; an owner's transfer pays anyone; `Any` lets the proposer's through.
+#[test]
+fn a_proposer_pays_only_known_recipients() {
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    let agent = user(30);
+    run_at_once(&pic, id, owner, add_member_action(agent, Role::Proposer));
+    let (dana, stranger) = (LedgerAccount::from(user(20)), LedgerAccount::from(user(22)));
+    let unknown = |result: PendingResult| matches!(result, Err(WalletError::PolicyViolation(reason)) if reason.contains("not a contact"));
+
+    assert!(unknown(propose(
+        &pic,
+        id,
+        agent,
+        transfer_action(1, dana, E8S)
+    )));
+    propose(&pic, id, owner, transfer_action(1, stranger, E8S)).unwrap();
+    add_contact(&pic, id, owner, "Dana", dana);
+    propose(&pic, id, agent, transfer_action(1, dana, E8S)).unwrap();
+    // Another of the wallet's own accounts.
+    let second = add_account(&pic, id, owner, AccountKind::InternetComputer, "Savings").unwrap();
+    let own: LedgerAccount = second.address.parse().unwrap();
+    propose(&pic, id, agent, transfer_action(1, own, E8S)).unwrap();
+
+    // An address the owner's request writes, but only for a transfer that answers it.
+    let request = ask(&pic, id, owner, &format!("Send 1 ICP to {stranger}."))
+        .unwrap()
+        .unwrap();
+    assert!(unknown(propose(
+        &pic,
+        id,
+        agent,
+        transfer_action(1, stranger, E8S)
+    )));
+    propose_for(
+        &pic,
+        id,
+        agent,
+        request.id,
+        transfer_action(1, stranger, E8S),
+    )
+    .unwrap();
+    let named = ask(&pic, id, owner, "Send 1 ICP to Lee").unwrap().unwrap();
+    assert!(unknown(propose_for(
+        &pic,
+        id,
+        agent,
+        named.id,
+        transfer_action(1, stranger, E8S)
+    )));
+
+    // Owners turn it off with a SetPolicy, under its 7 days.
+    let mut any = policy(&pic, id, owner);
+    any.proposer_recipients = Some(ProposerRecipients::Any);
+    let proposed = propose(&pic, id, owner, Action::SetPolicy(any)).unwrap();
+    pic.advance_time(Duration::from_nanos(7 * DAY_NS));
+    let executed = act(&pic, id, owner, "execute", proposed.id).unwrap();
+    assert_eq!(executed.state, ActionState::Executed(Outcome::Done));
+    propose(&pic, id, agent, transfer_action(1, stranger, E8S)).unwrap();
 }
