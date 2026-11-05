@@ -59,15 +59,27 @@ impl StoredContact {
     }
 }
 
-/// A name as names are compared: lowercase, whitespace runs as one space,
-/// trimmed (candid-profile D-045). D-045 applies NFKC first, which changes no
-/// ASCII text, and a contact's name is ASCII (`plain_name`), so the key is
-/// D-045's for every contact.
+/// A name as names are compared (candid-profile D-045): the key account
+/// labels are compared by (decision 0016), so a contact's name and a label
+/// are the same name exactly when the names rule says so.
 pub fn name_key(name: &str) -> String {
-    name.to_lowercase()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
+    crate::accounts::name_key(name)
+}
+
+/// Refuses `label` for an account when a contact already has that name, so a
+/// name stands for one account or one contact (decisions 0015 and 0016).
+pub fn check_label_free(
+    label: &str,
+    contacts: &[(ContactId, StoredContact)],
+) -> Result<(), WalletError> {
+    let key = name_key(label);
+    match contacts.iter().find(|(_, c)| name_key(&c.name) == key) {
+        Some((id, _)) => Err(WalletError::InvalidArgument(format!(
+            "contact {id} is already named \u{201c}{}\u{201d}: an account needs a name no contact has",
+            label.trim()
+        ))),
+        None => Ok(()),
+    }
 }
 
 /// Whether `name` is plain English, as the first version takes a contact's
@@ -468,5 +480,32 @@ mod tests {
     fn names_compare_case_and_spaces_aside() {
         assert_eq!(name_key("  Dana   Lee "), "dana lee");
         assert_eq!(name_key("DANA\tLee"), "dana lee");
+        // A label in compatibility forms is the same name as a contact's.
+        assert_eq!(name_key("\u{ff33}avings"), name_key("Savings"));
+        assert!(refused_label("\u{ff33}avings"));
+    }
+
+    #[test]
+    fn an_account_cannot_take_a_contacts_name() {
+        let dana = stored(
+            "Dana",
+            vec![address(AccountKind::InternetComputer, ACCOUNT)],
+        );
+        let contacts = vec![(1, dana)];
+        assert!(check_label_free(" DANA ", &contacts).is_err());
+        assert!(check_label_free("Dana's savings", &contacts).is_ok());
+    }
+
+    /// Whether a new contact named "Savings"-like `label` is refused beside an account labelled `label`.
+    fn refused_label(label: &str) -> bool {
+        let action = set(
+            None,
+            "Savings",
+            vec![address(AccountKind::InternetComputer, ACCOUNT)],
+        );
+        matches!(
+            check(&action, &[], &[label.to_string()], BitcoinNetwork::Mainnet),
+            Err(WalletError::InvalidArgument(_))
+        )
     }
 }

@@ -50,7 +50,8 @@ are now.
 ## The default accounts
 
 The wallet makes Internet Computer account 0, Bitcoin account 0 and, from the
-EVM step, EVM account 0, labelled "Main". A timer set in `init` and
+EVM step, EVM account 0, labelled "Main" (since [decision 0016](0016-unique-account-names.md),
+"ICP wallet", "Bitcoin wallet" and "Ethereum wallet"). A timer set in `init` and
 `post_upgrade` fetches the threshold keys and makes whichever is missing, so
 a new wallet has them before its claim and an existing one gains them on
 upgrade. The start page lists them, and adding an account becomes a small

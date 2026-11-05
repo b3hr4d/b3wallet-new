@@ -100,7 +100,10 @@ Chosen: A.
   guard, which have no Unicode normalization tables, compare every contact
   name exactly as D-045 does: lowercase (not case folding), whitespace runs
   as one space, trimmed. Names in other scripts are refused, not normalized;
-  supporting them means giving the wallet and the guard NFKC together.
+  supporting them means giving the guard NFKC too. Since [decision
+  0016](0016-unique-account-names.md) the wallet compares a contact's name
+  with the account labels by that decision's key, with NFKC, both when a
+  contact is saved and when an account is added or renamed.
   Behrad, 2026-11-04: "for the first version need to focus on the basics and
   force user to enter normally in english".
 - **Actions.** `SetContact { id : opt ContactId; name; addresses }` adds a

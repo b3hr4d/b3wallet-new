@@ -191,6 +191,7 @@ async fn add_account(args: AddAccountArgs) -> Result<Account, WalletError> {
     let caller = ic_cdk::api::msg_caller();
     check_not_installing(ic_cdk::api::time())?;
     let index = accounts::check_new(&args, storage::accounts().iter().map(|(_, a)| a))?;
+    contacts::check_label_free(&args.label, &storage::contacts())?;
     let public_key = account_key(args.kind, index).await?;
     if public_key.is_some() {
         // Other calls ran meanwhile.
@@ -210,6 +211,36 @@ async fn add_account(args: AddAccountArgs) -> Result<Account, WalletError> {
     let account = StoredAccount::new(args.kind, args.label, index, public_key, Some(caller), now);
     let id = storage::add_account(account.clone());
     audit(caller, AuditEvent::AccountAdded(id), now);
+    Ok(account.view(id, ic_cdk::api::canister_self()))
+}
+
+/// Renames an account. Its name is only how people find it, and every
+/// screen shows its address beside it, so owners rename without approval;
+/// the name must be one no other account has (decision 0016).
+#[ic_cdk::update(guard = "access::owner")]
+fn rename_account(args: RenameAccountArgs) -> Result<Account, WalletError> {
+    let caller = ic_cdk::api::msg_caller();
+    check_not_installing(ic_cdk::api::time())?;
+    let (id, mut account) = storage::listed_account(args.account)
+        .filter(|(id, _)| *id == args.account)
+        .ok_or_else(|| WalletError::NotFound(format!("account {}", args.account)))?;
+    governance::check_label(&args.label)?;
+    let all = storage::accounts();
+    accounts::check_unique(&args.label, Some(id), all.iter().map(|(id, a)| (*id, a)))?;
+    contacts::check_label_free(&args.label, &storage::contacts())?;
+    let from = std::mem::replace(&mut account.label, args.label.trim().to_string());
+    account.renamed_by = Some(caller);
+    storage::set_account(id, account.clone());
+    let now = ic_cdk::api::time();
+    audit(
+        caller,
+        AuditEvent::AccountRenamed {
+            account: id,
+            from,
+            to: account.label.clone(),
+        },
+        now,
+    );
     Ok(account.view(id, ic_cdk::api::canister_self()))
 }
 
@@ -269,14 +300,12 @@ fn add_default(kind: AccountKind, public_key: Option<Vec<u8>>, now: u64) {
     if accounts::next_index(kind, accounts.iter().map(|(_, a)| a)) != 0 {
         return;
     }
-    let account = StoredAccount::new(
-        kind,
-        accounts::DEFAULT_LABEL.to_string(),
-        0,
-        public_key,
-        None,
-        now,
+    // One name per account (decision 0016): an owner may have taken the default name meanwhile.
+    let label = accounts::free_label(
+        accounts::default_label(kind),
+        accounts.iter().map(|(_, a)| a),
     );
+    let account = StoredAccount::new(kind, label, 0, public_key, None, now);
     storage::add_account(account);
 }
 

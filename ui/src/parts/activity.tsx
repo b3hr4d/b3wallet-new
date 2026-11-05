@@ -143,6 +143,7 @@ function look(event: AuditEvent): [string, ReactNode] {
     case "AssetUntracked":
     case "ExtensionCall":
     case "RequestClosed":
+    case "AccountRenamed":
       return ["", <DotIcon key="icon" />]
   }
 }

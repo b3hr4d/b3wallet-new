@@ -26,11 +26,104 @@ use serde::Deserialize;
 use serde_bytes::ByteBuf;
 use sha2::{Digest, Sha224};
 use std::collections::BTreeMap;
+use unicode_normalization::UnicodeNormalization;
 
 /// At most this many accounts, so every list of them stays small.
 pub const MAX_ACCOUNTS: usize = 64;
-/// The label of the accounts the wallet makes itself.
-pub const DEFAULT_LABEL: &str = "Main";
+/// What the wallet named every account it made itself before names were unique (decision 0016).
+pub const OLD_DEFAULT_LABEL: &str = "Main";
+
+/// The label of the account of `kind` the wallet makes itself, one per kind, so each is a name of its own (decision 0016).
+pub fn default_label(kind: AccountKind) -> &'static str {
+    match kind {
+        AccountKind::InternetComputer => "ICP wallet",
+        AccountKind::Bitcoin(_) => "Bitcoin wallet",
+        AccountKind::Evm => "Ethereum wallet",
+    }
+}
+
+/// A label as candid-profile's names rule compares names (D-045): Unicode NFKC, lowercase, runs of White_Space made
+/// one space, trimmed. Two labels with the same key are the same name.
+pub fn name_key(label: &str) -> String {
+    let lower = label.nfkc().collect::<String>().to_lowercase();
+    lower.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Refuses `label` when a listed account other than `except` already has that name: names are unique, so a name stands
+/// for one account (decision 0016).
+pub fn check_unique<'a>(
+    label: &str,
+    except: Option<AccountId>,
+    existing: impl IntoIterator<Item = (AccountId, &'a StoredAccount)>,
+) -> Result<(), WalletError> {
+    let key = name_key(label);
+    let taken = existing.into_iter().any(|(id, account)| {
+        Some(id) != except && account.is_listed() && name_key(&account.label) == key
+    });
+    if taken {
+        return Err(WalletError::InvalidArgument(format!(
+            "another account is already named \u{201c}{}\u{201d}: each account needs a name of its own",
+            label.trim()
+        )));
+    }
+    Ok(())
+}
+
+/// `base`, or the first of "base 2", "base 3", ... that no listed account has.
+pub fn free_label<'a>(
+    base: &str,
+    existing: impl IntoIterator<Item = &'a StoredAccount> + Clone,
+) -> String {
+    let taken = |label: &str| {
+        let key = name_key(label);
+        existing
+            .clone()
+            .into_iter()
+            .any(|a| a.is_listed() && name_key(&a.label) == key)
+    };
+    (1..)
+        .map(|n| {
+            if n == 1 {
+                base.to_string()
+            } else {
+                format!("{base} {n}")
+            }
+        })
+        .find(|label| !taken(label))
+        .unwrap_or_else(|| base.to_string())
+}
+
+/// The accounts the wallet made itself that still have the old name "Main", renamed to their kind's default label (or
+/// the next free one), in id order: what an upgrade stores (decision 0016). Accounts people added or renamed keep
+/// theirs, even one an owner renamed "Main".
+pub fn rename_defaults(accounts: &[(AccountId, StoredAccount)]) -> Vec<(AccountId, StoredAccount)> {
+    let mut all = accounts.to_vec();
+    let mut renamed = Vec::new();
+    for k in 0..all.len() {
+        let (id, account) = &all[k];
+        if account.added_by.is_some()
+            || account.renamed_by.is_some()
+            || !account.is_listed()
+            || account.label != OLD_DEFAULT_LABEL
+        {
+            continue;
+        }
+        let Some(kind) = account.kind else { continue };
+        let others: Vec<&StoredAccount> = all
+            .iter()
+            .filter(|(other, _)| other != id)
+            .map(|(_, a)| a)
+            .collect();
+        let label = free_label(default_label(kind), others.iter().copied());
+        let account = StoredAccount {
+            label,
+            ..account.clone()
+        };
+        renamed.push((*id, account.clone()));
+        all[k].1 = account;
+    }
+    renamed
+}
 
 /// An account as stored, under its id. Accounts are never deleted, so an id
 /// never names another account and an index is never given out twice.
@@ -54,6 +147,9 @@ pub struct StoredAccount {
     /// and an ICRC account with the same index were one subaccount. Its id
     /// leads there, and it is no longer listed.
     pub merged_into: Option<AccountId>,
+    /// The owner who last renamed it (`rename_account`), absent if nobody
+    /// has. An upgrade never renames an account an owner named.
+    pub renamed_by: Option<Principal>,
 }
 
 impl StoredAccount {
@@ -76,6 +172,7 @@ impl StoredAccount {
             added_by,
             public_key: public_key.map(ByteBuf::from),
             merged_into: None,
+            renamed_by: None,
         }
     }
 
@@ -229,6 +326,12 @@ pub fn check_new<'a>(
             "a wallet has at most {MAX_ACCOUNTS} accounts"
         )));
     }
+    // A new account has no id yet, so every listed account with the name refuses it.
+    check_unique(
+        &args.label,
+        None,
+        existing.clone().into_iter().map(|account| (0, account)),
+    )?;
     Ok(next_index(args.kind, existing))
 }
 
@@ -327,7 +430,7 @@ mod tests {
     fn stored(kind: AccountKind, index: u32) -> StoredAccount {
         StoredAccount::new(
             kind,
-            "savings".to_string(),
+            format!("{kind:?} {index}"),
             index,
             None,
             Some(Principal::self_authenticating([1; 32])),
@@ -458,6 +561,81 @@ mod tests {
             check_new(&blank, &[]),
             Err(WalletError::InvalidArgument(_))
         ));
+    }
+
+    #[test]
+    fn names_are_unique_as_the_names_rule_compares_them() {
+        assert_eq!(name_key("  BTC\u{a0}  Savings "), "btc savings");
+        assert_eq!(name_key("\u{ff33}avings"), "savings"); // a fullwidth S is an S (NFKC)
+        let mut savings = stored(IC, 1);
+        savings.label = "BTC Savings".to_string();
+        let existing = [stored(IC, 0), savings.clone()];
+        for taken in ["btc savings", " BTC  SAVINGS", "\u{ff22}TC Savings"] {
+            let new = AddAccountArgs {
+                kind: EVM,
+                label: taken.to_string(),
+            };
+            assert!(
+                matches!(
+                    check_new(&new, &existing),
+                    Err(WalletError::InvalidArgument(_))
+                ),
+                "{taken}"
+            );
+        }
+        let other = AddAccountArgs {
+            kind: EVM,
+            label: "BTC Savings 2".into(),
+        };
+        assert_eq!(check_new(&other, &existing), Ok(0));
+        // A merged account is not listed, so its name is free.
+        let mut merged = savings.clone();
+        merged.merged_into = Some(1);
+        let same = AddAccountArgs {
+            kind: EVM,
+            label: "BTC Savings".into(),
+        };
+        assert_eq!(check_new(&same, &[merged]), Ok(0));
+        // Renaming an account to its own name, in another case, is no clash.
+        let ids = [(1, &existing[0]), (2, &existing[1])];
+        assert_eq!(check_unique("btc SAVINGS", Some(2), ids), Ok(()));
+        assert!(check_unique("btc SAVINGS", Some(1), ids).is_err());
+    }
+
+    #[test]
+    fn the_wallets_own_accounts_get_names_of_their_own_and_old_defaults_are_renamed() {
+        assert_eq!(
+            [IC, REGTEST, EVM].map(default_label),
+            ["ICP wallet", "Bitcoin wallet", "Ethereum wallet"]
+        );
+        let made =
+            |kind, index| StoredAccount::new(kind, OLD_DEFAULT_LABEL.into(), index, None, None, 0);
+        let mut taken = stored(IC, 3);
+        taken.label = "bitcoin WALLET".into(); // an owner took the default name already
+        let mut kept = stored(EVM, 1);
+        kept.label = OLD_DEFAULT_LABEL.into(); // an owner named it "Main": it keeps the name
+        // A wallet-made account an owner renamed "Main" keeps it on every later upgrade.
+        let mut chosen = made(IC, 1);
+        chosen.renamed_by = Some(Principal::anonymous());
+        let all = [
+            (1, made(IC, 0)),
+            (2, made(REGTEST, 0)),
+            (3, made(EVM, 0)),
+            (4, taken),
+            (5, kept),
+            (6, chosen),
+        ];
+        let renamed: Vec<(AccountId, String)> = rename_defaults(&all)
+            .into_iter()
+            .map(|(id, a)| (id, a.label))
+            .collect();
+        let want: Vec<(AccountId, String)> = vec![
+            (1, "ICP wallet".into()),
+            (2, "Bitcoin wallet 2".into()),
+            (3, "Ethereum wallet".into()),
+        ];
+        assert_eq!(renamed, want);
+        assert_eq!(free_label("ICP wallet", [&made(IC, 0)]), "ICP wallet");
     }
 
     #[test]

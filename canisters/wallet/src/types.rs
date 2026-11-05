@@ -109,6 +109,12 @@ pub struct AddAccountArgs {
 }
 
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct RenameAccountArgs {
+    pub account: AccountId,
+    pub label: String,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Balance {
     pub account: AccountId,
     pub asset: Chain,
@@ -367,6 +373,12 @@ pub enum AuditEvent {
     Claimed,
     JoinRequested(Principal),
     AccountAdded(AccountId),
+    /// An owner renamed an account (decision 0016).
+    AccountRenamed {
+        account: AccountId,
+        from: String,
+        to: String,
+    },
     AssetTracked(Chain),
     AssetUntracked(Chain),
     Proposed(ActionId),
