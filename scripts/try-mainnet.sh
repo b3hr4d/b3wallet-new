@@ -9,6 +9,8 @@
 #       claim link, for you to claim it with Internet Identity in a browser
 #   scripts/try-mainnet.sh upgrade
 #       installs this checkout over the wallet, which keeps its state
+#   scripts/try-mainnet.sh link
+#       prints the claim link again
 #
 # Once you have claimed it, Settings > Guard uploads the guard file the wallet
 # pins and loads it.
@@ -30,11 +32,12 @@ cd "$(dirname "$0")/.."
 usage() {
   echo "usage: $0 install [--subnet SUBNET] [--cycles CYCLES] [-e ENVIRONMENT]" >&2
   echo "       $0 upgrade [-e ENVIRONMENT]" >&2
+  echo "       $0 link [-e ENVIRONMENT]" >&2
   exit 2
 }
 command=${1:-}
 case $command in
-  install | upgrade) shift ;;
+  install | upgrade | link) shift ;;
   *) usage ;;
 esac
 env=ic subnet= cycles=3t
@@ -112,11 +115,28 @@ ed25519() {
   ' "$@"
 }
 
-# The subnet a canister runs on, as the IC's public API reports it.
+# The subnet a canister runs on, as the IC's public API reports it, or nothing
+# while the API does not list the canister: it answers 404 for a new one for
+# some minutes.
 subnet_of() {
-  curl -sSf "https://ic-api.internetcomputer.org/api/v3/canisters/$1" |
-    node -pe 'JSON.parse(require("fs").readFileSync(0, "utf8")).subnet_id ?? ""'
+  { curl -sSf "https://ic-api.internetcomputer.org/api/v3/canisters/$1" 2>/dev/null || true; } |
+    node -e '
+      let text = "";
+      process.stdin.on("data", (d) => (text += d)).on("end", () => {
+        try { console.log(JSON.parse(text).subnet_id ?? ""); } catch { console.log(""); }
+      });'
 }
+
+claim_link() { echo "$(page_of "$1")/claim#$(ed25519 seed "$state/claim.pem")"; }
+
+if [ "$command" = link ]; then
+  if [ ! -e "$state/wallet" ] || [ ! -e "$state/claim.pem" ]; then
+    echo "No wallet yet: run $0 install first." >&2
+    exit 1
+  fi
+  claim_link "$(cat "$state/wallet")"
+  exit 0
+fi
 
 build() {
   echo "Building the wallet"
@@ -160,10 +180,22 @@ icp canister install "$wallet" --wasm "$target/wallet.wasm" "${net[@]}" --args "
   bitcoin_network = $([ "$env" = local ] && echo 'opt variant { Regtest }' || echo null);
 } })" >/dev/null
 if [ -n "$subnet" ] && [ "$env" != local ]; then
-  landed=$(subnet_of "$wallet")
-  if [ "$landed" != "$subnet" ]; then
-    echo "Wallet $wallet runs on subnet ${landed:-the IC did not name}, not $subnet." >&2
+  echo "Checking its subnet on ic-api.internetcomputer.org, which can take a few minutes to list it"
+  landed=
+  for _ in $(seq 20); do
+    landed=$(subnet_of "$wallet")
+    [ -z "$landed" ] || break
+    sleep 15
+  done
+  if [ -n "$landed" ] && [ "$landed" != "$subnet" ]; then
+    echo "Wallet $wallet runs on subnet $landed, not $subnet. To get its cycles back:" >&2
+    echo "  icp canister stop $wallet -e $env && icp canister delete $wallet -e $env" >&2
     exit 1
+  fi
+  if [ -z "$landed" ]; then
+    echo "The IC API does not list $wallet yet. Check its subnet later with:" >&2
+    echo "  curl -s https://ic-api.internetcomputer.org/api/v3/canisters/$wallet" >&2
+    subnet=
   fi
 fi
 page=$(page_of "$wallet")
@@ -180,7 +212,9 @@ Wallet $wallet is installed${subnet:+ on subnet $subnet}, controlled by your
 icp-cli identity $me. Open its claim link within 24 hours, sign in with
 Internet Identity, and claim it:
 
-  $page/claim#$(ed25519 seed "$state/claim.pem")
+  $(claim_link "$wallet")
+
+$0 link prints it again.
 
 The link holds the claim key, so whoever opens it first owns the wallet.
 Then Settings > Guard ($page/settings) loads the guard file the wallet pins.
