@@ -119,7 +119,7 @@ ed25519() {
 # while the API does not list the canister: it answers 404 for a new one for
 # some minutes.
 subnet_of() {
-  { curl -sSf "https://ic-api.internetcomputer.org/api/v3/canisters/$1" 2>/dev/null || true; } |
+  { curl -sSf --max-time 10 "https://ic-api.internetcomputer.org/api/v3/canisters/$1" 2>/dev/null || true; } |
     node -e '
       let text = "";
       process.stdin.on("data", (d) => (text += d)).on("end", () => {
@@ -181,10 +181,10 @@ icp canister install "$wallet" --wasm "$target/wallet.wasm" "${net[@]}" --args "
 } })" >/dev/null
 if [ -n "$subnet" ] && [ "$env" != local ]; then
   echo "Checking its subnet on ic-api.internetcomputer.org, which can take a few minutes to list it"
-  landed=
-  for _ in $(seq 20); do
+  landed= deadline=$((SECONDS + 300))
+  while :; do
     landed=$(subnet_of "$wallet")
-    [ -z "$landed" ] || break
+    [ -z "$landed" ] && [ $SECONDS -lt "$deadline" ] || break
     sleep 15
   done
   if [ -n "$landed" ] && [ "$landed" != "$subnet" ]; then
