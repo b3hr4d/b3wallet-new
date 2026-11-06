@@ -22,8 +22,10 @@ What it does and does not do:
 
 1. **It only adds flags for a person to read.** Nothing in it approves, rejects or changes an action, and
    `NotChecked` is never OK. A transfer whose request it cannot read is "partial", never "matches".
-2. **The model is pinned.** The file is `guard::FILE_BYTES` (44,359,636) bytes long with SHA-256
-   `guard::FILE_SHA256` (e9ebd2b0…), written by candid-profile's `guard/canister/export.py` from the round-9 release.
+2. **The model is pinned.** The file is `guard::FILE_BYTES` (44,359,656) bytes long with SHA-256
+   `guard::FILE_SHA256` (a8c08d84…), written by candid-profile's `guard/canister/export.py` from the round-11
+   release (2026-11-06; until then the round-9 file, 44,359,636 bytes, e9ebd2b0…, which a wallet of this release
+   refuses).
    - `guard_upload` writes owners' chunks at offsets into the guard's own stable memory (memory id 15).
    - `guard_load` hashes the whole file and refuses any other.
    - `post_upgrade` loads the file again, because a new release may pin another one.
@@ -80,6 +82,21 @@ Checked:
   - with the names swap (2026-10-27), the same 20 answers again, and 10 more around ICP accounts named "BTC Savings"
     and "Rent ETH": the 5 honest ones match, all 4 planted changes are caught and a "don't send" request is
     flagged, where the model alone abstains on all 9 transfers (candid-profile `try/results-names.json`).
+
+**Round 11** (2026-11-06; candid-profile `guard/README.md`, "Round 11 result in plain words"). The model reads each
+use of one of the wallet's names as one piece: an account's label as `[unused6]`, a saved contact's name as
+`[unused7]` (`Tokenizer::name_pieces`, the port of `guard/names.py` `pieces`; the file's `labels.names` is
+`"pieces"`, `guard::Reading`). Nothing is swapped, so the spans are the owner's own words. On candid-profile's fresh
+round-11 test set it missed 0 of 39,444 changed fields (round 9: 1) and false-flagged 0.88% of correct proposals
+(round 9, read with the label swap: 2.32%); on requests that name a contact it flags 95% of recipient changes (68%).
+Checked:
+
+- **The port** matches release-round11's PyTorch logits on its 300 parity cases (largest difference 3.1e-5), and the
+  name pieces and answers on 1,214 requests with their wallets' labels and contacts (`tests/data/pieces.jsonl`,
+  candid-profile `canister/pieces_fixtures.py`: every 10th request of the dev split `.q` and 14 written edge cases);
+  the round-9 checks above still pass on round 9's file.
+- **PocketIC**, with the round-11 file: the three checks above, and "Pay Uncle Femi 3 ICP from my BTC Savings"
+  matches a transfer to the contact Uncle Femi and flags one to the contact Dana.
 
 Open:
 

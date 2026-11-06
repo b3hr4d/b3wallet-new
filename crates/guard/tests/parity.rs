@@ -15,11 +15,18 @@
 //!
 //! `names`: the swap of the wallet's names (`Tokenizer::swap_names`) against candid-profile's `guard/names.py` on
 //! `tests/data/names.jsonl` (`names_dev.py --fixtures`: 608 requests of round 6's dev split `.w`, as written and with
-//! token words in the labels), and with GUARD_BIN also the answers (`Guard::answer_named`).
+//! token words in the labels), and with GUARD_BIN also the answers (`Guard::answer_named`); round 9's reading.
+//!
+//! `pieces`: round 11's name pieces (`Tokenizer::name_pieces`) against candid-profile's `guard/names.py` `pieces` on
+//! `tests/data/pieces.jsonl` (`canister/pieces_fixtures.py --every 10`: 1,200 requests of round 11's dev split `.q`
+//! with their wallets' labels, contacts and symbols, and 14 written edge cases), and with GUARD_BIN (round 11's
+//! guard.bin) also release-round11's PyTorch answers (`Guard::answer_pieces`).
+//!
+//! `model` reads a release's parity.json with that release's reading: round 11's cases carry their name pieces.
 
 use guard::{
-    Account, Chain, Contact, Context, Guard, Manip, Overall, Piece, Proposal, RequestRule, Tables,
-    Token, Tokenizer, Verdict, compare,
+    Account, Chain, Contact, Context, Guard, Manip, Overall, Piece, Proposal, Reading, RequestRule,
+    Tables, Token, Tokenizer, Verdict, compare,
 };
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -276,11 +283,13 @@ fn model() {
             .unwrap_or_default()
     };
     let (mut max_diff, mut wrong) = (0f32, Vec::new());
+    // Round 11's cases carry their name pieces (the wallet's names are not in parity.json; `pieces` checks how
+    // they are found).
+    let name_ids = guard.tokenizer.name_piece_ids();
     let cases = p["cases"].as_array().expect("cases");
     for c in cases {
         let request = c["request"].as_str().expect("a request");
         let text: Vec<char> = request.chars().collect();
-        let (ids, pieces) = guard.tokenizer.encode(&text).expect("fits");
         let want_pieces: Vec<Piece> = c["pieces"]
             .as_array()
             .expect("pieces")
@@ -298,6 +307,15 @@ fn model() {
             .filter_map(Value::as_u64)
             .map(|x| x as u32)
             .collect();
+        let names: Vec<Piece> = match guard.reading {
+            Reading::Pieces => want_pieces
+                .iter()
+                .filter(|p| name_ids.contains(&p.id))
+                .copied()
+                .collect(),
+            Reading::Label => Vec::new(),
+        };
+        let (ids, pieces) = guard.tokenizer.encode_named(&text, &names).expect("fits");
         assert_eq!((&ids, &pieces), (&want_ids, &want_pieces), "{request:?}");
         let want_tags: Vec<f32> = c["tag_logits"]
             .as_array()
@@ -313,7 +331,10 @@ fn model() {
         {
             max_diff = max_diff.max((a - b).abs());
         }
-        let got = guard.answer(request).expect("an answer");
+        let got = match guard.reading {
+            Reading::Pieces => guard.answer_from(&text, &pieces, &class_logits, &tag_logits),
+            Reading::Label => guard.answer(request).expect("an answer"),
+        };
         let want = &c["output"];
         let spans: serde_json::Map<String, Value> = got
             .spans
@@ -346,9 +367,13 @@ fn names() {
     .expect("JSON");
     let tok =
         Tokenizer::new(&vocab, Tables::from_json(&tables).expect("tables")).expect("a tokenizer");
-    let guard = std::env::var("GUARD_BIN").ok().map(|bin| {
-        Guard::from_bytes(&std::fs::read(bin).expect("guard.bin")).expect("a guard file")
-    });
+    // The answers are round 9's (its label reading); another release's file checks the swap alone.
+    let guard = std::env::var("GUARD_BIN")
+        .ok()
+        .map(|bin| {
+            Guard::from_bytes(&std::fs::read(bin).expect("guard.bin")).expect("a guard file")
+        })
+        .filter(|g| g.release == "release-round9");
     let strings = |v: &Value| -> Vec<String> {
         v.as_array()
             .expect("a list")
@@ -417,9 +442,135 @@ fn a_label_with_a_token_word_is_read_as_a_label() {
             .find(|(s, _)| s == slot)
             .map(|(_, (x, y))| request.chars().skip(*x).take(y - x).collect::<String>())
     };
-    let named = guard.answer_named(request, &names, &[]).expect("an answer");
+    // In the release's own reading: round 9 swaps the labels, round 11 reads each as one piece.
+    let named = match guard.reading {
+        Reading::Label => guard.answer_named(request, &names, &[]),
+        Reading::Pieces => guard.answer_pieces(request, &names, &[], &[]),
+    }
+    .expect("an answer");
     assert!(!named.abstain && named.class == "one_transfer", "{named:?}");
     assert_eq!(span(&named, "asset").as_deref(), Some("ICP"));
     assert_eq!(span(&named, "to").as_deref(), Some("BTC Savings"));
     assert_eq!(span(&named, "from").as_deref(), Some("Main"));
+}
+
+#[test]
+fn pieces() {
+    let vocab: Vec<String> = std::fs::read_to_string(data("vocab.txt"))
+        .expect("vocab.txt")
+        .split('\n')
+        .map(str::to_owned)
+        .collect();
+    let tables: Value = serde_json::from_str(
+        &std::fs::read_to_string(data("tokenizer-tables.json")).expect("tokenizer-tables.json"),
+    )
+    .expect("JSON");
+    let tok =
+        Tokenizer::new(&vocab, Tables::from_json(&tables).expect("tables")).expect("a tokenizer");
+    // The answers are release-round11's; a file that reads names otherwise checks the pieces alone.
+    let guard = std::env::var("GUARD_BIN")
+        .ok()
+        .map(|bin| {
+            Guard::from_bytes(&std::fs::read(bin).expect("guard.bin")).expect("a guard file")
+        })
+        .filter(|g| g.release == "release-round11");
+    let strings = |v: &Value| -> Vec<String> {
+        v.as_array()
+            .expect("a list")
+            .iter()
+            .map(|s| s.as_str().expect("a string").to_owned())
+            .collect()
+    };
+    let text = std::fs::read_to_string(data("pieces.jsonl")).expect("pieces.jsonl");
+    let (mut n, mut named, mut contacts, mut wrong) = (0, 0, 0, Vec::new());
+    let contact_id = tok.name_piece_ids()[1];
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        let c: Value = serde_json::from_str(line).expect("a JSON line");
+        let request = c["request"].as_str().expect("a request");
+        let (labels, names, symbols) = (
+            strings(&c["labels"]),
+            strings(&c["contacts"]),
+            strings(&c["symbols"]),
+        );
+        let chars: Vec<char> = request.chars().collect();
+        let got: Vec<[u64; 3]> = tok
+            .name_pieces(&chars, &labels, &names, &symbols)
+            .iter()
+            .map(|p| [u64::from(p.id), p.start as u64, p.end as u64])
+            .collect();
+        let want: Vec<[u64; 3]> = c["pieces"]
+            .as_array()
+            .expect("pieces")
+            .iter()
+            .map(|p| [0, 1, 2].map(|i| p[i].as_u64().expect("a number")))
+            .collect();
+        n += 1;
+        named += usize::from(!want.is_empty());
+        contacts += usize::from(want.iter().any(|p| p[0] == u64::from(contact_id)));
+        if got != want {
+            wrong.push(format!("{request:?}: rust {got:?}, want {want:?}"));
+        }
+        let Some(guard) = &guard else { continue };
+        let got = guard
+            .answer_pieces(request, &labels, &names, &symbols)
+            .expect("an answer");
+        let want = &c["answer"];
+        let spans: serde_json::Map<String, Value> = got
+            .spans
+            .iter()
+            .map(|(k, (a, b))| (k.clone(), json!([a, b])))
+            .collect();
+        if want["class"] != got.class.as_str()
+            || want["spans"] != Value::Object(spans)
+            || want["abstain"] != got.abstain
+            || (want["confidence"].as_f64().unwrap() - f64::from(got.confidence)).abs() > 1e-4
+        {
+            wrong.push(format!("{request:?}: rust {got:?}, want {want}"));
+        }
+    }
+    eprintln!(
+        "{n} requests, {named} with a name piece, {contacts} with a contact's, answers checked: {}",
+        guard.is_some()
+    );
+    assert!(n > 0 && named > 0 && contacts > 0);
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Round 11 reads a contact's name as one piece, so "Dana" is the recipient, whichever account the label names.
+#[test]
+fn round_11_reads_a_contact_as_the_recipient() {
+    let Ok(bin) = std::env::var("GUARD_BIN") else {
+        eprintln!("skipped: set GUARD_BIN to check the model");
+        return;
+    };
+    let guard = Guard::from_bytes(&std::fs::read(bin).expect("guard.bin")).expect("a guard file");
+    if guard.reading != Reading::Pieces {
+        eprintln!("skipped: GUARD_BIN is not a release that reads name pieces");
+        return;
+    }
+    let request = "Pay Uncle Femi 3 ICP from my BTC Savings";
+    let ctx = Context {
+        accounts: vec![Account {
+            id: 2,
+            label: "BTC Savings".into(),
+            address: "ptm2t-miaac-sb4ek-lxr5q-cai-waaliza.1".into(),
+            chain: Chain::Icp,
+        }],
+        tokens: Vec::new(),
+        contacts: vec![Contact {
+            name: "Uncle Femi".into(),
+            addresses: vec![(Chain::Icp, "ryjl3-tyaaa-aaaaa-aaaba-cai".into())],
+        }],
+    };
+    let a = guard.answer_in(request, &ctx).expect("an answer");
+    let span = |slot: &str| {
+        a.spans
+            .iter()
+            .find(|(s, _)| s == slot)
+            .map(|(_, (x, y))| request.chars().skip(*x).take(y - x).collect::<String>())
+    };
+    assert!(!a.abstain && a.class == "one_transfer", "{a:?}");
+    assert_eq!(span("to").as_deref(), Some("Uncle Femi"));
+    assert_eq!(span("from").as_deref(), Some("BTC Savings"));
+    assert_eq!(span("asset").as_deref(), Some("ICP"));
 }

@@ -7,7 +7,7 @@
 //! The guard only adds flags for a person to read: nothing here approves, rejects or changes an action, and "not
 //! checked" is never shown as OK.
 //!
-//! The model is one file, `guard.bin` (44 MB, candid-profile `guard/canister/export.py` from the round-9 release).
+//! The model is one file, `guard.bin` (44 MB, candid-profile `guard/canister/export.py` from the round-11 release).
 //! Owners write it into the guard's stable memory in chunks; `load` reads it into the heap only when its SHA-256 is
 //! `FILE_SHA256`, which this code pins, so changing the model takes a release. `post_upgrade` loads it again.
 //! `check` is a query and refuses replicated execution, so it is free and never charges the wallet.
@@ -21,11 +21,12 @@ use serde_bytes::ByteBuf;
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 
-/// guard.bin of the round-9 release: its length and SHA-256.
-pub const FILE_BYTES: u64 = 44_359_636;
+/// guard.bin of the round-11 release (candid-profile `release-round11`, weights 14a5aec3…0043): its length and
+/// SHA-256. Round 9's file (44,359,636 bytes, e9ebd2b0…) is refused from this release on.
+pub const FILE_BYTES: u64 = 44_359_656;
 pub const FILE_SHA256: [u8; 32] = [
-    0xe9, 0xeb, 0xd2, 0xb0, 0x61, 0x1e, 0x61, 0x72, 0xde, 0x3c, 0x64, 0xb7, 0x05, 0x32, 0x65, 0x29,
-    0xc5, 0xef, 0xcb, 0xf0, 0x19, 0xfa, 0x2d, 0x1e, 0x73, 0xaa, 0xbb, 0x0c, 0x43, 0x11, 0x58, 0xb7,
+    0xa8, 0xc0, 0x8d, 0x84, 0x12, 0x91, 0x5c, 0x46, 0xec, 0x02, 0x66, 0x28, 0xff, 0x49, 0xd5, 0x0e,
+    0xcd, 0x01, 0x2b, 0xc0, 0xac, 0xcd, 0x24, 0xfc, 0xa7, 0xf8, 0x26, 0x90, 0xf3, 0x1e, 0x9e, 0xc2,
 ];
 /// The largest chunk `upload` takes, under the IC's 2 MiB ingress limit.
 pub const MAX_CHUNK: usize = 1_900_000;
@@ -208,15 +209,13 @@ pub fn check(id: ActionId) -> Result<GuardReport, WalletError> {
         let g = g
             .as_ref()
             .ok_or_else(|| WalletError::NotFound("the guard model is not loaded".to_string()))?;
-        // The wallet's own account labels are swapped before the model reads (candid-profile D-045), so a label such
-        // as "BTC Savings" reads as a label, not as a second asset; the comparator resolves it from the owner's words.
-        // Contact names are not swapped: the model was trained on person names as names it leaves unresolved, and
-        // decision 0015 swaps them only if the re-scored guard benchmark shows the false flags do not rise.
+        // The model reads the wallet's names as the release was trained to (`guard::Reading`): round 11 reads each
+        // use of an account's label or a contact's name as one piece (candid-profile D-045, SELECTION.md round 11),
+        // so "my BTC Savings" is a label, not a second asset, and "Uncle Femi" is a payee. What a name means is still
+        // the comparator's to resolve, from the owner's words, against these same accounts and contacts.
         let ctx = context();
-        let names: Vec<String> = ctx.accounts.iter().map(|a| a.label.clone()).collect();
-        let symbols: Vec<String> = ctx.tokens.iter().map(|t| t.symbol.clone()).collect();
         let answer = g
-            .answer_named(&request, &names, &symbols)
+            .answer_in(&request, &ctx)
             .map_err(WalletError::InvalidArgument)?;
         let proposal = ::guard::Proposal {
             from: t.from,
