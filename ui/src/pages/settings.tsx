@@ -13,6 +13,7 @@ import { LOW_CYCLES } from "../logic/tokens.ts"
 import { CheckList } from "../parts/checks.tsx"
 import { Contacts } from "../parts/contacts.tsx"
 import { CopyButton } from "../parts/copy.tsx"
+import { GuardModel } from "../parts/guard-model.tsx"
 import { KeyIcon, LayersIcon, PeopleIcon, ShieldIcon } from "../parts/icons.tsx"
 import { AsMember } from "../parts/member.tsx"
 import { useNowNs } from "../parts/now.ts"
@@ -23,8 +24,9 @@ import { useRun } from "../parts/sign-in.tsx"
 
 /**
  * The settings page: how the wallet is set up and what protects it, in one
- * place. Its members, a security checkup with the approval policy, what the
- * IC says the wallet runs and who controls it, and your session.
+ * place. Its members and contacts, the guard's model, a security checkup with
+ * the approval policy, what the IC says the wallet runs and who controls it,
+ * and your session.
  */
 export function Settings({ wallet, local }: { wallet: Principal; local: boolean }) {
   return (
@@ -40,6 +42,7 @@ export function Settings({ wallet, local }: { wallet: Principal; local: boolean 
       <nav className="section-nav" aria-label="Settings">
         <a href="#members">Members</a>
         <a href="#contacts">Contacts</a>
+        <a href="#guard">Guard</a>
         <a href="#security">Security</a>
         <a href="#wallet">Wallet</a>
         <a href="#session">Session</a>
@@ -116,6 +119,7 @@ function Sections({ wallet: id, me, local }: { wallet: Principal; me: Member; lo
       </section>
 
       <Contacts wallet={id} me={me} />
+      <GuardModel wallet={id} me={me} />
 
       <section id="security" className="card">
         <div className="card-head">
