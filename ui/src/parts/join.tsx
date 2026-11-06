@@ -20,7 +20,7 @@ export function JoinRequest({ wallet: id }: { wallet: Principal }) {
     return (
       <section className="card empty">
         <h2>Your request to join</h2>
-        <p>An owner approves it on the wallet&apos;s Approvals page, where it shows the code</p>
+        <p>An owner approves it on the wallet&apos;s start page, where it shows the code</p>
         <p className="code">{joinCode(join.data.proposed_by)}</p>
         <p>
           Check with them that it is this code, so they approve this device and no other. The

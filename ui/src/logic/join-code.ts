@@ -2,7 +2,7 @@ import { sha256 } from "@noble/hashes/sha2.js"
 
 /**
  * The code a join request shows on the device that asks and on the owner's
- * Approvals page: eight digits from the SHA-256 of the asking principal's
+ * start page: eight digits from the SHA-256 of the asking principal's
  * text. The owner approves the request whose code the new device shows, so a
  * request someone else sent at the same time is not approved by mistake.
  */

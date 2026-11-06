@@ -241,7 +241,7 @@ export function Contacts({ wallet: id, me }: { wallet: Principal; me: Member }) 
           })}
           <p className="quiet small">
             Copy each address from the person, and check every character: a look-alike address is
-            how funds are stolen. The Approvals page shows the old and the new address side by side.
+            how funds are stolen. The start page shows the old and the new address side by side.
           </p>
           <div className="buttons">
             <button

@@ -3,7 +3,7 @@ import { kindText, transferAsset } from "./tokens.ts"
 
 // The owners' contacts (decision 0015): a name and at most one address per
 // kind of account. Adding one or changing an address waits out the
-// SetContact rule's timelock, so the Approvals page shows exactly what
+// SetContact rule's timelock, so the start page shows exactly what
 // changes, and warns when an address looks like one the owners already pay.
 
 /**

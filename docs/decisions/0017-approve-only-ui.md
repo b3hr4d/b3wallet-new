@@ -53,7 +53,7 @@ What changes, and what checks it:
   way to settings and who is signed in. The open actions moved from the
   approvals page into `parts/approve.tsx`, unchanged. The code only the
   dropped pages used is gone. That is the inbox's memory of what you saw,
-  the rail and their styles. `app.js` went from 592,882 to 559,341 bytes
+  the rail and their styles. `app.js` went from 592,882 to 559,339 bytes
   and `app.css` from 41,721 to 28,350.
 - `canisters/wallet/src/http.rs` serves the start page at `/`,
   `/index.html` and `/approvals`, and settings, members and the claim. Any

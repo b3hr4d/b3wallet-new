@@ -490,7 +490,7 @@ function AddMember({
 
 /**
  * A change just proposed: where it stands, and the button that runs it once
- * the policy lets it, as the send page does for a transfer.
+ * the policy lets it.
  */
 function Proposed({
   wallet: id,
