@@ -130,10 +130,8 @@ fn kind_chain(kind: AccountKind) -> ::guard::Chain {
     }
 }
 
-/// The wallet as the comparator reads it: the listed accounts, with their labels and addresses, and the owners'
-/// contacts (decision 0015).
-// shortcut: no tokens, since the wallet keeps no ICRC-1 ledger's symbol or decimals; an ICRC-1 transfer's asset
-// and amount are then not checked. Upgrade by storing them when a ledger is tracked.
+/// The wallet as the comparator reads it: the listed accounts, with their labels and addresses, the tracked
+/// ICRC-1 tokens, and the owners' contacts (decision 0015).
 fn context() -> ::guard::Context {
     let wallet = ic_cdk::api::canister_self();
     let accounts = storage::accounts()
@@ -162,9 +160,42 @@ fn context() -> ::guard::Context {
         .collect();
     ::guard::Context {
         accounts,
-        tokens: Vec::new(),
+        tokens: tokens(&storage::tokens()),
         contacts,
     }
+}
+
+/// The asset words the comparator knows without the wallet (`ASSET_ALIASES` in the guard crate's comparator).
+const ASSET_WORDS: [&str; 6] = ["icp", "btc", "bitcoin", "eth", "ether", "ethereum"];
+
+/// The tokens the comparator reads an ICRC-1 transfer's asset and amount by. A token whose symbol is one of the
+/// fixed asset words, or one another tracked ledger shares, is left out, so a ledger that calls itself "ICP" never
+/// reads as the ICP the owner named: its transfers' asset and amount are then not checked, or differ.
+fn tokens(stored: &[storage::StoredToken]) -> Vec<::guard::Token> {
+    let key = |symbol: &str| {
+        symbol
+            .to_lowercase()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    stored
+        .iter()
+        .filter(|token| {
+            let word = key(&token.symbol);
+            !ASSET_WORDS.contains(&word.as_str())
+                && stored
+                    .iter()
+                    .filter(|other| key(&other.symbol) == word)
+                    .count()
+                    == 1
+        })
+        .map(|token| ::guard::Token {
+            ledger: token.ledger.to_text(),
+            symbol: token.symbol.clone(),
+            decimals: u32::from(token.decimals),
+        })
+        .collect()
 }
 
 fn text(name: &str, text: &str, flags: ::guard::Flags) -> GuardText {
@@ -271,4 +302,42 @@ pub fn check(id: ActionId) -> Result<GuardReport, WalletError> {
             instructions: ic_cdk::api::performance_counter(0),
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candid::Principal;
+
+    fn token(id: u8, symbol: &str) -> storage::StoredToken {
+        storage::StoredToken {
+            ledger: Principal::from_slice(&[id]),
+            symbol: symbol.to_string(),
+            decimals: 8,
+        }
+    }
+
+    fn symbols(stored: &[storage::StoredToken]) -> Vec<String> {
+        tokens(stored).into_iter().map(|t| t.symbol).collect()
+    }
+
+    #[test]
+    fn the_guard_reads_each_tracked_tokens_symbol_and_decimals() {
+        let read = tokens(&[token(1, "TESTICP")]);
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].ledger, Principal::from_slice(&[1]).to_text());
+        assert_eq!((read[0].symbol.as_str(), read[0].decimals), ("TESTICP", 8));
+    }
+
+    #[test]
+    fn a_token_named_like_another_asset_or_token_is_left_out() {
+        assert_eq!(
+            symbols(&[token(1, "ICP"), token(2, " Bitcoin "), token(3, "ckBTC")]),
+            ["ckBTC"]
+        );
+        assert_eq!(
+            symbols(&[token(1, "USDC"), token(2, "usdc"), token(3, "TESTICP")]),
+            ["TESTICP"]
+        );
+    }
 }

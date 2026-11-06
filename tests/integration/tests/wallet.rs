@@ -2150,7 +2150,11 @@ fn owners_track_icrc_ledgers_that_answer_as_one() {
     assert_eq!(reject.reject_message, NOT_AN_OWNER);
 
     track(&pic, wallet, owner, "track_asset", tkn.clone()).unwrap();
-    assert!(track(&pic, wallet, owner, "track_asset", tkn.clone()).is_err());
+    // Tracking it again only reads its symbol and decimals again.
+    assert_eq!(
+        track(&pic, wallet, owner, "track_asset", tkn.clone()),
+        Ok(vec![Chain::Icp, Chain::Evm(ETHEREUM), tkn.clone()])
+    );
     upgrade(&pic, wallet, &WalletArg::Upgrade(None)).unwrap();
     assert_eq!(
         assets(&pic, wallet, viewer),
@@ -4902,6 +4906,68 @@ fn the_guard_reads_the_wallets_own_account_names() {
             .iter()
             .any(|f| f.field == "to" && f.verdict == wallet::GuardVerdict::Differs)
     );
+}
+
+/// The guard checks an ICRC-1 transfer's amount and token by the symbol and decimals the wallet read from the ledger
+/// when it was tracked. The words are Behrad's own request from the first mainnet trial (2026-11-06), where the
+/// wallet gave the guard no tokens and only the recipient was checked. GUARD_BIN as above.
+#[test]
+fn the_guard_reads_a_tracked_tokens_symbol_and_decimals() {
+    let Ok(path) = std::env::var("GUARD_BIN") else {
+        eprintln!("skipped: GUARD_BIN names the guard file");
+        return;
+    };
+    let Ledgers {
+        pic, wallet, owner, ..
+    } = wallet_with_ledgers();
+    let subnet = pic.get_subnet(wallet).unwrap();
+    let ledger = pic.create_canister_on_subnet(None, None, subnet);
+    install_ledger(
+        &pic,
+        ledger,
+        "TESTICP",
+        TOKEN_FEE,
+        vec![(wallet_account(wallet, 0), 10 * E8S)],
+    );
+    track(&pic, wallet, owner, "track_asset", Chain::Icrc(ledger)).unwrap();
+    load_guard(&pic, wallet, owner, &std::fs::read(&path).unwrap());
+    let savings = add_account(
+        &pic,
+        wallet,
+        owner,
+        AccountKind::InternetComputer,
+        "Savings",
+    )
+    .unwrap();
+    let agent = user(30);
+    run_at_once(
+        &pic,
+        wallet,
+        owner,
+        add_member_action_labelled(agent, Role::Proposer, "Claude"),
+    );
+    let words = "Send 5 TESTICP to Savings";
+    let request = ask(&pic, wallet, owner, words).unwrap().unwrap();
+    let action = Action::Transfer(TransferRequest {
+        from: 1,
+        asset: Some(Chain::Icrc(ledger)),
+        to: savings.address,
+        amount: (5 * E8S).into(),
+        fee: None,
+        memo: None,
+    });
+    let proposed = propose_for(&pic, wallet, agent, request.id, action).unwrap();
+    let report = guard_check(&pic, wallet, owner, proposed.id, false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(report.overall, wallet::GuardOverall::Matches, "{report:?}");
+    let same: Vec<&str> = report
+        .fields
+        .iter()
+        .filter(|f| f.verdict == wallet::GuardVerdict::Same)
+        .map(|f| f.field.as_str())
+        .collect();
+    assert_eq!(same, ["amount", "asset", "to"]);
 }
 
 /// Round 11 reads a saved contact's name as one piece (candid-profile SELECTION.md round 11): "Pay Uncle Femi"

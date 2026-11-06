@@ -446,15 +446,29 @@ fn assets() -> Result<Vec<Chain>, WalletError> {
 
 /// Tracks an ICRC-1 ledger, once it answers as one, or an EVM chain the
 /// wallet's network holds. Tracking moves nothing, so it needs no approval.
+/// A ledger's symbol and decimals are kept for the guard; tracking a ledger
+/// that is already tracked reads them again.
 #[ic_cdk::update(guard = "access::owner")]
 async fn track_asset(asset: Chain) -> Result<Vec<Chain>, WalletError> {
     let caller = ic_cdk::api::msg_caller();
     check_not_installing(ic_cdk::api::time())?;
-    assets::check_track(&asset, &storage::tracked(), storage::bitcoin_network())?;
+    // Tracking a ledger again reads its symbol and decimals again, such as one tracked by a release before the
+    // wallet kept them.
+    let again = |tracked: &[Chain]| matches!(asset, Chain::Icrc(_)) && tracked.contains(&asset);
+    if !again(&storage::tracked()) {
+        assets::check_track(&asset, &storage::tracked(), storage::bitcoin_network())?;
+    }
+    let mut token = None;
     if let Some(ledger) = assets::ledger(&asset) {
         icrc::check_ledger(ledger)
             .await
             .map_err(WalletError::ChainError)?;
+        let (symbol, decimals) = icrc::token(ledger).await.map_err(WalletError::ChainError)?;
+        token = Some(storage::StoredToken {
+            ledger,
+            symbol,
+            decimals,
+        });
         // Other calls ran meanwhile.
         if storage::member(caller).map(|member| member.role) != Some(Role::Owner) {
             return Err(WalletError::Forbidden(
@@ -463,9 +477,14 @@ async fn track_asset(asset: Chain) -> Result<Vec<Chain>, WalletError> {
         }
     }
     let mut tracked = storage::tracked();
-    assets::check_track(&asset, &tracked, storage::bitcoin_network())?;
-    tracked.push(asset.clone());
-    storage::set_tracked(tracked.clone());
+    if !again(&tracked) {
+        assets::check_track(&asset, &tracked, storage::bitcoin_network())?;
+        tracked.push(asset.clone());
+        storage::set_tracked(tracked.clone());
+    }
+    if let Some(token) = token {
+        storage::set_token(token);
+    }
     audit(caller, AuditEvent::AssetTracked(asset), ic_cdk::api::time());
     Ok(tracked)
 }
