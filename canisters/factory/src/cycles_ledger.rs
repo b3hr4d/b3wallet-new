@@ -20,16 +20,25 @@ pub fn id() -> Principal {
 
 const WHO: &str = "the cycles ledger";
 
-/// The cycles ledger fills in a field left out: no subnet is chosen, and
-/// the other settings are the IC's defaults.
+/// The cycles ledger fills in a field left out: the other settings are the
+/// IC's defaults.
 #[derive(CandidType)]
 struct CanisterSettings {
     controllers: Option<Vec<Principal>>,
 }
 
+/// The cycles minting canister's `SubnetSelection`, the one arm the factory
+/// sends.
+#[derive(CandidType)]
+enum SubnetSelection {
+    Subnet { subnet: Principal },
+}
+
 #[derive(CandidType)]
 struct CmcCreateCanisterArgs {
     settings: Option<CanisterSettings>,
+    /// None: the cycles minting canister chooses one of its default subnets.
+    subnet_selection: Option<SubnetSelection>,
 }
 
 #[derive(CandidType)]
@@ -88,9 +97,14 @@ enum CreateCanisterFromError {
 }
 
 /// Creates a canister controlled by the factory alone, with `cycles` out of
-/// `from`. The ledger also takes its fee from `from`, and the allowance must
-/// cover both.
-pub async fn create_canister_from(from: Account, cycles: u128) -> Result<Principal, FactoryError> {
+/// `from`, on `subnet` or, for None, a subnet the cycles minting canister
+/// chooses. The ledger also takes its fee from `from`, and the allowance
+/// must cover both.
+pub async fn create_canister_from(
+    from: Account,
+    cycles: u128,
+    subnet: Option<Principal>,
+) -> Result<Principal, FactoryError> {
     let args = CreateCanisterFromArgs {
         from,
         spender_subaccount: None,
@@ -100,6 +114,7 @@ pub async fn create_canister_from(from: Account, cycles: u128) -> Result<Princip
             settings: Some(CanisterSettings {
                 controllers: Some(vec![ic_cdk::api::canister_self()]),
             }),
+            subnet_selection: subnet.map(|subnet| SubnetSelection::Subnet { subnet }),
         }),
     };
     let result: Result<CreateCanisterSuccess, CreateCanisterFromError> =

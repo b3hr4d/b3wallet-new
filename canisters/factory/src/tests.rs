@@ -38,6 +38,7 @@ fn args() -> CreateWalletArgs {
         version: Some("1.0.0".to_string()),
         cycles: Nat::from(MIN_CYCLES),
         from_subaccount: Some(ByteBuf::from(vec![0; 32])),
+        subnet: None,
     }
 }
 

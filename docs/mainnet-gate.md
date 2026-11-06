@@ -37,6 +37,22 @@ releases, and the gate's wallet never installs a real one.
 ./scripts/mainnet-gate.sh start
 ```
 
+Or, to run on the SEV-SNP subnet `re2t4`, the one confidential subnet open
+to anyone, with the guard loaded:
+
+```sh
+./scripts/mainnet-gate.sh start \
+  --subnet re2t4-faa75-v3vhk-kdmdr-uyrkl-aik2l-ixd6u-p3fyr-zlfkc-6c5af-zae \
+  --guard ../candid-profile/packages/profile-router/guard/.cache/guard.bin
+```
+
+`--subnet` creates the channel and the factory there, and has the factory
+create the wallet there (`create_wallet`'s `subnet`); the script checks
+where the wallet landed. `--guard` takes only the file the wallet pins
+([decision 0012](decisions/0012-guard-in-wallet.md)), checked before
+anything is spent; after the claim it uploads it and loads it, and the
+second half checks that each upgrade loaded it again.
+
 It builds the wallet, the release channel and the factory, then:
 
 1. creates and installs the release channel, with your identity as its
@@ -49,6 +65,7 @@ It builds the wallet, the release channel and the factory, then:
    what the IC tells anyone;
 6. claims the wallet with your identity, and checks that every page answers
    through the HTTP gateway, which verifies each page's certificate;
+   with `--guard`, uploads the guard file and loads it;
 7. publishes `gate-2`, tested from `gate-1`, and `gate-3`, tested from
    `gate-2`;
 8. proposes both upgrades.
@@ -80,23 +97,36 @@ between the big costs show those. The row "Wait for the timelock" is the week
 of holding memory, charged when each canister next ran.
 
 A rehearsal on icp-cli's local network, whose application subnet charges as a
-13-node subnet on mainnet does, recorded:
+13-node subnet on mainnet does, recorded on 2026-11-05 (main at `df725dc`):
 
 | Step | Took | You | Channel | Factory | Wallet |
 | --- | --- | --- | --- | --- | --- |
 | Create and install the release channel | 2s | -1.000T | +495.142B | | |
-| Publish gate-1 (5 chunks) | 6s | 0 | -9.680B | | |
-| Create and install the factory | 2s | -1.000T | -1.944M | +493.727B | |
+| Publish gate-1 (7 chunks) | 5s | 0 | -14.579B | | |
+| Create and install the factory | 2s | -1.000T | -1.944M | +493.700B | |
 | Let the factory take the wallet's cycles | 0s | -100.000M | -1.944M | -1.944M | |
-| Create the wallet with gate-1 | 6s | -5.000T | -319.233M | -9.525B | +4.489T |
-| Claim the wallet | 0s | 0 | -2.345M | -1.944M | -12.853M |
-| Publish gate-2 and gate-3 (5 chunks each) | 9s | 0 | -19.823B | -2.223M | -0.316M |
-| Propose both upgrades | 0s | 0 | -1.944M | -1.944M | -29.435M |
-| Wait for the timelock | 7d 2h | 0 | -16.580B | -10.659B | -17.936B |
-| Upgrade to gate-2 | 8s | 0 | -340.990M | -1.944M | -20.173B |
-| Upgrade to gate-3 | 5s | 0 | -352.852M | -2.223M | -20.172B |
+| Create the wallet with gate-1 | 7s | -5.000T | -492.853M | -14.277B | +4.485T |
+| Claim the wallet | 0s | 0 | -2.334M | -1.944M | -13.437M |
+| Publish gate-2 and gate-3 (7 chunks each) | 11s | 0 | -29.805B | -2.240M | -0.456M |
+| Propose both upgrades | 1s | 0 | -1.944M | -1.944M | -35.394M |
+| Wait for the timelock | 7d 2h | 0 | -18.300B | -10.661B | -24.539B |
+| Upgrade to gate-2 | 7s | 0 | -497.007M | -2.188M | -29.580B |
+| Upgrade to gate-3 | 7s | 0 | -529.312M | -2.153M | -29.578B |
 
-The mainnet numbers replace these once the gate has run.
+With `--subnet` (the local application subnet) and `--guard`, on 2026-11-06,
+the rows that differ:
+
+| Step | Took | You | Channel | Factory | Wallet |
+| --- | --- | --- | --- | --- | --- |
+| Upload and load the guard (24 chunks) | 9s | 0 | -1.944M | -2.153M | -95.582B |
+| Wait for the timelock | 7d 2h | 0 | -18.300B | -10.662B | -50.941B |
+| Upgrade to gate-2 | 7s | 0 | -496.537M | -1.944M | -35.815B |
+| Upgrade to gate-3 | 7s | 0 | -529.469M | -2.275M | -35.919B |
+
+Holding the guard's 44 MB in stable memory and again in the heap doubles
+what the week of holding memory costs the wallet, and each upgrade reads the
+file again for about 6B more. The mainnet numbers replace these once the gate
+has run.
 
 ## What an upgrade needs
 
@@ -104,7 +134,8 @@ The IC holds back what an install's instruction limit would cost, about 0.3T
 cycles on a 13-node subnet, and refuses an install the canister cannot pay for
 above what it keeps to stay running (its freezing threshold: 30 days of
 holding its memory). The upgrade, staging included, then costs the wallet
-about 20B, and the rest comes back. A wallet that cannot spend 0.35T, plus 4B
+about 30B for a release of 7 chunks, 36B with the guard loaded, and the rest
+comes back. A wallet that cannot spend 0.35T, plus 4B
 a chunk to stage the release, refuses to execute the upgrade with
 `InsufficientCycles`, which says what it can spend and what it needs; the
 action stays ready for after a top-up:
