@@ -111,6 +111,7 @@ design, in [docs/design.md](docs/design.md).
 | `tests/integration/` | PocketIC tests of the real wallet, release channel and factory Wasm |
 | `tests/caller/` | A canister the PocketIC tests call through, to call as a canister |
 | `scripts/try-local.sh`, `icp.yaml` | A local wallet to try, with icp-cli and a regtest Bitcoin node |
+| `scripts/try-mainnet.sh` | A wallet to try on mainnet, on a subnet you choose, without the factory |
 | `scripts/mainnet-gate.sh`, `docs/mainnet-gate.md` | The mainnet gate: deploy, upgrade a wallet two releases up, record the cycle costs |
 
 ## Development
@@ -201,6 +202,24 @@ Bitcoin account; without it the wallet gets only the ICP one.
 Either way it also prints how to add the MCP server in `mcp/` to Claude Code
 for the new wallet, so Claude can join it as a proposer, read it and propose
 transfers that wait for your approval ([mcp/README.md](mcp/README.md)).
+
+## Trying it on mainnet
+
+`scripts/try-mainnet.sh install` creates a canister with 3T cycles from your
+icp-cli identity's cycles ledger account, on the subnet `--subnet` names if
+any, such as the SEV-SNP subnet
+`re2t4-faa75-v3vhk-kdmdr-uyrkl-aik2l-ixd6u-p3fyr-zlfkc-6c5af-zae`, installs
+the wallet of this checkout without the factory or a release channel, and
+prints its claim link, to claim it with Internet Identity. Settings > Guard
+then loads the guard file the wallet pins. The wallet stays controlled by your
+icp-cli identity, unlike one from the factory: `upgrade` installs this
+checkout over it, and `icp canister stop` and `delete` return its cycles. It
+holds real ICP and Bitcoin, so keep to small amounts.
+
+```sh
+./scripts/try-mainnet.sh install --subnet re2t4-faa75-v3vhk-kdmdr-uyrkl-aik2l-ixd6u-p3fyr-zlfkc-6c5af-zae
+./scripts/try-mainnet.sh upgrade
+```
 
 ## Publishing a release
 

@@ -21,9 +21,10 @@
 #                     subnet, such as the SEV-SNP subnet
 #                     re2t4-faa75-v3vhk-kdmdr-uyrkl-aik2l-ixd6u-p3fyr-zlfkc-6c5af-zae,
 #                     and checks where the wallet landed
-#   --guard FILE      uploads FILE, the guard file the wallet pins (guard.bin
-#                     of the round-9 release), to the wallet after the claim,
-#                     and loads it, so both upgrades load it again
+#   --guard FILE      uploads FILE, the guard file the wallet pins
+#                     (canisters/wallet/src/guard.rs; round 11's since #40),
+#                     to the wallet after the claim, and loads it, so both
+#                     upgrades load it again
 #
 # The releases are the wallet's own Wasm, stamped with a public metadata
 # section, b3wallet:release, that names them, and signed by three keys made
@@ -76,15 +77,19 @@ need node "https://nodejs.org"
 need cargo "https://rustup.rs"
 need curl "your system's package manager"
 # secp256k1's C code, under the bitcoin crate, needs a clang that compiles to
-# WebAssembly. Apple's cannot, so on a Mac the build uses Homebrew's LLVM.
+# WebAssembly and an ar that archives what it compiles. Apple's ar writes an
+# empty archive of Wasm objects, even where Apple's clang compiles them, so on
+# a Mac the build uses Homebrew's LLVM for both, as scripts/try-local.sh does.
 compiles_wasm() { echo 'int x;' | "$1" --target=wasm32-unknown-unknown -x c -c - -o /dev/null 2>/dev/null; }
-if ! compiles_wasm "${CC_wasm32_unknown_unknown:-clang}"; then
+if [ -z "${CC_wasm32_unknown_unknown:-}" ] && { [ "$(uname)" = Darwin ] || ! compiles_wasm clang; }; then
   llvm=$(brew --prefix llvm 2>/dev/null)/bin || llvm=
-  if [ -z "${CC_wasm32_unknown_unknown:-}" ] && [ -n "$llvm" ] && compiles_wasm "$llvm/clang"; then
+  if [ -n "$llvm" ] && compiles_wasm "$llvm/clang"; then
     export CC_wasm32_unknown_unknown=$llvm/clang AR_wasm32_unknown_unknown=$llvm/llvm-ar
   else
-    missing+=("  a clang that compiles to WebAssembly (Apple's cannot): brew install llvm")
+    missing+=("  a clang and an ar that build WebAssembly (Apple's cannot): brew install llvm")
   fi
+elif ! compiles_wasm "${CC_wasm32_unknown_unknown:-clang}"; then
+  missing+=("  a clang that compiles to WebAssembly: brew install llvm")
 fi
 if [ ${#missing[@]} -gt 0 ]; then
   echo "Install these first:" >&2

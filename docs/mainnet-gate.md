@@ -43,7 +43,7 @@ to anyone, with the guard loaded:
 ```sh
 ./scripts/mainnet-gate.sh start \
   --subnet re2t4-faa75-v3vhk-kdmdr-uyrkl-aik2l-ixd6u-p3fyr-zlfkc-6c5af-zae \
-  --guard ../candid-profile/packages/profile-router/guard/.cache/guard.bin
+  --guard ../candid-profile/packages/profile-router/guard/.cache/guard-round11.bin
 ```
 
 `--subnet` creates the channel and the factory there, and has the factory
@@ -113,8 +113,9 @@ A rehearsal on icp-cli's local network, whose application subnet charges as a
 | Upgrade to gate-2 | 7s | 0 | -497.007M | -2.188M | -29.580B |
 | Upgrade to gate-3 | 7s | 0 | -529.312M | -2.153M | -29.578B |
 
-With `--subnet` (the local application subnet) and `--guard`, on 2026-11-06,
-the rows that differ:
+With `--subnet` (the local application subnet) and `--guard`, on 2026-11-06
+with round 9's file (round 11's, pinned since, is 20 bytes longer), the rows
+that differ:
 
 | Step | Took | You | Channel | Factory | Wallet |
 | --- | --- | --- | --- | --- | --- |
