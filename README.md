@@ -210,7 +210,10 @@ icp-cli identity's cycles ledger account, on the subnet `--subnet` names if
 any, such as the SEV-SNP subnet
 `re2t4-faa75-v3vhk-kdmdr-uyrkl-aik2l-ixd6u-p3fyr-zlfkc-6c5af-zae`, installs
 the wallet of this checkout without the factory or a release channel, and
-prints its claim link, to claim it with Internet Identity. Settings > Guard
+prints its claim link, to claim it with Internet Identity (`link` prints it
+again). The IC's public API can take a few minutes to list a new canister, so
+if it still has not after five minutes, the script prints the link anyway and
+the command that checks the subnet later. Settings > Guard
 then loads the guard file the wallet pins. The wallet stays controlled by your
 icp-cli identity, unlike one from the factory: `upgrade` installs this
 checkout over it, and `icp canister stop` and `delete` return its cycles. It
@@ -218,6 +221,7 @@ holds real ICP and Bitcoin, so keep to small amounts.
 
 ```sh
 ./scripts/try-mainnet.sh install --subnet re2t4-faa75-v3vhk-kdmdr-uyrkl-aik2l-ixd6u-p3fyr-zlfkc-6c5af-zae
+./scripts/try-mainnet.sh link
 ./scripts/try-mainnet.sh upgrade
 ```
 
