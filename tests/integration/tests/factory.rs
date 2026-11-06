@@ -167,16 +167,23 @@ fn factory_config(channel: Principal, seeds: [u8; 3]) -> FactoryConfig {
 /// yet, and a factory that pins the same keys. The creator holds 100T on the
 /// cycles ledger.
 fn net() -> Net {
+    net_with_app_subnets(1)
+}
+
+/// `net()` with `count` application subnets; the channel and the factory are
+/// on the first.
+fn net_with_app_subnets(count: usize) -> Net {
     let feature = Some(IcpFeaturesConfig::DefaultConfig);
-    let pic = PocketIcBuilder::new()
-        .with_icp_features(IcpFeatures {
-            registry: feature.clone(),
-            cycles_minting: feature.clone(),
-            cycles_token: feature,
-            ..Default::default()
-        })
-        .with_application_subnet()
-        .build();
+    let mut builder = PocketIcBuilder::new().with_icp_features(IcpFeatures {
+        registry: feature.clone(),
+        cycles_minting: feature.clone(),
+        cycles_token: feature,
+        ..Default::default()
+    });
+    for _ in 0..count {
+        builder = builder.with_application_subnet();
+    }
+    let pic = builder.build();
     let app = pic.topology().get_app_subnets()[0];
 
     let channel = pic.create_canister_on_subnet(None, None, app);
@@ -302,6 +309,7 @@ impl Net {
             version: version.map(str::to_string),
             cycles: Nat::from(cycles),
             from_subaccount: None,
+            subnet: None,
         }
     }
 
@@ -492,6 +500,51 @@ fn the_factory_creates_a_wallet_that_owns_itself_and_upgrades_itself() {
         .unwrap();
     assert_self_owned(&net, &older, &release);
     assert_ne!(latest.wallet, older.wallet);
+}
+
+#[test]
+fn the_factory_creates_a_wallet_on_the_subnet_asked_for() {
+    let net = net_with_app_subnets(2);
+    let release = net.publish("0.1.0", &wallet_wasm(), vec![], &[1, 2]);
+    let apps = net.pic.topology().get_app_subnets();
+    let other = apps[1];
+    assert_eq!(net.pic.get_subnet(net.factory), Some(apps[0]));
+
+    // Each wallet lands on the subnet asked for, whichever the cycles
+    // minting canister would have chosen.
+    net.approve(creator(), net.factory, 4 * (MIN_CYCLES + FEE));
+    let mut created = Vec::new();
+    for subnet in [other, apps[0], other] {
+        let asked = CreateWalletArgs {
+            subnet: Some(subnet),
+            ..net.args(None, MIN_CYCLES)
+        };
+        let wallet = net.create(net.factory, creator(), &asked).unwrap();
+        assert_eq!(net.pic.get_subnet(wallet.wallet), Some(subnet));
+        assert_self_owned(&net, &wallet, &release);
+        created.push(wallet.wallet);
+    }
+    let owner = user(7);
+    assert_eq!(net.claim(created[0], owner).unwrap().role, Role::Owner);
+
+    // A subnet the cycles minting canister does not know creates nothing,
+    // and the ledger refunds the cycles, keeping four of its fees (measured).
+    let before = net.balance(creator());
+    let unknown = Principal::self_authenticating([4; 32]);
+    let refused = net.create(
+        net.factory,
+        creator(),
+        &CreateWalletArgs {
+            subnet: Some(unknown),
+            ..net.args(None, MIN_CYCLES)
+        },
+    );
+    assert!(
+        matches!(&refused, Err(FactoryError::CreateFailed(reason)) if reason.contains("did not create")),
+        "{refused:?}"
+    );
+    let lost = before - net.balance(creator());
+    assert_eq!(lost, 4 * FEE, "the creator lost {lost}");
 }
 
 #[test]

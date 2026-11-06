@@ -265,7 +265,10 @@ icp deploy factory --args '(variant { Init = record {
 A creator pays with cycles from their account on the cycles ledger. They let
 the factory take the wallet's cycles, at least 5T, and the ledger's fee of
 100M, then call `create_wallet` with the public half of a fresh Ed25519 claim
-key and when the claim expires, at least an hour away:
+key and when the claim expires, at least an hour away. `subnet` names the
+subnet to create the wallet on, such as the SEV-SNP subnet
+`re2t4-faa75-v3vhk-kdmdr-uyrkl-aik2l-ixd6u-p3fyr-zlfkc-6c5af-zae`; null lets
+the cycles minting canister choose:
 
 ```sh
 openssl genpkey -algorithm ed25519 -out claim.pem
@@ -280,6 +283,7 @@ icp canister call factory create_wallet '(record {
   version = null;
   cycles = 3_000_000_000_000 : nat;
   from_subaccount = null;
+  subnet = null;
 })' --candid candid/factory.did
 ```
 

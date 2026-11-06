@@ -87,7 +87,7 @@ async fn create_wallet(args: CreateWalletArgs) -> Result<CreatedWallet, FactoryE
                 .expect("a validated subaccount is 32 bytes")
         }),
     };
-    let wallet = cycles_ledger::create_canister_from(from, cycles).await?;
+    let wallet = cycles_ledger::create_canister_from(from, cycles, args.subnet).await?;
     // Recorded in the message that learns of the canister, so no trap after
     // it leaves a canister the factory controls and does not know of; the
     // timer hands it over if this creation never does.

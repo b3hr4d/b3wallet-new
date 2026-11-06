@@ -33,6 +33,11 @@ type CreateWalletArgs = record {
   // the new wallet's balance, less the IC's fees to create and install it.
   cycles : nat;
   from_subaccount : opt blob;
+  // The subnet to create the wallet on, such as an SEV-SNP subnet. Null lets
+  // the cycles minting canister choose one of its default subnets. A subnet
+  // it does not let the caller use fails the creation, and the cycles
+  // ledger refunds what it took less its fees.
+  subnet : opt principal;
 };
 
 type CreatedWallet = record {

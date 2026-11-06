@@ -34,6 +34,11 @@ pub struct CreateWalletArgs {
     /// which approved the factory for them and the ledger's fee.
     pub cycles: Nat,
     pub from_subaccount: Option<ByteBuf>,
+    /// The subnet to create the wallet on. None lets the cycles minting
+    /// canister choose one of its default subnets; a subnet it does not
+    /// let the creator use fails the creation, and the ledger refunds the
+    /// cycles less its fees.
+    pub subnet: Option<Principal>,
 }
 
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]

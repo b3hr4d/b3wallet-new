@@ -15,6 +15,16 @@
 # about 7.1T in all; `icp cycles mint --cycles 7.1t -e ic` buys them with ICP.
 # With -e local the gate runs on the local network instead.
 #
+# start takes two options:
+#
+#   --subnet SUBNET   creates the channel, the factory and the wallet on that
+#                     subnet, such as the SEV-SNP subnet
+#                     re2t4-faa75-v3vhk-kdmdr-uyrkl-aik2l-ixd6u-p3fyr-zlfkc-6c5af-zae,
+#                     and checks where the wallet landed
+#   --guard FILE      uploads FILE, the guard file the wallet pins (guard.bin
+#                     of the round-9 release), to the wallet after the claim,
+#                     and loads it, so both upgrades load it again
+#
 # The releases are the wallet's own Wasm, stamped with a public metadata
 # section, b3wallet:release, that names them, and signed by three keys made
 # for the gate. The gate's channel, factory and wallet trust only those keys,
@@ -26,7 +36,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 usage() {
-  echo "usage: $0 start|finish [-e ENVIRONMENT]" >&2
+  echo "usage: $0 start [-e ENVIRONMENT] [--subnet SUBNET] [--guard FILE]" >&2
+  echo "       $0 finish [-e ENVIRONMENT]" >&2
   exit 2
 }
 half=${1:-}
@@ -34,10 +45,12 @@ case $half in
   start | finish) shift ;;
   *) usage ;;
 esac
-env=ic
+env=ic subnet= guard_file=
 while [ $# -gt 0 ]; do
   case $1 in
     -e) env=${2:-}; [ -n "$env" ] || usage; shift 2 ;;
+    --subnet) [ "$half" = start ] && [ -n "${2:-}" ] || usage; subnet=$2; shift 2 ;;
+    --guard) [ "$half" = start ] && [ -n "${2:-}" ] || usage; guard_file=$2; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -77,6 +90,19 @@ if [ ${#missing[@]} -gt 0 ]; then
   echo "Install these first:" >&2
   printf '%s\n' "${missing[@]}" >&2
   exit 1
+fi
+
+# The guard file must be the one the wallet pins, or guard_load refuses it
+# after the wallet paid to receive it.
+if [ -n "$guard_file" ]; then
+  pinned=$(grep -A3 'FILE_SHA256: \[u8; 32\]' canisters/wallet/src/guard.rs | grep -o '0x[0-9a-f][0-9a-f]' | tr -d '\n' | sed 's/0x//g')
+  have_hash=$(node -e '
+    console.log(require("crypto").createHash("sha256").update(require("fs").readFileSync(process.argv[1])).digest("hex"))
+  ' "$guard_file")
+  if [ "${#pinned}" != 64 ] || [ "$have_hash" != "$pinned" ]; then
+    echo "$guard_file has SHA-256 $have_hash; the wallet pins ${pinned:-nothing it could read}." >&2
+    exit 1
+  fi
 fi
 
 if [ "$env" = local ]; then
@@ -174,7 +200,7 @@ record() {
 
 save() {
   {
-    for name in me channel factory wallet hash_1 hash_2 hash_3 action_2 action_3 \
+    for name in me channel factory wallet subnet guard hash_1 hash_2 hash_3 action_2 action_3 \
       runs_after_ns expires_at_ns step_started before_you before_channel before_factory \
       before_wallet; do
       [ -z "${!name:-}" ] || echo "$name=${!name}"
@@ -309,6 +335,109 @@ check_pages() {
   done
 }
 
+# The subnet a canister runs on, as the IC's public API reports it on mainnet
+# and as the PocketIC behind icp-cli's local network does.
+subnet_of() {
+  if [ "$env" = local ]; then
+    local port
+    port=$(node -pe 'require("./.icp/cache/networks/local/descriptor.json")["pocketic-config-port"]')
+    node -e '
+      const zlib = require("zlib"), A = "abcdefghijklmnopqrstuvwxyz234567";
+      const bytes = (text) => {
+        let bits = 0, value = 0; const out = [];
+        for (const c of text.replace(/-/g, "")) {
+          value = (value << 5) | A.indexOf(c); bits += 5;
+          if (bits >= 8) { out.push((value >> (bits - 8)) & 255); bits -= 8; }
+        }
+        return Buffer.from(out.slice(4));
+      };
+      const text = (raw) => {
+        const crc = Buffer.alloc(4);
+        crc.writeUInt32BE(zlib.crc32(raw));
+        let bits = 0, value = 0, out = "";
+        for (const b of Buffer.concat([crc, raw])) {
+          value = (value << 8) | b; bits += 8;
+          while (bits >= 5) { out += A[(value >> (bits - 5)) & 31]; bits -= 5; }
+        }
+        if (bits) out += A[(value << (5 - bits)) & 31];
+        return out.match(/.{1,5}/g).join("-");
+      };
+      // PocketIC answers 409 while it is busy: ask again.
+      (async () => {
+        for (let tries = 0; tries < 60; tries++) {
+          const reply = await fetch(`http://127.0.0.1:${process.argv[2]}/instances/0/read/get_subnet`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ canister_id: bytes(process.argv[1]).toString("base64") }),
+          });
+          if (reply.ok) {
+            const answer = await reply.json();
+            console.log(answer?.subnet_id ? text(Buffer.from(answer.subnet_id, "base64")) : "");
+            return;
+          }
+          await new Promise((wake) => setTimeout(wake, 500));
+        }
+        console.log("");
+      })();
+    ' "$1" "$port"
+  else
+    curl -sSf "https://ic-api.internetcomputer.org/api/v3/canisters/$1" |
+      node -pe 'JSON.parse(require("fs").readFileSync(0, "utf8")).subnet_id ?? ""'
+  fi
+}
+
+# Uploads the guard file to the wallet in chunks under its 1,900,000-byte
+# limit, each a binary Candid record { offset : nat64; chunk : blob }, and
+# loads it.
+upload_guard() {
+  local dir=$state/guard-chunks chunk reply
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  node -e '
+    const fs = require("fs"), path = require("path");
+    const [file, dir] = process.argv.slice(1);
+    const bytes = fs.readFileSync(file), size = 1_900_000;
+    // Candid field ids, and unsigned LEB128.
+    const id = (name) => [...Buffer.from(name)].reduce((h, b) => (h * 223 + b) >>> 0, 0);
+    const leb = (n) => { const out = []; do { let b = n & 0x7f; n = Math.floor(n / 128); if (n) b |= 0x80; out.push(b); } while (n); return out; };
+    const fields = [[id("offset"), 0x78], [id("chunk"), 0]].sort((a, b) => a[0] - b[0]);
+    // Type 0: vec nat8 (0x6d 0x7b). Type 1: the record, its fields in id
+    // order; nat64 is 0x78.
+    const head = [0x44, 0x49, 0x44, 0x4c, 2, 0x6d, 0x7b, 0x6c, 2, ...fields.flatMap(([h, t]) => [...leb(h), t]), 1, 1];
+    for (let at = 0, n = 0; at < bytes.length; at += size, n++) {
+      const chunk = bytes.subarray(at, at + size);
+      const offset = Buffer.alloc(8);
+      offset.writeBigUInt64LE(BigInt(at));
+      const values = fields.map(([, t]) => (t === 0x78 ? offset : Buffer.concat([Buffer.from(leb(chunk.length)), chunk])));
+      fs.writeFileSync(path.join(dir, `chunk-${String(n).padStart(3, "0")}.bin`), Buffer.concat([Buffer.from(head), ...values]));
+    }
+  ' "$guard_file" "$dir"
+  for chunk in "$dir"/chunk-*.bin; do
+    reply=$(icp canister call "$wallet" guard_upload --args-file "$chunk" --args-format bin \
+      --candid candid/wallet.did "${net[@]}")
+    case $reply in
+      *"Ok ="*) ;;
+      *) echo "The wallet refused a chunk of the guard file:" >&2; echo "$reply" >&2; exit 1 ;;
+    esac
+  done
+  guard_chunks=$(ls "$dir" | wc -l | tr -d ' ')
+  rm -rf "$dir"
+  reply=$(icp canister call "$wallet" guard_load '()' --candid candid/wallet.did "${net[@]}")
+  case $reply in
+    *"loaded = true"*) ;;
+    *) echo "The wallet would not load the guard:" >&2; echo "$reply" >&2; exit 1 ;;
+  esac
+}
+
+# Checks that the wallet's guard is loaded, as an upgrade must leave it.
+check_guard() {
+  local status
+  status=$(icp canister call "$wallet" guard_status '()' --query --candid candid/wallet.did "${net[@]}")
+  case $status in
+    *"loaded = true"*) ;;
+    *) echo "The wallet's guard is not loaded:" >&2; echo "$status" >&2; exit 1 ;;
+  esac
+}
+
 print_costs() {
   echo
   cat "$costs"
@@ -360,7 +489,9 @@ EOF
   step_started=$(date +%s)
 
   echo "Creating the release channel"
-  channel=$(icp canister create --detached -q --cycles "$channel_cycles" "${net[@]}")
+  on_subnet=()
+  [ -z "$subnet" ] || on_subnet=(--subnet "$subnet")
+  channel=$(icp canister create --detached -q --cycles "$channel_cycles" "${on_subnet[@]}" "${net[@]}")
   logged icp canister install "$channel" --wasm "$target/release_channel.wasm" "${net[@]}" --args "(variant { Init = record {
     publishers = vec { principal \"$me\" };
     release_signers = vec { $signer_blobs };
@@ -373,7 +504,7 @@ EOF
   record "Publish ${versions[0]} ($chunks chunks)"
 
   echo "Creating the factory"
-  factory=$(icp canister create --detached -q --cycles "$factory_cycles" "${net[@]}")
+  factory=$(icp canister create --detached -q --cycles "$factory_cycles" "${on_subnet[@]}" "${net[@]}")
   logged icp canister install "$factory" --wasm "$target/factory.wasm" "${net[@]}" --args "(variant { Init = record {
     release_channel = principal \"$channel\";
     release_signers = vec { $signer_blobs };
@@ -395,6 +526,7 @@ EOF
     version = opt \"${versions[0]}\";
     cycles = $wallet_cycles : nat;
     from_subaccount = null;
+    subnet = $([ -n "$subnet" ] && echo "opt principal \"$subnet\"" || echo null);
   })" --candid candid/factory.did "${net[@]}")
   wallet=$(echo "$created" | sed -n 's/.*wallet = principal "\([^"]*\)".*/\1/p')
   if [ -z "$wallet" ]; then
@@ -404,6 +536,13 @@ EOF
   fi
   record "Create the wallet with ${versions[0]}"
   check_running 1
+  if [ -n "$subnet" ]; then
+    landed=$(subnet_of "$wallet")
+    if [ "$landed" != "$subnet" ]; then
+      echo "Wallet $wallet should run on subnet $subnet; it runs on ${landed:-a subnet the IC did not name}." >&2
+      exit 1
+    fi
+  fi
 
   echo "Claiming wallet $wallet"
   signature=$(ed25519 sign "$state/claim.pem" "claim:$wallet:$me")
@@ -411,6 +550,13 @@ EOF
     --candid candid/wallet.did "${net[@]}"
   record "Claim the wallet"
   check_pages
+
+  if [ -n "$guard_file" ]; then
+    echo "Uploading the guard and loading it"
+    upload_guard
+    guard=loaded
+    record "Upload and load the guard ($guard_chunks chunks)"
+  fi
 
   echo "Publishing ${versions[1]} and ${versions[2]}"
   publish 2
@@ -429,7 +575,7 @@ EOF
   print_costs
   cat <<DONE
 
-Wallet $wallet runs ${versions[0]}, is its own only controller, and is yours.
+Wallet $wallet runs ${versions[0]}${subnet:+ on subnet $subnet}${guard_file:+ with its guard loaded}, is its own only controller, and is yours.
 Its pages answer at $(page_of "$wallet")/.
 
 Its upgrades to ${versions[1]} and ${versions[2]}, actions $action_2 and $action_3, can run
@@ -460,6 +606,7 @@ for n in 2 3; do
   echo "Upgrading the wallet to ${versions[$n - 1]}"
   upgrade "$n"
   record "Upgrade to ${versions[$n - 1]}"
+  [ -z "${guard:-}" ] || check_guard
 done
 check_pages
 print_costs
