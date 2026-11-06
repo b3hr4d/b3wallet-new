@@ -85,6 +85,18 @@ pub struct Tracked {
     /// Whether a release that tracks EVM chains wrote the list; `None` from
     /// one before EVM accounts.
     pub evm: Option<bool>,
+    /// The tracked ICRC-1 ledgers' symbols and decimals, as each ledger
+    /// answered when it was tracked, for the guard to read amounts and token
+    /// words by; `None` from a release before it kept them.
+    pub tokens: Option<Vec<StoredToken>>,
+}
+
+/// An ICRC-1 ledger's `icrc1_symbol` and `icrc1_decimals`.
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct StoredToken {
+    pub ledger: Principal,
+    pub symbol: String,
+    pub decimals: u8,
 }
 
 /// An audit log entry as stored; its sequence number is its place in the log.
@@ -403,10 +415,32 @@ pub fn tracked() -> Vec<Chain> {
 }
 
 pub fn set_tracked(assets: Vec<Chain>) {
+    set_tracked_tokens(assets, tokens());
+}
+
+/// The symbols and decimals of the tracked ICRC-1 ledgers that have them.
+pub fn tokens() -> Vec<StoredToken> {
+    TRACKED
+        .with_borrow(|cell| cell.get().clone().and_then(|tracked| tracked.tokens))
+        .unwrap_or_default()
+}
+
+/// Keeps a tracked ledger's symbol and decimals, in place of any it had.
+pub fn set_token(token: StoredToken) {
+    let mut tokens = tokens();
+    tokens.retain(|kept| kept.ledger != token.ledger);
+    tokens.push(token);
+    set_tracked_tokens(tracked(), tokens);
+}
+
+/// Stores `assets`, and the tokens of the ledgers among them.
+fn set_tracked_tokens(assets: Vec<Chain>, mut tokens: Vec<StoredToken>) {
+    tokens.retain(|token| assets.contains(&Chain::Icrc(token.ledger)));
     TRACKED.with_borrow_mut(|cell| {
         cell.set(Some(Tracked {
             assets,
             evm: Some(true),
+            tokens: Some(tokens),
         }))
     });
 }
@@ -763,7 +797,9 @@ pub fn migrate(network: Option<BitcoinNetwork>) -> Result<(), String> {
             tracked.extend(migration.ledgers.iter().cloned());
             tracked
         }
-        Some(Tracked { mut assets, evm }) => {
+        Some(Tracked {
+            mut assets, evm, ..
+        }) => {
             let is_evm = |asset: &Chain| matches!(asset, Chain::Evm(_));
             let had_evm = assets.iter().any(is_evm);
             assets.retain(|asset| match asset {
@@ -976,6 +1012,39 @@ mod tests {
         let _: BrokenMember = from_candid(&stored_member().to_bytes());
     }
 
+    /// The assets stored before the wallet kept tokens still decode, with none, and tracking keeps a token only
+    /// while its ledger is tracked.
+    #[test]
+    fn tokens_are_kept_for_tracked_ledgers_only() {
+        #[derive(CandidType, Deserialize)]
+        struct EarlierTracked {
+            assets: Vec<Chain>,
+            evm: Option<bool>,
+        }
+
+        let ledger = Principal::from_slice(&[1]);
+        let earlier = EarlierTracked {
+            assets: vec![Chain::Icp, Chain::Icrc(ledger)],
+            evm: Some(true),
+        };
+        let stored: Tracked = from_candid(&to_candid(&earlier));
+        assert_eq!(stored.tokens, None);
+        TRACKED.with_borrow_mut(|cell| cell.set(Some(stored)));
+        assert_eq!(tokens(), []);
+
+        let token = StoredToken {
+            ledger,
+            symbol: "TESTICP".to_string(),
+            decimals: 8,
+        };
+        set_token(token.clone());
+        set_token(token.clone());
+        assert_eq!(tokens(), vec![token]);
+        assert_eq!(tracked(), [Chain::Icp, Chain::Icrc(ledger)]);
+        set_tracked(vec![Chain::Icp]);
+        assert_eq!(tokens(), []);
+    }
+
     /// A request stored before terms (decision 0014) still decodes, with none.
     #[test]
     fn a_request_stored_before_terms_has_none() {
@@ -1173,7 +1242,13 @@ mod tests {
 
     /// Stores `assets` as a release before EVM accounts did.
     fn set_tracked_before_evm(assets: Vec<Chain>) {
-        TRACKED.with_borrow_mut(|cell| cell.set(Some(Tracked { assets, evm: None })));
+        TRACKED.with_borrow_mut(|cell| {
+            cell.set(Some(Tracked {
+                assets,
+                evm: None,
+                tokens: None,
+            }))
+        });
     }
 
     fn config_on(network: BitcoinNetwork) -> Config {

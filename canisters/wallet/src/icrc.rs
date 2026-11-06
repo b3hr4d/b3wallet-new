@@ -169,6 +169,18 @@ pub async fn check_ledger(ledger: Principal) -> Result<(), String> {
     }
 }
 
+/// A ledger's symbol and decimals, from `icrc1_symbol` and `icrc1_decimals`,
+/// which every ICRC-1 ledger answers.
+pub async fn token(ledger: Principal) -> Result<(String, u8), String> {
+    let symbol = call_without_args(ledger, who(ledger), "icrc1_symbol")
+        .await
+        .map_err(calls::reason)?;
+    let decimals = call_without_args(ledger, who(ledger), "icrc1_decimals")
+        .await
+        .map_err(calls::reason)?;
+    Ok((symbol, decimals))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
