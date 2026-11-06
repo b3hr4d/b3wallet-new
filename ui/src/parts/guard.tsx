@@ -45,7 +45,7 @@ export function Requests({ wallet: id, me }: { wallet: Principal; me: Member }) 
       <p className="quiet">
         What you ask your AI agent to do, in your own words. Your agent writes the terms it reads in
         a request, and you confirm them here. It then answers the request with a transfer, which the
-        guard checks against what you wrote, and the Approvals page against the terms.
+        guard checks against what you wrote, and the open actions against the terms.
       </p>
       {owner && (
         <form

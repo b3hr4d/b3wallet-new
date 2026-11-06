@@ -187,7 +187,7 @@ it 10 local ICP:
 
   icp token transfer 10 $wallet
 DONE
-  agent "approve its join request on $page/approvals once
+  agent "approve its join request on $page once
 the code there is the one Claude gives you. Approve each transfer it proposes
 there too."
   if $bitcoin; then

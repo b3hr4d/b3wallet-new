@@ -7,16 +7,15 @@ import { failureText, shortText } from "../logic/describe.ts"
 import { healthOf } from "../logic/health.ts"
 import { CheckList } from "./checks.tsx"
 import { CopyButton } from "./copy.tsx"
-import { ArrowIcon } from "./icons.tsx"
 import { useMe } from "./member.tsx"
 import { useNowNs } from "./now.ts"
 import { useRun } from "./sign-in.tsx"
 
 /**
- * Who is signed in, in the spine on every page. Signed in, it is the
+ * Who is signed in, in the bar on every page. Signed in, it is the
  * wallet's health: a dot that is the logo's node while all is well, sends out
  * a ring when something needs you and turns red when something is wrong, and
- * opens to say why, with the inbox and the sign-out. Internet Identity gives each site its
+ * opens to say why, with the sign-out. Internet Identity gives each site its
  * own principal, so the identity this page signs in with belongs to this
  * wallet's address only.
  */
@@ -38,11 +37,11 @@ export function Account({ wallet }: { wallet: Principal }) {
 }
 
 /**
- * The wallet's health, as the chip, the rail and the inbox show it. It reads
+ * The wallet's health, as the chip in the bar shows it. It reads
  * the status and who you are, which every page reads, and for a member the
- * open actions, which the start page and the rail read too.
+ * open actions, which the start page reads too.
  */
-export function useHealth(id: Principal) {
+function useHealth(id: Principal) {
   const auth = useAuth()
   const { status, me } = useMe(id)
   const { client, wallet } = useWallet(id)
@@ -112,10 +111,6 @@ function Health({
             <span className={`health-mark ${health.level}`} aria-hidden="true" />
             {health.summary}
           </p>
-          <a className="health-news" href="/notifications">
-            <span>Open the inbox</span>
-            <ArrowIcon />
-          </a>
           <CheckList checks={health.checks} />
           <div className="health-foot">
             <p className="field-label">Signed in as</p>

@@ -75,7 +75,7 @@ function Available({
       {propose.isSuccess ? (
         <p>
           The upgrade is action {String(propose.data.id)}.{" "}
-          <a href="/approvals">Approve and run it on the Approvals page.</a>
+          <a href="/">Approve and run it on the start page.</a>
         </p>
       ) : owner ? (
         <button

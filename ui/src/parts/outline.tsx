@@ -20,38 +20,7 @@ export function HomeOutline({ children }: { children?: ReactNode }) {
         </div>
         <span className="visually-hidden">Reading the wallet…</span>
       </section>
-      <div className="instruments" aria-hidden="true">
-        {[0, 1, 2, 3, 4].map((cell) => (
-          <div key={cell} className="instrument">
-            <span className="skeleton" />
-            <span className="skeleton big" />
-          </div>
-        ))}
-      </div>
       {children}
-    </div>
-  )
-}
-
-/** The rail's shape until the app runs. */
-export function RailOutline() {
-  return (
-    <div className="rail-inner" aria-hidden="true">
-      <section className="pane">
-        <div className="pane-head">
-          <span className="skeleton" />
-        </div>
-        <span className="skeleton wide" />
-        <span className="skeleton wide" />
-      </section>
-      <section className="pane">
-        <div className="pane-head">
-          <span className="skeleton" />
-        </div>
-        {[0, 1, 2, 3].map((row) => (
-          <span key={row} className="skeleton wide" />
-        ))}
-      </section>
     </div>
   )
 }

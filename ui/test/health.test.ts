@@ -65,7 +65,7 @@ test("what needs you comes first and names the dot", () => {
   const health = healthOf({ ...healthy, pending: [transfer, { ...transfer, id: 4n }] })
   assert.equal(health.level, "attention")
   assert.equal(health.summary, "2 wait for you")
-  assert.equal(health.checks[0]?.href, "/approvals")
+  assert.equal(health.checks[0]?.href, "/#open-actions")
 
   const low = healthOf({ ...healthy, status: { ...status, cycles: 620_000_000_000n } })
   assert.equal(low.level, "attention")

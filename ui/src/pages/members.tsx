@@ -215,7 +215,7 @@ function MemberItem({
             <span className="pill-mark" aria-hidden="true" />
             Open
           </span>
-          <a href="/approvals">
+          <a href="/#open-actions">
             Action {String(action.id)}: {actionText(action.action, undefined, undefined)}
           </a>
         </p>
@@ -404,8 +404,8 @@ function AddMember({
               <li className="step">
                 <span className="step-number">3</span>
                 <p>
-                  Approve it on the <a href="/approvals">Approvals page</a> only if its code matches
-                  the one the device shows, then give it its role here.
+                  Approve it on the <a href="/">start page</a> only if its code matches the one the
+                  device shows, then give it its role here.
                 </p>
               </li>
             </ol>
@@ -490,7 +490,7 @@ function AddMember({
 
 /**
  * A change just proposed: where it stands, and the button that runs it once
- * the policy lets it, as the send page does for a transfer.
+ * the policy lets it.
  */
 function Proposed({
   wallet: id,
@@ -528,8 +528,8 @@ function Proposed({
           </button>
         )}
         {current.state.tag === "Waiting" && (
-          <a className="button" href="/approvals">
-            Open Approvals
+          <a className="button" href="/#open-actions">
+            Open the start page
           </a>
         )}
         <button type="button" className="ghost" onClick={onDone}>

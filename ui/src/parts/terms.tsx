@@ -20,7 +20,7 @@ const MAX_DRAFTS = 3
  * The terms of an owner's request (decision 0014): what the agent read in
  * it, the token, who is paid, the most and the latest end, in words, and
  * an owner's yes or no to them. Until an owner confirms them, the wallet
- * refuses a transfer for the request, and the Approvals page checks the one
+ * refuses a transfer for the request, and the open actions check the one
  * the agent then proposes against them.
  */
 export function RequestTermsView({
@@ -91,8 +91,8 @@ export function RequestTermsView({
         </p>
         <p className="quiet">
           {who(terms.confirmed.by)} confirmed draft {terms.version} on{" "}
-          {dateOf(terms.confirmed.at_ns)}. The Approvals page checks your agent's transfer against
-          these terms.
+          {dateOf(terms.confirmed.at_ns)}. The open actions above check your agent's transfer
+          against these terms.
         </p>
         <div className="buttons">{sayNo("Withdraw the terms")}</div>
         {errors}
@@ -154,7 +154,7 @@ export function RequestTermsView({
       <p className="quiet">
         {draft}{" "}
         {owner
-          ? "Confirm them only if they are what you meant: your agent can then propose a transfer for this request, and the Approvals page checks it against them."
+          ? "Confirm them only if they are what you meant: your agent can then propose a transfer for this request, and the open actions above check it against them."
           : "Waiting for an owner to confirm them."}
       </p>
       {owner && !fixed && (
@@ -231,7 +231,7 @@ export function useTermsCheck({
   }
 }
 
-/** Whether the Approvals page offers Approve and Run: never for a transfer outside its terms. */
+/** Whether the open actions offer Approve and Run: never for a transfer outside its terms. */
 export function termsAllow(check: TermsCheck): boolean {
   return check.tag === "none" || check.tag === "no-terms" || (check.tag === "checked" && check.fits)
 }

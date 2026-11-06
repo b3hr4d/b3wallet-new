@@ -51,8 +51,6 @@
   --r-sm: 6px;
   --r-md: 10px;
   --r-lg: 14px;
-  --spine: 248px;
-  --rail: 368px;
   font-family: var(--sans);
   font-size: 15px;
   line-height: 22px;
@@ -275,13 +273,9 @@ code {
 /* The console's labels: mono, upper case, spaced. Used for labels only, never for prose. */
 .eyebrow,
 .rules thead th,
-.instrument-label,
 .holding-label strong,
-.ticket-kind,
 .pill,
-.split-legend,
-.spine-note,
-.new-mark {
+.split-legend {
   font-family: var(--mono);
   font-size: 10.5px;
   font-weight: 500;
@@ -367,174 +361,78 @@ code {
   }
 }
 
-/* ---- The frame: spine, stage, rail ----------------------------------------------- */
+/* ---- The frame: the bar, then the stage ------------------------------------------- */
 
 .shell {
   display: grid;
-  grid-template-columns: var(--spine) minmax(0, 1fr) var(--rail);
-  grid-template-areas: "spine stage rail";
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto 1fr;
+  grid-template-areas:
+    "spine"
+    "stage";
   min-height: 100vh;
   min-height: 100dvh;
 }
 
-.shell.no-rail {
-  grid-template-columns: var(--spine) minmax(0, 1fr);
-  grid-template-areas: "spine stage";
-}
-
-/* The spine: the brand, the pages, and who is signed in at its foot. */
+/* The bar along the top: the brand, the way to settings, and who is signed in. */
 .spine {
   grid-area: spine;
   position: sticky;
   top: 0;
   z-index: 20;
   display: flex;
-  flex-direction: column;
-  height: 100vh;
-  height: 100dvh;
-  padding: 22px 14px 16px;
-  border-right: 1px solid var(--line);
-  background: var(--bg-2);
+  align-items: center;
+  gap: 18px;
+  height: 62px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--scrim);
+  backdrop-filter: saturate(1.2) blur(14px);
+  -webkit-backdrop-filter: saturate(1.2) blur(14px);
 }
 
 .brand {
   display: inline-flex;
-  align-self: flex-start;
   align-items: center;
-  margin: 0 0 26px;
-  padding: 4px 10px;
+  padding: 4px 2px;
   border-radius: var(--r-sm);
   color: var(--ink);
   text-decoration: none;
 }
 
-.nav {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.nav a {
+.spine-end {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 12px;
-  height: 40px;
-  padding: 0 12px;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.gear {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
   border-radius: var(--r-md);
   color: var(--ink-2);
-  font-size: 14.5px;
-  font-weight: 500;
-  text-decoration: none;
-  white-space: nowrap;
 }
 
-.nav a:hover {
-  background: var(--pane);
-  color: var(--ink);
-}
-
-/* The page you are on: raised, with the signal's edge. */
-.nav a[aria-current="page"] {
+.gear:hover,
+.gear[aria-current="page"] {
   background: var(--pane-2);
   color: var(--ink);
 }
 
-.nav a[aria-current="page"]::before {
-  content: "";
-  position: absolute;
-  top: 10px;
-  bottom: 10px;
-  left: 0;
-  width: 2px;
-  border-radius: 2px;
-  background: var(--signal);
-}
-
-.nav a[aria-current="page"] .icon {
-  color: var(--signal);
-}
-
-/* The wallet's own pages, apart from the ones you use every day. */
-.nav-group {
-  margin: 20px 12px 6px;
-  color: var(--ink-3);
-  font-family: var(--mono);
-  font-size: 10px;
-  line-height: 14px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.nav-slot {
-  display: flex;
-  margin-left: auto;
-}
-
-/* A count beside a page: a block of the signal, never a colour alone. */
-.nav-count,
-.badge {
-  display: inline-grid;
-  place-items: center;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 6px;
-  border-radius: 5px;
-  background: var(--signal);
-  color: var(--signal-ink);
-  font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-}
-
-.badge.soft {
-  background: var(--signal-soft);
-  color: var(--signal);
-}
-
-.spine-end {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: auto;
-  padding-top: 16px;
-  border-top: 1px solid var(--line);
-}
-
-.gear {
-  display: none;
-}
-
 .account-slot {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 6px;
   min-width: 0;
-}
-
-.account-slot > button.primary {
-  width: 100%;
 }
 
 .bar-error {
   font-size: 12.5px;
   line-height: 18px;
-}
-
-.spine-note {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 14px 4px 0;
-  color: var(--ink-3);
-}
-
-.spine-note .b3-mark {
-  width: 14px;
-  height: 14px;
 }
 
 /* The stage: the page, then the foot. */
@@ -580,47 +478,9 @@ code {
   height: 14px;
 }
 
-/* The rail: what needs you and what happened, beside every page. */
-.rail {
-  grid-area: rail;
-  position: sticky;
-  top: 0;
-  height: 100vh;
-  height: 100dvh;
-  overflow-y: auto;
-  border-left: 1px solid var(--line);
-  background: var(--bg-2);
-  overscroll-behavior: contain;
-}
-
-.rail-inner {
-  display: grid;
-  gap: 0;
-  padding: 18px 20px 28px;
-}
-
-.rail .pane {
-  padding: 8px 0 22px;
-  border: 0;
-  border-radius: 0;
-  background: none;
-  box-shadow: none;
-}
-
-.rail .pane + .pane {
-  padding-top: 20px;
-  border-top: 1px solid var(--line);
-}
-
-/* On a wide screen the rail holds these; narrower, the page does. */
-.rail-twin {
-  display: none;
-}
-
 /* ---- Panes and cards ---------------------------------------------------------------- */
 
-.card,
-.pane {
+.card {
   padding: 22px;
   border: 1px solid var(--line);
   border-radius: var(--r-lg);
@@ -628,13 +488,11 @@ code {
   box-shadow: var(--shadow);
 }
 
-.card > :last-child,
-.pane > :last-child {
+.card > :last-child {
   margin-bottom: 0;
 }
 
-.card-head,
-.pane-head {
+.card-head {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -646,8 +504,7 @@ code {
   color: var(--ink-3);
 }
 
-.card-end,
-.pane-head > :last-child:not(h2) {
+.card-end {
   margin-left: auto;
 }
 
@@ -816,8 +673,7 @@ code {
 }
 
 .mark.skeleton,
-.avatar.skeleton,
-.event-dot.skeleton {
+.avatar.skeleton {
   margin: 0;
 }
 
@@ -1013,12 +869,6 @@ button.icon-only:hover {
   color: var(--ok);
 }
 
-.chip.bad {
-  border-color: transparent;
-  background: var(--danger-soft);
-  color: var(--danger);
-}
-
 .chip-remove {
   min-height: 0;
   margin-right: -5px;
@@ -1065,7 +915,6 @@ button.icon-only:hover {
   box-shadow: inset 0 0 0 1.5px currentColor;
 }
 
-.pill.needs-you,
 .pill.confirmed {
   background: var(--signal-soft);
   color: var(--signal);
@@ -1253,8 +1102,16 @@ select:focus {
 .overview {
   display: grid;
   gap: 18px;
-  max-width: 1240px;
+  max-width: 880px;
   margin: 0 auto;
+}
+
+/* A heading over a run of cards on the start page. */
+.section-title {
+  margin: 8px 0 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 22px;
 }
 
 /*
@@ -1299,8 +1156,7 @@ select:focus {
   border-bottom-right-radius: var(--r-lg);
 }
 
-.hero-head,
-.hero-top {
+.hero-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1331,18 +1187,6 @@ select:focus {
 
 .hero-id code {
   font-size: 12px;
-}
-
-.hero-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.hero-actions .button,
-.hero-actions button {
-  min-height: 44px;
-  padding: 0 20px;
 }
 
 .hero > .chips {
@@ -1499,93 +1343,6 @@ select:focus {
   background: currentColor;
 }
 
-/* ---- The overview: instruments --------------------------------------------------------- */
-
-/* A strip of cells, hairlines between; a cell that wraps starts clean, as above. */
-.instruments {
-  display: flex;
-  flex-wrap: wrap;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: var(--r-lg);
-  background: var(--pane);
-  box-shadow: var(--shadow);
-}
-
-.instrument {
-  position: relative;
-  display: grid;
-  flex: 1 1 150px;
-  align-content: start;
-  gap: 8px;
-  min-width: 0;
-  margin: -1px 0 0 -1px;
-  padding: 16px 18px 18px;
-  border-top: 1px solid var(--line);
-  border-left: 1px solid var(--line);
-  color: var(--ink);
-  text-decoration: none;
-}
-
-.instrument > * {
-  margin: 0;
-}
-
-a.instrument:hover {
-  background: var(--pane-2);
-  color: var(--ink);
-}
-
-/* Something waits for you here: the signal's wash and its top edge. */
-.instrument.hot {
-  background: var(--signal-soft);
-  box-shadow: inset 0 2px 0 var(--signal);
-}
-
-a.instrument.hot:hover {
-  background: var(--signal-soft);
-}
-
-.instrument-label {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--ink-3);
-}
-
-.instrument-label .icon {
-  width: 14px;
-  height: 14px;
-}
-
-.instrument.hot .instrument-label,
-.instrument.warn .instrument-label {
-  color: var(--signal);
-}
-
-.instrument-value {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  font-size: 28px;
-  font-weight: 600;
-  line-height: 32px;
-  letter-spacing: -0.03em;
-  font-variant-numeric: tabular-nums;
-}
-
-.instrument-value .unit {
-  color: var(--ink-3);
-  font-size: 13px;
-  font-weight: 500;
-  letter-spacing: 0;
-}
-
-.instrument.warn .instrument-value {
-  color: var(--signal);
-}
-
-.instrument-note,
 .tile-note {
   display: flex;
   flex-wrap: wrap;
@@ -1595,33 +1352,6 @@ a.instrument.hot:hover {
   color: var(--ink-2);
   font-size: 12.5px;
   line-height: 18px;
-}
-
-.instrument.hot .instrument-note {
-  color: var(--signal);
-  font-weight: 500;
-}
-
-/* The version's check, in its cell: a link's weight, so the cell keeps its shape. */
-.instrument .tile-note button {
-  flex: 0 1 auto;
-  min-width: 0;
-  min-height: 0;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--signal);
-  font-size: 12.5px;
-  line-height: 18px;
-  text-align: left;
-  white-space: normal;
-}
-
-.instrument .tile-note button:hover {
-  background: none;
-  color: var(--signal-2);
-  text-decoration: underline;
-  text-underline-offset: 3px;
 }
 
 .tile-note.good {
@@ -1643,378 +1373,10 @@ a.instrument.hot:hover {
   margin: 0;
 }
 
-/* The cycles gauge: cells, filled to what the wallet has, the floor marked. */
-.gauge {
-  display: block;
-  width: 100%;
-  height: 8px;
-}
-
-.gauge rect {
-  fill: var(--line-2);
-}
-
-.gauge rect.floor {
-  fill: var(--danger-soft);
-}
-
-.gauge rect.on {
-  fill: var(--ink);
-}
-
-.instrument.warn .gauge rect.on {
-  fill: var(--signal);
-}
-
-/* ---- What needs you ----------------------------------------------------------------------- */
-
-.pane-calm {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--ok);
-  font-size: 12.5px;
-  font-weight: 500;
-}
-
-.pane-calm .icon {
-  width: 15px;
-  height: 15px;
-}
-
-.calm {
-  margin: 0;
-  padding: 14px 16px;
-  border: 1px dashed var(--line-2);
-  border-radius: var(--r-md);
-  color: var(--ink-2);
-  font-size: 13px;
-  line-height: 19px;
-}
-
-.pane-link {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-top: 14px;
-  padding: 10px 0 0;
-  border-top: 1px solid var(--line);
-  color: var(--ink-2);
-  font-size: 13px;
-  font-weight: 500;
-  text-decoration: none;
-}
-
-.pane-link .icon {
-  width: 16px;
-  height: 16px;
-  transition: transform 0.15s;
-}
-
-.pane-link:hover {
-  color: var(--signal);
-}
-
-.pane-link:hover .icon {
-  transform: translateX(2px);
-}
-
 .needs > .notice,
 .needs > .error {
   margin-bottom: 12px;
   font-size: 13px;
-}
-
-/* What is wrong or worth watching: the check's shape, its title and what to do. */
-.alerts {
-  display: grid;
-  gap: 8px;
-  margin: 0 0 12px;
-  padding: 0;
-  list-style: none;
-}
-
-.alert {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 10px;
-  padding: 12px 14px;
-  border: 1px solid var(--signal-line);
-  border-radius: var(--r-md);
-  background: var(--signal-soft);
-}
-
-.alert.problem {
-  border-color: var(--danger);
-  background: var(--danger-soft);
-}
-
-.alert p {
-  margin: 0;
-}
-
-.alert-title {
-  font-size: 13.5px;
-  font-weight: 600;
-  line-height: 19px;
-}
-
-.alert-title a {
-  color: var(--ink);
-}
-
-.alert-text {
-  color: var(--ink-2);
-  font-size: 12.5px;
-  line-height: 18px;
-  overflow-wrap: anywhere;
-}
-
-.alert .command {
-  margin-top: 8px;
-}
-
-/* A request: a ticket with an edge; a change to who controls the wallet gets a hazard edge. */
-.tickets {
-  display: grid;
-  gap: 10px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.ticket {
-  position: relative;
-  overflow: hidden;
-  padding: 14px 14px 14px 18px;
-  border: 1px solid var(--line-2);
-  border-radius: var(--r-md);
-  background: var(--pane-2);
-}
-
-.ticket::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 4px;
-  background: var(--signal);
-}
-
-.ticket.watch::before {
-  background: repeating-linear-gradient(-45deg, var(--signal) 0 5px, transparent 5px 9px);
-}
-
-.ticket.ready::before {
-  background: var(--ok);
-}
-
-.ticket > * {
-  margin: 0;
-}
-
-.ticket-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.ticket-head .pill {
-  margin-left: auto;
-}
-
-.ticket-id {
-  color: var(--ink-3);
-  font-family: var(--mono);
-  font-size: 11px;
-}
-
-.ticket-text {
-  font-size: 13.5px;
-  line-height: 20px;
-  overflow-wrap: anywhere;
-}
-
-.ticket .details {
-  margin-top: 10px;
-  padding: 8px 10px;
-  font-size: 12.5px;
-  line-height: 17px;
-}
-
-.ticket-code {
-  display: grid;
-  gap: 4px;
-  margin-top: 10px;
-  color: var(--ink-2);
-  font-size: 12px;
-}
-
-.ticket-code p {
-  margin: 0;
-}
-
-.ticket-code .code {
-  margin: 0;
-  padding: 8px 10px;
-  font-size: 20px;
-  line-height: 26px;
-}
-
-.ticket-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-top: 10px;
-  color: var(--ink-3);
-  font-size: 12px;
-  line-height: 16px;
-}
-
-.ticket-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin-top: 12px;
-}
-
-.ticket-more {
-  margin-left: auto;
-  color: var(--ink-2);
-  font-size: 12.5px;
-  text-decoration: none;
-}
-
-.ticket-more:hover {
-  color: var(--signal);
-}
-
-/* ---- Activity --------------------------------------------------------------------------------- */
-
-.timeline {
-  display: grid;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.event {
-  display: grid;
-  grid-template-columns: 26px minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 12px;
-  padding: 11px 0;
-}
-
-.event + .event {
-  border-top: 1px solid var(--line);
-}
-
-.event-dot {
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
-  background: var(--pane-3);
-  color: var(--ink-2);
-}
-
-.event-dot .icon {
-  width: 14px;
-  height: 14px;
-}
-
-.event-dot.good {
-  background: var(--ok-soft);
-  color: var(--ok);
-}
-
-.event-dot.bad {
-  background: var(--danger-soft);
-  color: var(--danger);
-}
-
-.event-dot.warn,
-.event-dot.accent {
-  background: var(--signal-soft);
-  color: var(--signal);
-}
-
-.event-text {
-  margin: 3px 0 0;
-  font-size: 13.5px;
-  line-height: 20px;
-  overflow-wrap: anywhere;
-}
-
-.event-text strong {
-  font-weight: 600;
-}
-
-.event-time {
-  padding-top: 4px;
-  color: var(--ink-3);
-  font-family: var(--mono);
-  font-size: 11px;
-  line-height: 16px;
-  white-space: nowrap;
-}
-
-/* An entry new since you last looked: the word, and a wash. */
-.event.fresh {
-  margin: 0 -10px;
-  padding-right: 10px;
-  padding-left: 10px;
-  border-radius: 8px;
-  background: linear-gradient(90deg, var(--signal-soft), transparent 80%);
-}
-
-.event.fresh + .event,
-.event + .event.fresh {
-  border-top-color: transparent;
-}
-
-.new-mark {
-  display: inline-block;
-  margin-left: 8px;
-  color: var(--signal);
-  font-size: 9.5px;
-  vertical-align: 1px;
-}
-
-.fresh-count {
-  border-color: var(--signal-line);
-  color: var(--signal);
-}
-
-.timeline.compact .event {
-  grid-template-columns: 22px minmax(0, 1fr) auto;
-  gap: 10px;
-  padding: 9px 0;
-}
-
-.timeline.compact .event.fresh {
-  padding-right: 10px;
-  padding-left: 10px;
-}
-
-.timeline.compact .event-dot {
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-}
-
-.timeline.compact .event-text {
-  margin-top: 1px;
-  font-size: 13px;
-  line-height: 19px;
 }
 
 /* ---- Accounts: cards ------------------------------------------------------------------- */
@@ -2045,11 +1407,6 @@ a.instrument.hot:hover {
 
 .account:hover {
   border-color: var(--signal-line);
-}
-
-.account:has(.account-link:focus-visible) {
-  outline: 2px solid var(--signal);
-  outline-offset: 2px;
 }
 
 .account > * {
@@ -2096,23 +1453,6 @@ a.instrument.hot:hover {
   line-height: 16px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-/* The card's link covers the card; the copy button sits above it. */
-.account-link {
-  color: var(--ink);
-  text-decoration: none;
-}
-
-.account-link::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-}
-
-.account-link:focus-visible {
-  outline: none;
 }
 
 .account-balance {
@@ -2243,11 +1583,11 @@ a.instrument.hot:hover {
 button.who {
   justify-content: flex-start;
   gap: 10px;
-  width: 100%;
-  min-height: 44px;
+  width: auto;
+  min-height: 38px;
   padding: 0 12px;
   border: 1px solid var(--line);
-  border-radius: var(--r-md);
+  border-radius: 999px;
   background: var(--pane);
   color: var(--ink-2);
   font-weight: 500;
@@ -2261,6 +1601,7 @@ button.who[aria-expanded="true"] {
 }
 
 .who code {
+  max-width: 120px;
   overflow: hidden;
   font-size: 12px;
   text-overflow: ellipsis;
@@ -2310,8 +1651,8 @@ button.who[aria-expanded="true"] {
 
 .health-panel {
   position: absolute;
-  bottom: calc(100% + 10px);
-  left: 0;
+  top: calc(100% + 10px);
+  right: 0;
   z-index: 40;
   display: grid;
   gap: 14px;
@@ -2335,31 +1676,6 @@ button.who[aria-expanded="true"] {
   gap: 10px;
   font-size: 15px;
   font-weight: 600;
-}
-
-.health-news {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  background: var(--pane-2);
-  color: var(--ink);
-  font-size: 13.5px;
-  font-weight: 500;
-  text-decoration: none;
-}
-
-.health-news:hover {
-  border-color: var(--signal-line);
-  color: var(--ink);
-}
-
-.health-news .icon {
-  width: 16px;
-  height: 16px;
-  color: var(--ink-3);
 }
 
 .health-foot {
@@ -2418,7 +1734,6 @@ button.who[aria-expanded="true"] {
   background: var(--accent);
 }
 
-.pane-head .health-mark,
 .health-head .health-mark {
   margin-top: 0;
 }
@@ -2639,20 +1954,8 @@ button.who[aria-expanded="true"] {
   margin: 0;
 }
 
-.step .sign-in,
-.pane .sign-in {
+.step .sign-in {
   justify-items: start;
-}
-
-.pane .sign-in {
-  margin-top: 12px;
-}
-
-/* ---- Receive ----------------------------------------------------------------------------- */
-
-.receive {
-  display: grid;
-  gap: 16px;
 }
 
 .picks {
@@ -2670,97 +1973,9 @@ button.who[aria-expanded="true"] {
   cursor: pointer;
 }
 
-.pick-body {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  background: var(--pane);
-}
-
-.pick:hover .pick-body {
-  border-color: var(--ink-3);
-}
-
-.pick input:checked + .pick-body {
-  border-color: var(--signal);
-  background: var(--signal-soft);
-}
-
-.pick input:focus-visible + .pick-body {
-  outline: 2px solid var(--signal);
-  outline-offset: 2px;
-}
-
 .pick .avatar {
   width: 32px;
   height: 32px;
-}
-
-.pick-name {
-  display: grid;
-  min-width: 0;
-}
-
-.pick-name strong {
-  overflow: hidden;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.pick-name span {
-  overflow: hidden;
-  color: var(--ink-3);
-  font-size: 12.5px;
-  line-height: 18px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.receive-card {
-  position: relative;
-  display: grid;
-  gap: 22px;
-  padding: 30px;
-  background:
-    radial-gradient(34rem 18rem at 100% 0%, var(--glow), transparent 64%),
-    linear-gradient(var(--grid) 1px, transparent 1px) 0 0 / 28px 28px,
-    linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 28px 28px,
-    var(--pane);
-}
-
-.receive-card > * {
-  margin: 0;
-}
-
-.receive-head {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.receive-head p {
-  margin: 0;
-}
-
-/* The QR code beside the address; on a phone, above it. */
-.receive-body {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: start;
-  gap: 28px;
-}
-
-.receive-main {
-  display: grid;
-  gap: 16px;
-}
-
-.receive-main > * {
-  margin: 0;
 }
 
 /* Always dark on light: scanners read a QR code that way round, in either theme. */
@@ -2797,71 +2012,6 @@ button.who[aria-expanded="true"] {
   text-transform: uppercase;
 }
 
-.receive-address {
-  display: grid;
-  gap: 8px;
-}
-
-.receive-address > * {
-  margin: 0;
-}
-
-/*
- * The address, large, its groups apart. Each group is an inline block, so a
- * line can break between groups, and a selection still copies the address
- * with no space or line break inside it.
- */
-.receive-text {
-  padding: 20px;
-  border: 1px solid var(--line-2);
-  border-radius: var(--r-md);
-  background: var(--bg);
-}
-
-.receive-text code {
-  display: block;
-  color: var(--ink);
-  font-size: 20px;
-  line-height: 32px;
-  letter-spacing: 0.02em;
-  overflow-wrap: anywhere;
-}
-
-.receive-text code span {
-  display: inline-block;
-  margin-right: 0.6em;
-}
-
-.receive-text code span:nth-child(odd) {
-  color: var(--ink);
-}
-
-.receive-text code span:nth-child(even) {
-  color: var(--ink-2);
-}
-
-.receive-text code span:last-child {
-  margin-right: 0;
-}
-
-.receive-note {
-  padding: 12px 16px;
-  border-left: 2px solid var(--signal);
-  background: var(--signal-soft);
-  color: var(--ink-2);
-  font-size: 13px;
-  line-height: 18px;
-  overflow-wrap: anywhere;
-}
-
-/* ---- An account's page ------------------------------------------------------------------ */
-
-.hero-top > .avatar {
-  width: 54px;
-  height: 54px;
-  font-size: 12px;
-}
-
 .addresses {
   display: grid;
   gap: 8px;
@@ -2873,27 +2023,6 @@ button.who[aria-expanded="true"] {
 
 .addresses .field-label:not(:first-child) {
   margin-top: 10px;
-}
-
-.open-list {
-  display: grid;
-  gap: 10px;
-  margin: 0 0 14px;
-  padding: 0;
-  list-style: none;
-}
-
-.open-item {
-  display: grid;
-  gap: 6px;
-  padding: 14px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  background: var(--pane-2);
-}
-
-.open-item p {
-  margin: 0;
 }
 
 /* ---- Members, policy and settings --------------------------------------------------------- */
@@ -2921,15 +2050,6 @@ button.who[aria-expanded="true"] {
 
 .notice-card.warn > .icon {
   color: var(--signal);
-}
-
-.notice-card.bad {
-  border-color: var(--danger);
-  background: var(--danger-soft);
-}
-
-.notice-card.bad > .icon {
-  color: var(--danger);
 }
 
 .notice-body p {
@@ -3195,130 +2315,9 @@ button.who[aria-expanded="true"] {
   overflow-wrap: anywhere;
 }
 
-/* ---- Below a wide screen: the rail's panes move into the page -------------------------- */
-
-@media (max-width: 1359px) {
-  .shell {
-    grid-template-columns: var(--spine) minmax(0, 1fr);
-    grid-template-areas: "spine stage";
-  }
-
-  .rail {
-    display: none;
-  }
-
-  .rail-twin {
-    display: block;
-  }
-}
-
-/* ---- A tablet: the spine is a bar along the top ------------------------------------------ */
+/* ---- A tablet: narrower margins ------------------------------------------------------- */
 
 @media (max-width: 1023px) {
-  .shell,
-  .shell.no-rail {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-areas:
-      "spine"
-      "stage";
-  }
-
-  .spine {
-    flex-direction: row;
-    align-items: center;
-    gap: 18px;
-    height: 62px;
-    padding: 0 20px;
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-    background: var(--scrim);
-    backdrop-filter: saturate(1.2) blur(14px);
-    -webkit-backdrop-filter: saturate(1.2) blur(14px);
-  }
-
-  .brand {
-    align-self: center;
-    margin: 0;
-    padding: 4px 2px;
-  }
-
-  .nav {
-    flex: 1;
-    flex-direction: row;
-    gap: 2px;
-    min-width: 0;
-  }
-
-  .nav a {
-    height: 38px;
-    padding: 0 12px;
-    gap: 8px;
-    font-size: 14px;
-  }
-
-  .nav a[aria-current="page"]::before {
-    top: auto;
-    right: 12px;
-    bottom: -12px;
-    left: 12px;
-    width: auto;
-    height: 2px;
-  }
-
-  .nav a.nav-extra,
-  .nav-group {
-    display: none;
-  }
-
-  .spine-end {
-    flex-direction: row;
-    align-items: center;
-    margin: 0;
-    padding: 0;
-    border: 0;
-  }
-
-  .gear {
-    display: grid;
-    place-items: center;
-    width: 38px;
-    height: 38px;
-    border-radius: var(--r-md);
-    color: var(--ink-2);
-  }
-
-  .gear:hover,
-  .gear[aria-current="page"] {
-    background: var(--pane-2);
-    color: var(--ink);
-  }
-
-  .account-slot {
-    flex-direction: row;
-    align-items: center;
-  }
-
-  button.who {
-    width: auto;
-    min-height: 38px;
-    border-radius: 999px;
-  }
-
-  .who code {
-    max-width: 120px;
-  }
-
-  .health-panel {
-    top: calc(100% + 10px);
-    right: 0;
-    bottom: auto;
-    left: auto;
-  }
-
-  .spine-note {
-    display: none;
-  }
-
   .page {
     padding: 26px 24px 40px;
   }
@@ -3329,10 +2328,6 @@ button.who[aria-expanded="true"] {
 }
 
 @media (max-width: 860px) {
-  .nav a .icon {
-    display: none;
-  }
-
   button.who {
     justify-content: center;
     width: 38px;
@@ -3344,83 +2339,13 @@ button.who[aria-expanded="true"] {
   }
 }
 
-/* ---- A phone: the pages are a tab bar along the bottom ------------------------------------- */
+/* ---- A phone: a lower bar, and the health panel across the screen ------------------------- */
 
 @media (max-width: 639px) {
-  /* A filter on the bar would make it the tab bar's containing block, so the blur moves down. */
   .spine {
     gap: 10px;
     height: 56px;
     padding: 0 14px;
-    background: var(--bg-2);
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-  }
-
-  .nav {
-    position: fixed;
-    right: 0;
-    bottom: 0;
-    left: 0;
-    z-index: 30;
-    display: grid;
-    grid-auto-columns: minmax(0, 1fr);
-    grid-auto-flow: column;
-    gap: 0;
-    padding: 6px 6px calc(6px + env(safe-area-inset-bottom));
-    border-top: 1px solid var(--line);
-    background: var(--scrim);
-    backdrop-filter: saturate(1.2) blur(14px);
-    -webkit-backdrop-filter: saturate(1.2) blur(14px);
-  }
-
-  .nav a {
-    flex-direction: column;
-    justify-content: center;
-    gap: 3px;
-    height: 52px;
-    padding: 0 2px;
-    border-radius: var(--r-md);
-    font-size: 11px;
-    font-weight: 500;
-    line-height: 14px;
-  }
-
-  .nav a .icon {
-    display: block;
-    width: 21px;
-    height: 21px;
-  }
-
-  .nav a[aria-current="page"] {
-    background: transparent;
-  }
-
-  .nav a[aria-current="page"]::before {
-    top: -6px;
-    right: 30%;
-    bottom: auto;
-    left: 30%;
-    height: 2px;
-  }
-
-  .nav-slot {
-    position: absolute;
-    top: 3px;
-    left: calc(50% + 6px);
-    margin: 0;
-  }
-
-  .nav-count {
-    min-width: 17px;
-    height: 17px;
-    padding: 0 4px;
-    font-size: 10px;
-    box-shadow: 0 0 0 2px var(--bg);
-  }
-
-  .spine-end {
-    margin-left: auto;
   }
 
   .health-panel {
@@ -3432,10 +2357,6 @@ button.who[aria-expanded="true"] {
     max-height: calc(100dvh - 160px);
   }
 
-  .stage {
-    padding-bottom: calc(66px + env(safe-area-inset-bottom));
-  }
-
   .page {
     padding: 18px 14px 32px;
   }
@@ -3445,7 +2366,6 @@ button.who[aria-expanded="true"] {
   }
 
   .card,
-  .pane,
   .item {
     padding: 16px;
   }
@@ -3466,15 +2386,6 @@ button.who[aria-expanded="true"] {
 
   .hero-name {
     flex-basis: 180px;
-  }
-
-  .hero-actions {
-    width: 100%;
-  }
-
-  .hero-actions .button {
-    flex: 1;
-    min-width: 0;
   }
 
   .holdings {
@@ -3508,25 +2419,10 @@ button.who[aria-expanded="true"] {
     gap: 2px 10px;
   }
 
-  .instrument {
-    flex-basis: 140px;
-    padding: 14px;
-  }
-
-  .instrument-value {
-    font-size: 24px;
-    line-height: 28px;
-  }
-
   .accounts {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .receive-card {
-    padding: 18px;
-  }
-
-  .receive-body,
   .add-device {
     grid-template-columns: minmax(0, 1fr);
     gap: 20px;
@@ -3536,15 +2432,6 @@ button.who[aria-expanded="true"] {
   .settings-rows > div {
     grid-template-columns: minmax(0, 1fr);
     gap: 4px;
-  }
-
-  .receive-text {
-    padding: 14px;
-  }
-
-  .receive-text code {
-    font-size: 16px;
-    line-height: 26px;
   }
 
   .card-head {

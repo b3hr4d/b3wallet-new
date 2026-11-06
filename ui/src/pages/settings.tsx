@@ -11,6 +11,7 @@ import { initialOf } from "../logic/mark.ts"
 import { leftText } from "../logic/time.ts"
 import { LOW_CYCLES } from "../logic/tokens.ts"
 import { CheckList } from "../parts/checks.tsx"
+import { ManageAccounts } from "../parts/accounts.tsx"
 import { Contacts } from "../parts/contacts.tsx"
 import { CopyButton } from "../parts/copy.tsx"
 import { GuardModel } from "../parts/guard-model.tsx"
@@ -24,9 +25,10 @@ import { useRun } from "../parts/sign-in.tsx"
 
 /**
  * The settings page: how the wallet is set up and what protects it, in one
- * place. Its members and contacts, the guard's model, a security checkup with
- * the approval policy, what the IC says the wallet runs and who controls it,
- * and your session.
+ * place. Its members, accounts and contacts, the guard's model, a security
+ * checkup with the approval policy, what the IC says the wallet runs and who
+ * controls it, and your session. Day to day a member needs only the start
+ * page (decision 0017).
  */
 export function Settings({ wallet, local }: { wallet: Principal; local: boolean }) {
   return (
@@ -41,6 +43,7 @@ export function Settings({ wallet, local }: { wallet: Principal; local: boolean 
       </div>
       <nav className="section-nav" aria-label="Settings">
         <a href="#members">Members</a>
+        <a href="#accounts">Accounts</a>
         <a href="#contacts">Contacts</a>
         <a href="#guard">Guard</a>
         <a href="#security">Security</a>
@@ -118,6 +121,7 @@ function Sections({ wallet: id, me, local }: { wallet: Principal; me: Member; lo
         )}
       </section>
 
+      {status.data && <ManageAccounts wallet={id} me={me} network={status.data.bitcoin_network} />}
       <Contacts wallet={id} me={me} />
       <GuardModel wallet={id} me={me} />
 

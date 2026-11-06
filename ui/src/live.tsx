@@ -4,33 +4,24 @@ import { createPortal } from "react-dom"
 import { walletClient } from "./ic/client.ts"
 import { where } from "./logic/host.ts"
 import type { Page } from "./logic/page.ts"
-import { AccountPage } from "./pages/account.tsx"
-import { Approvals } from "./pages/approvals.tsx"
 import { Claim } from "./pages/claim.tsx"
 import { Home } from "./pages/home.tsx"
 import { MembersPage } from "./pages/members.tsx"
-import { NotificationsPage } from "./pages/notifications.tsx"
-import { Receive } from "./pages/receive.tsx"
-import { Send } from "./pages/send.tsx"
 import { Settings } from "./pages/settings.tsx"
-import { ApprovalsCount, InboxCount, Rail } from "./parts/rail.tsx"
 import { Account } from "./parts/session.tsx"
 
-/** The elements the frame leaves empty for what only the browser knows. */
-export type Slots = {
-  account: HTMLElement | null
-  rail: HTMLElement | null
-  approvals: HTMLElement | null
-  inbox: HTMLElement | null
-}
-
 /**
- * The part of a page that calls the wallet, with what it renders into the
- * frame's slots: the account, the counts beside Approvals and Inbox, and the
- * rail. `walletClient` picks where calls go; the agent verifies every
- * answer.
+ * The part of a page that calls the wallet, with the account it renders into
+ * the bar's slot. `walletClient` picks where calls go; the agent verifies
+ * every answer.
  */
-export function Live({ page, slots }: { page: Exclude<Page, "missing">; slots: Slots }) {
+export function Live({
+  page,
+  account,
+}: {
+  page: Exclude<Page, "missing">
+  account: HTMLElement | null
+}) {
   const here = where(window.location.hostname)
   if (!here.ok) {
     return (
@@ -47,10 +38,7 @@ export function Live({ page, slots }: { page: Exclude<Page, "missing">; slots: S
   }
   return (
     <ReactorProvider client={() => walletClient(here.local)}>
-      {slots.account && createPortal(<Account wallet={here.wallet} />, slots.account)}
-      {slots.approvals && createPortal(<ApprovalsCount wallet={here.wallet} />, slots.approvals)}
-      {slots.inbox && createPortal(<InboxCount wallet={here.wallet} />, slots.inbox)}
-      {slots.rail && createPortal(<Rail wallet={here.wallet} page={page} />, slots.rail)}
+      {account && createPortal(<Account wallet={here.wallet} />, account)}
       <Wallet page={page} wallet={here.wallet} local={here.local} />
     </ReactorProvider>
   )
@@ -72,20 +60,10 @@ function Wallet({
   switch (page) {
     case "home":
       return <Home wallet={wallet} />
-    case "send":
-      return <Send wallet={wallet} />
-    case "receive":
-      return <Receive wallet={wallet} />
-    case "account":
-      return <AccountPage wallet={wallet} />
     case "members":
       return <MembersPage wallet={wallet} />
-    case "notifications":
-      return <NotificationsPage wallet={wallet} />
     case "settings":
       return <Settings wallet={wallet} local={local} />
-    case "approvals":
-      return <Approvals wallet={wallet} />
     case "claim":
       return <Claim wallet={wallet} />
   }

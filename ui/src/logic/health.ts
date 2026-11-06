@@ -114,8 +114,8 @@ export function healthOf({
             key: "waiting",
             level: "attention",
             title: `${mine} wait${mine === 1 ? "s" : ""} for you`,
-            text: "Approve or run them on the Approvals page.",
-            href: "/approvals",
+            text: "Approve or run them on the start page.",
+            href: "/#open-actions",
           }
         : {
             key: "waiting",
@@ -135,7 +135,7 @@ export function healthOf({
         level: "attention",
         title: `${changes.length} change${changes.length === 1 ? "" : "s"} open`,
         text: `${actionText(first.action, undefined, undefined)}${more}. If you did not expect it, an owner can reject it.`,
-        href: "/approvals",
+        href: "/#open-actions",
       })
     }
   }

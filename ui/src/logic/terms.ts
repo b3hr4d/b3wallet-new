@@ -22,7 +22,7 @@ import { ICP_LEDGER, ledgerOf, transferAsset, type Token } from "./tokens.ts"
 
 // Terms of a request (decision 0014): the agent reads the token, the
 // recipient, the most and the latest end in an owner's words, an owner
-// confirms them on this page, and the Approvals page checks the agent's
+// confirms them on the start page, and its open actions check the agent's
 // transfer against them. Reading the terms, writing them in words and the
 // check are @meantjs/consent/terms; this file only says what the wallet
 // knows, and turns a transfer into the grant the check reads.

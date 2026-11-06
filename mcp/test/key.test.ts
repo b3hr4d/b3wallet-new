@@ -74,7 +74,7 @@ test("the configuration needs a wallet id, and names its pages", () => {
   assert.match(local.keyPath, /\.config\/b3wallet-mcp\/agent\.pem$/)
 })
 
-test("a join code is the one the Approvals page shows", () => {
+test("a join code is the one the start page shows", () => {
   const device = "gxhcg-wz6ja-zbwh7-s6ha4-nnlhc-ya5hh-2dv23-dwksw-ujozj-ymkcv-tae"
   const hash = createHash("sha256").update(device).digest()
   const digits = String(hash.readUInt32BE(0) % 100_000_000).padStart(8, "0")
