@@ -4,7 +4,7 @@ Lets an AI agent, such as Claude, read one wallet and propose transfers from
 it. The agent joins the wallet as a **proposer**: it sees the accounts,
 balances, open actions and audit log, and proposes transfers, but its approval
 never counts, so every transfer it proposes waits until an owner or an
-approver approves and runs it on the wallet's Approvals page
+approver approves and runs it on the wallet's start page
 ([decision 0007](../docs/decisions/0007-agent-proposer.md)). The server offers
 no tool that approves, runs or rejects anything, and the wallet would refuse
 the agent if it tried.
@@ -58,11 +58,11 @@ the app does not read your shell's `PATH`:
 ## Let the agent in
 
 Ask the AI to join the wallet. It calls `wallet_join` and tells you an
-8-digit code. Open the wallet's Approvals page, check that the join request
+8-digit code. Open the wallet's start page, check that the join request
 asks for a proposer and shows that code, then approve it and run it. From
 then on, ask it things such as "what does the wallet hold?" or "propose
 sending 0.5 ICP to <principal>", and approve or reject each transfer it
-proposes on the Approvals page, where its proposals show its label and role.
+proposes on the wallet's start page, where its proposals show its label and role.
 
 To see the agent's principal yourself, import its key into icp-cli:
 `icp identity import agent --from-pem ~/.config/b3wallet-mcp/agent.pem`, then
@@ -74,7 +74,7 @@ To see the agent's principal yourself, import its key into icp-cli:
 | Tool                      | What it does                                                                     |
 | ------------------------- | -------------------------------------------------------------------------------- |
 | `wallet_whoami`           | The agent's principal, the wallet's version and pages, and the agent's role      |
-| `wallet_join`             | Asks to join as a proposer and returns the code the Approvals page shows         |
+| `wallet_join`             | Asks to join as a proposer and returns the code the wallet's start page shows    |
 | `wallet_accounts`         | The accounts, with each one's chain, address and token                           |
 | `wallet_contacts`         | The owners' contacts: each one's name and addresses, one per kind of account     |
 | `wallet_balance`          | One account's balance, in its token's units                                      |
@@ -92,7 +92,7 @@ transfer to an address that is not a contact, not one of its accounts and not
 written in the owner's request it answers.
 
 A transfer names the owner's request it answers, so the wallet's guard checks
-it against the owner's own words on the Approvals page
+it against the owner's own words on the wallet's start page
 ([decision 0012](../docs/decisions/0012-guard-in-wallet.md)); one that names no
 request is shown as not checked.
 
@@ -102,9 +102,9 @@ the transfer may be sent ([decision 0014](../docs/decisions/0014-confirmed-terms
 The server reads them with `@meantjs/consent/terms` as the owner's page will,
 refuses a draft that cannot be read before it is written, with why, and
 returns the words the owner will see. An owner confirms them, or says no, on
-the Approvals page. Until an owner confirms them the wallet refuses a
+the wallet's start page. Until an owner confirms them the wallet refuses a
 transfer for the request, and `wallet_propose_transfer` refuses one outside
-them, with the reasons, as the Approvals page would offer no Approve for it.
+them, with the reasons, as the wallet's start page would offer no Approve for it.
 
 Its `from` and `to` also take the label of one of the wallet's own accounts,
 by the profile spec's names rule (decision D-045 there), which the server
@@ -129,7 +129,7 @@ wallet's pages.
 ## What a stolen key can do
 
 Read the wallet, and propose up to 8 transfers at a time, which you see on the
-Approvals page and can reject. It cannot move anything. Remove the agent and
+wallet's start page and can reject. It cannot move anything. Remove the agent and
 delete the key file to stop it; the next run makes a new key, which must ask
 to join again.
 

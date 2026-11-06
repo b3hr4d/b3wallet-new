@@ -228,10 +228,10 @@ is printed, and the tool exits with 1.
 
 ### 3.6 Hand the wallet over
 
-On the wallet's start page, an owner opens the **Recovery controller** card,
+On the wallet's settings page, an owner opens the **Recovery controller** card,
 enters the three values `check` printed, and proposes the hand-over. It is a
 policy change for the wallet: it needs the wallet's `SetPolicy` quorum and
-waits for its timelock (7 days by default) on the Approvals page. Then an
+waits for its timelock (7 days by default) on the start page. Then an
 owner or approver runs it there.
 
 When it runs, the wallet checks again, itself: the controller runs the named

@@ -27,45 +27,10 @@ function Icon({ children }: { children: ReactNode }) {
   )
 }
 
-export const OverviewIcon = () => (
-  <Icon>
-    <rect x="4" y="4" width="7" height="7" rx="2" />
-    <rect x="13" y="4" width="7" height="7" rx="2" />
-    <rect x="4" y="13" width="7" height="7" rx="2" />
-    <rect x="13" y="13" width="7" height="7" rx="2" />
-  </Icon>
-)
-
-export const SendIcon = () => (
-  <Icon>
-    <path d="M7 17 17 7M9 7h8v8" />
-  </Icon>
-)
-
-export const ReceiveIcon = () => (
-  <Icon>
-    <path d="M17 7 7 17M15 17H7V9" />
-  </Icon>
-)
-
-export const InboxIcon = () => (
-  <Icon>
-    <path d="M4 13.5 6.6 5.5h10.8l2.6 8V18.5H4Z" />
-    <path d="M4 13.5h4.6l1.2 2.2h4.4l1.2-2.2H20" />
-  </Icon>
-)
-
 export const GearIcon = () => (
   <Icon>
     <circle cx="12" cy="12" r="3" />
     <path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.6-2-3.4-2.4 1a7.4 7.4 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.5A7.4 7.4 0 0 0 7 6.5l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 0 0 0 3l-2 1.6 2 3.4 2.4-1a7.4 7.4 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.4 7.4 0 0 0 2.6-1.5l2.4 1 2-3.4-2-1.6Z" />
-  </Icon>
-)
-
-export const ApproveIcon = () => (
-  <Icon>
-    <circle cx="12" cy="12" r="8.5" />
-    <path d="m8.5 12.2 2.4 2.4 4.6-4.9" />
   </Icon>
 )
 
@@ -95,12 +60,6 @@ export const ChevronIcon = () => (
   </Icon>
 )
 
-export const ArrowIcon = () => (
-  <Icon>
-    <path d="M5 12h14M13 6l6 6-6 6" />
-  </Icon>
-)
-
 export const PlusIcon = () => (
   <Icon>
     <path d="M12 5v14M5 12h14" />
@@ -119,18 +78,6 @@ export const PeopleIcon = () => (
     <circle cx="9" cy="8.5" r="3.5" />
     <path d="M3 19.5c.7-3 3-5 6-5s5.3 2 6 5" />
     <path d="M15.5 5.3a3.5 3.5 0 0 1 0 6.4M17.5 14.8c1.6.6 2.9 2.2 3.4 4.7" />
-  </Icon>
-)
-
-export const PulseIcon = () => (
-  <Icon>
-    <path d="M3 12h4l2.5-6.5 5 13L17 12h4" />
-  </Icon>
-)
-
-export const BoltIcon = () => (
-  <Icon>
-    <path d="M13 3 5.5 13.5H11L10 21l7.5-10.5H12L13 3Z" />
   </Icon>
 )
 
@@ -158,12 +105,6 @@ export const KeyIcon = () => (
 export const CrossIcon = () => (
   <Icon>
     <path d="M7 7l10 10M17 7 7 17" />
-  </Icon>
-)
-
-export const DotIcon = () => (
-  <Icon>
-    <circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none" />
   </Icon>
 )
 

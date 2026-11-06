@@ -17,43 +17,20 @@ import {
 import { joinCode } from "../logic/join-code.ts"
 import { dateOf } from "../logic/time.ts"
 import { transferAsset } from "../logic/tokens.ts"
-import { ApprovalDots, OutcomeLine, StateChip, useDecide } from "../parts/decide.tsx"
-import { GuardLine, Requests } from "../parts/guard.tsx"
-import { ContactLines, useContacts } from "../parts/contacts.tsx"
-import { CheckIcon } from "../parts/icons.tsx"
-import { AsMember, Reading } from "../parts/member.tsx"
-import { useNowNs } from "../parts/now.ts"
-import { TermsLine, termsAllow, useTermsCheck } from "../parts/terms.tsx"
+import { ApprovalDots, OutcomeLine, StateChip, useDecide } from "./decide.tsx"
+import { GuardLine } from "./guard.tsx"
+import { ContactLines, useContacts } from "./contacts.tsx"
+import { CheckIcon } from "./icons.tsx"
+import { Reading } from "./member.tsx"
+import { useNowNs } from "./now.ts"
+import { TermsLine, termsAllow, useTermsCheck } from "./terms.tsx"
 
 /**
- * The approvals page: every open action, with what each member may do about
- * it. Owners propose and reject; owners and approvers approve and run; a
- * proposer only reads what waits.
+ * Every open action, with what your role lets you do about it: owners
+ * approve, run and reject; approvers approve and run; a proposer only reads
+ * what waits. An action runs once it has its approvals and its wait is over.
  */
-export function Approvals({ wallet }: { wallet: Principal }) {
-  return (
-    <section className="column">
-      <div className="page-head">
-        <p className="eyebrow">Open actions</p>
-        <h1>Approvals</h1>
-        <p className="quiet">
-          Every open action, with what your role lets you do. An action runs once it has its
-          approvals and its wait is over.
-        </p>
-      </div>
-      <AsMember wallet={wallet}>
-        {(me) => (
-          <>
-            <Requests wallet={wallet} me={me} />
-            <OpenActions wallet={wallet} me={me} />
-          </>
-        )}
-      </AsMember>
-    </section>
-  )
-}
-
-function OpenActions({ wallet: id, me }: { wallet: Principal; me: Member }) {
+export function OpenActions({ wallet: id, me }: { wallet: Principal; me: Member }) {
   const { client, wallet } = useWallet(id)
   const pending = useQuery(client.queryOptions(wallet, "pending"))
   const accounts = useQuery(client.queryOptions(wallet, "accounts"))
@@ -197,7 +174,7 @@ function OpenAction({
  * Who proposed an action: you, or a member by label and role, so a proposer
  * such as an AI agent stands out. A member who has left shows as a principal.
  */
-export function proposerText(id: Principal, me: Member, members: Member[] | undefined): string {
+function proposerText(id: Principal, me: Member, members: Member[] | undefined): string {
   if (id === me.id) return "you"
   const member = members?.find((member) => member.id === id)
   return member ? `“${member.label}”, ${roleText(member.role)} (${id})` : id

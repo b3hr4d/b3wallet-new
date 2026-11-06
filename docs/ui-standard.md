@@ -36,7 +36,7 @@ ui/src/
   main.tsx         the browser's entry: hydrates the prerendered page
   prerender.tsx    the build's entry: renders each page to HTML in Node
   app.tsx          the frame both render, the same for every visitor
-  live.tsx         what only the browser renders: the client, the rail, the page's own part
+  live.tsx         what only the browser renders: the client, the account, the page's own part
   app.css
   pages/           one module per page
   parts/           what pages share: components and hooks
@@ -48,8 +48,8 @@ ui/src/
 | Layer | What it holds | It may import | It may not |
 | --- | --- | --- | --- |
 | Entry points | `main.tsx`, `prerender.tsx`, `app.tsx`, `live.tsx` | Everything | Preact by name; `react-dom` outside `main.tsx`, `prerender.tsx` and `live.tsx` |
-| `pages/` | Home, send, receive, account, members, inbox, settings, approvals, claim | `parts/`, `ic/`, `logic/`, `generated/` | Another page, an entry point |
-| `parts/` | The frame's pieces, the rail, shared hooks such as `useDecide` | Other parts, `ic/`, `logic/`, `generated/` | A page, an entry point |
+| `pages/` | Home, settings, members, claim ([decision 0017](decisions/0017-approve-only-ui.md)) | `parts/`, `ic/`, `logic/`, `generated/` | Another page, an entry point |
+| `parts/` | The frame's pieces, the open actions, shared hooks such as `useDecide` | Other parts, `ic/`, `logic/`, `generated/` | A page, an entry point |
 | `ic/` | `client.ts` (the client and sign-in), `canister.ts` (the wallet), `ledger.ts` (ledger metadata), `facts.ts` (the IC's certified state) | `logic/`, `generated/` | A part, a page, an entry point |
 | `logic/` | What the pages say and decide: descriptions, health, tokens, time, QR codes | `generated/` | React, a client, the browser's globals |
 
@@ -100,8 +100,7 @@ checks the rules still refuse what they should.
 7. **The browser keeps as little as it can.** The claim page reads its key
    from the address's fragment and drops it from the address bar and
    history at once. Besides the sign-in session, which `@icp-sdk/auth` keeps
-   in IndexedDB until it expires, the only thing kept is which audit entries
-   were seen (`parts/seen.ts`), a convenience nothing depends on.
+   in IndexedDB until it expires, nothing is kept.
 
 ## What ships
 

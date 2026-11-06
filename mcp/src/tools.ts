@@ -1,7 +1,7 @@
 // The tools an AI agent gets: read the wallet, ask to join it as a proposer,
 // and propose transfers. None approves, runs or rejects anything, and the
 // wallet would refuse a proposer that tried: every transfer the agent
-// proposes waits for an owner or an approver on the wallet's Approvals page.
+// proposes waits for an owner or an approver on the wallet's start page.
 import { isPrincipal, principal } from "@candid-core/schema"
 import { isReactorError, type Client } from "@ic-reactor/core"
 import type { Grant } from "@meantjs/consent"
@@ -439,7 +439,7 @@ export function termsWallet(
 
 /**
  * Refuses a transfer outside the terms an owner confirmed for its request,
- * as the wallet's Approvals page would: it offers no Approve for one.
+ * as the wallet's start page would: it offers no Approve for one.
  */
 export function checkTerms(
   request: bigint,
@@ -459,12 +459,12 @@ export function checkTerms(
     })
   } catch {
     throw new InvalidArguments(
-      `the terms an owner confirmed for request ${request} cannot be read, so the Approvals page would offer no Approve: ask the owner to withdraw them, then write them again`,
+      `the terms an owner confirmed for request ${request} cannot be read, so the wallet's start page would offer no Approve: ask the owner to withdraw them, then write them again`,
     )
   }
   if (!result.fits) {
     throw new InvalidArguments(
-      `this transfer is outside the terms an owner confirmed for request ${request}, “${confirmation.text}”: ${result.reasons.join("; ")}. The Approvals page would offer no Approve for it. Propose one within the terms, or ask the user`,
+      `this transfer is outside the terms an owner confirmed for request ${request}, “${confirmation.text}”: ${result.reasons.join("; ")}. The wallet's start page would offer no Approve for it. Propose one within the terms, or ask the user`,
     )
   }
 }
@@ -718,7 +718,7 @@ function tools(client: Client, config: Config): Tool[] {
       name: "wallet_join",
       title: "Ask to join the wallet",
       description:
-        "Asks to join the wallet as a proposer: one who reads it and proposes transfers, and whose approval never counts. An owner approves the request on the wallet's Approvals page, after checking it shows the code this returns. Asking again while the request is open returns the same request.",
+        "Asks to join the wallet as a proposer: one who reads it and proposes transfers, and whose approval never counts. An owner approves the request on the wallet's start page, after checking it shows the code this returns. Asking again while the request is open returns the same request.",
       inputSchema: {
         type: "object",
         properties: {
@@ -896,7 +896,7 @@ function tools(client: Client, config: Config): Tool[] {
       name: "wallet_requests",
       title: "The owners' requests",
       description:
-        "What the owners ask you to do, in their own words, oldest first: each open request's id, text, the terms you wrote for it and what an owner said to them, and the actions already proposed for it. First write the terms you read in a request with wallet_propose_terms, and wait for an owner to confirm them. Then answer it with wallet_propose_transfer and its request id: the wallet's guard checks your transfer against the owner's words, and the Approvals page against the terms.",
+        "What the owners ask you to do, in their own words, oldest first: each open request's id, text, the terms you wrote for it and what an owner said to them, and the actions already proposed for it. First write the terms you read in a request with wallet_propose_terms, and wait for an owner to confirm them. Then answer it with wallet_propose_transfer and its request id: the wallet's guard checks your transfer against the owner's words, and the wallet's start page against the terms.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       readOnly: true,
       run: async () =>
@@ -913,7 +913,7 @@ function tools(client: Client, config: Config): Tool[] {
     {
       name: "wallet_propose_terms",
       title: "Write the terms of a request",
-      description: `Writes the terms you read in an owner's request, from wallet_requests: the token, who is paid, the most, and the latest time the transfer may be sent. An owner reads them in words on the wallet's Approvals page, and confirms them or says no. Until an owner confirms them, the wallet refuses a transfer for the request, and the Approvals page offers no Approve for a transfer outside them. Write only what the owner's words say: when they do not say the token, the recipient, the amount or how long, ask the user instead of guessing, and write “unlimited” or “never” only when the owner plainly allows it. Terms that cannot be read are refused, with why, before anything is written. A request takes ${MAX_DRAFTS} drafts at most, and none once a transfer answers it.`,
+      description: `Writes the terms you read in an owner's request, from wallet_requests: the token, who is paid, the most, and the latest time the transfer may be sent. An owner reads them in words on the wallet's start page, and confirms them or says no. Until an owner confirms them, the wallet refuses a transfer for the request, and the wallet's start page offers no Approve for a transfer outside them. Write only what the owner's words say: when they do not say the token, the recipient, the amount or how long, ask the user instead of guessing, and write “unlimited” or “never” only when the owner plainly allows it. Terms that cannot be read are refused, with why, before anything is written. A request takes ${MAX_DRAFTS} drafts at most, and none once a transfer answers it.`,
       inputSchema: {
         type: "object",
         properties: {
@@ -979,7 +979,7 @@ function tools(client: Client, config: Config): Tool[] {
       name: "wallet_propose_transfer",
       title: "Propose a transfer",
       description:
-        "Proposes sending an amount from one of the wallet's accounts. It sends nothing: the transfer waits until an owner or an approver approves and runs it on the wallet's Approvals page, and expires after seven days. You can have at most 8 actions open at once. Name the owner's request it answers, from wallet_requests: the wallet's guard then checks it against the owner's own words, and without one it cannot. A request whose terms you wrote takes a transfer only once an owner has confirmed them, and only one within them.",
+        "Proposes sending an amount from one of the wallet's accounts. It sends nothing: the transfer waits until an owner or an approver approves and runs it on the wallet's start page, and expires after seven days. You can have at most 8 actions open at once. Name the owner's request it answers, from wallet_requests: the wallet's guard then checks it against the owner's own words, and without one it cannot. A request whose terms you wrote takes a transfer only once an owner has confirmed them, and only one within them.",
       inputSchema: {
         type: "object",
         properties: {

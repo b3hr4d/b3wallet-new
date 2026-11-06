@@ -14,17 +14,14 @@ their quorum and timelock, a new device can ask to join, and every change
 leaves one entry in an append-only audit log. It serves its own UI, certified
 and with a strict Content-Security-Policy: a React app from `ui/`, prerendered
 at build and shipped on Preact
-([decision 0011](docs/decisions/0011-preact-compat.md)). On every page a rail
-beside it, or the page itself on a narrower screen, shows members what needs
-them: what is wrong or worth watching, with
-a notice for every open action that is not a transfer, and each action they
-may approve or run, with its buttons, then the newest audit entries. Its
-start page shows the wallet's version and who you are to it, and shows
-members the wallet at a glance: its holdings per token and how they split
-between accounts, its open actions, cycles, policy, members and version, and
-its accounts and their balances; it lets
-owners add and rename accounts, each with a name of its own
-([decision 0016](docs/decisions/0016-unique-account-names.md)), and lets someone signed in who is not a member ask to
+([decision 0011](docs/decisions/0011-preact-compat.md)). Its start page is
+the only page a member uses day to day
+([decision 0017](docs/decisions/0017-approve-only-ui.md)): it shows the
+wallet's holdings per token and how they split between accounts, the open
+actions with the buttons the member's role allows, the requests the owners
+wrote for their agent, and each account's balances and addresses to copy;
+a health chip in the bar says what needs you. It lets someone signed in who
+is not a member ask to
 join, as a viewer or, for an AI agent through the MCP server in `mcp/`, as a
 proposer whose transfers always wait for an owner
 ([decision 0007](docs/decisions/0007-agent-proposer.md)), and owners can load a guard
@@ -33,17 +30,16 @@ against the request the owner wrote for it, in a free query, flagging what
 differs
 ([decision 0012](docs/decisions/0012-guard-in-wallet.md)); before the agent
 answers a request, an owner confirms the terms it read there (the token, who
-is paid, the most and the latest end, in words), and the approvals page
+is paid, the most and the latest end, in words), and the start page
 offers no Approve for a transfer outside them
-([decision 0014](docs/decisions/0014-confirmed-terms.md)); its send page
-proposes and runs a transfer, its receive page shows each account's whole
-address and its QR code to give a sender, each account's page shows what it
-holds and its open transfers, its inbox lists what needs you and what
-happened, its approvals page approves,
-rejects and runs the open actions, its settings page shows the members, a
-security checkup and the controllers and module hash the IC certifies, its
-members page proposes adding, removing and changing the role of members, and
-its claim page lets the
+([decision 0014](docs/decisions/0014-confirmed-terms.md)). The agent proposes
+every transfer; there is no send page. Its settings page holds what only an
+owner can do: the members and the policy, the accounts, each with a name of
+its own ([decision 0016](docs/decisions/0016-unique-account-names.md)), and
+the tokens they show, the contacts, the guard's model, a security checkup,
+the recovery controller, upgrades, and the controllers and module hash the
+IC certifies; its members page proposes adding, removing and changing the
+role of members, and its claim page lets the
 holder of the claim link sign in with Internet Identity and claim the wallet
 ([decision 0006](docs/decisions/0006-client-library.md) chose ic-reactor 4 to
 call it). It

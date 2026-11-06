@@ -1,5 +1,5 @@
 import { isPrincipal, principal, type Principal } from "@candid-core/schema"
-import { useMutation, type UseQueryResult } from "@tanstack/react-query"
+import { useMutation, useQuery, type UseQueryResult } from "@tanstack/react-query"
 import { useState, type ReactNode } from "react"
 import type {
   Account,
@@ -11,7 +11,7 @@ import type {
 } from "../generated/wallet.ts"
 import { useWallet } from "../ic/canister.ts"
 import { useToken } from "../ic/ledger.ts"
-import { failureText, shortText } from "../logic/describe.ts"
+import { failureText, receiveNote, shortText } from "../logic/describe.ts"
 import {
   amountParts,
   chainKey,
@@ -22,13 +22,13 @@ import {
   type Token,
 } from "../logic/tokens.ts"
 import { CopyButton } from "./copy.tsx"
-import { ArrowIcon, CrossIcon, PlusIcon, RefreshIcon } from "./icons.tsx"
+import { CrossIcon, PlusIcon, RefreshIcon } from "./icons.tsx"
 
 /** The read of what one account holds of one asset. */
 export type BalanceRead = { account: Account; asset: Chain; read: UseQueryResult<Balance> }
 
 /** An amount to show large: grouped digits, a quieter fraction, the symbol. */
-export function Amount({ amount, token }: { amount: bigint; token: Token }) {
+function Amount({ amount, token }: { amount: bigint; token: Token }) {
   const { whole, fraction, symbol } = amountParts(amount, token)
   return (
     <span className="amount">
@@ -150,28 +150,17 @@ function Split({ parts }: { parts: Array<{ label: string; share: number }> }) {
 }
 
 /**
- * The wallet's accounts with their balances and the tokens they show, for
- * every member; owners also track tokens and add accounts here. Every wallet
- * starts with one account of each kind, so adding one is the last thing on
- * the card.
+ * The wallet's accounts with their balances and their addresses to copy, for
+ * every member. Owners name, add and track tokens for them in settings
+ * (`ManageAccounts`).
  */
 export function Accounts({
-  wallet: id,
-  me,
-  network,
   accounts,
-  assets,
   balances,
 }: {
-  wallet: Principal
-  me: Member
-  network: BitcoinNetwork
   accounts: UseQueryResult<Account[]>
-  assets: UseQueryResult<Chain[]>
   balances: BalanceRead[]
 }) {
-  const owner = me.role.tag === "Owner"
-  const [adding, setAdding] = useState(false)
   const reading = balances.some(({ read }) => read.isFetching)
   return (
     <section className="card" id="accounts">
@@ -212,6 +201,73 @@ export function Accounts({
           ))}
         </ul>
       )}
+    </section>
+  )
+}
+
+/**
+ * The accounts as owners set them up, in settings: each account's name, the
+ * tokens the accounts show, and another account. None of it moves anything,
+ * so none of it waits for approval; every wallet starts with one account of
+ * each kind, so adding one is the last thing on the card. Members who are
+ * not owners read the names and tokens.
+ */
+export function ManageAccounts({
+  wallet: id,
+  me,
+  network,
+}: {
+  wallet: Principal
+  me: Member
+  network: BitcoinNetwork
+}) {
+  const { client, wallet } = useWallet(id)
+  const accounts = useQuery(client.queryOptions(wallet, "accounts"))
+  const assets = useQuery(client.queryOptions(wallet, "assets"))
+  const owner = me.role.tag === "Owner"
+  const [adding, setAdding] = useState(false)
+  const [renaming, setRenaming] = useState<number | undefined>(undefined)
+  return (
+    <section className="card" id="accounts">
+      <div className="card-head">
+        <h2>Accounts</h2>
+        {accounts.data !== undefined && <span className="count">{accounts.data.length}</span>}
+      </div>
+      {accounts.isError ? (
+        <p className="error">{failureText(accounts.error)}</p>
+      ) : accounts.data === undefined ? (
+        <span className="skeleton wide" />
+      ) : (
+        <ul className="list">
+          {accounts.data.map((account) => (
+            <li key={account.id} className="item">
+              <p className="item-head">
+                <KindAvatar kind={account.kind} />
+                <strong>{account.label}</strong>
+                <span className="quiet">
+                  {kindText(account.kind)} · {account.index}
+                </span>
+                {owner && renaming !== account.id && (
+                  <button
+                    type="button"
+                    className="ghost small"
+                    onClick={() => setRenaming(account.id)}
+                  >
+                    Rename
+                  </button>
+                )}
+              </p>
+              {renaming === account.id && (
+                <RenameAccount
+                  wallet={id}
+                  account={account}
+                  onDone={() => setRenaming(undefined)}
+                />
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
       <Tokens wallet={id} network={network} assets={assets} owner={owner} />
       {owner &&
         (adding ? (
@@ -231,8 +287,7 @@ export function Accounts({
 /**
  * One account, as a card: its first asset's balance large, which the wallet
  * asks a ledger, the Bitcoin canister or an EVM chain's providers for, its
- * other tokens, and its address to copy. The card opens the account's own
- * page, which holds the rest.
+ * other tokens, and its address to copy, which is how it receives.
  */
 function AccountItem({ account, reads }: { account: Account; reads: BalanceRead[] }) {
   const [first, ...more] = reads
@@ -254,14 +309,11 @@ function AccountItem({ account, reads }: { account: Account; reads: BalanceRead[
       <div className="account-top">
         <KindAvatar kind={account.kind} />
         <p className="account-name">
-          <a className="account-link" href={`/account?id=${account.id}`}>
-            <strong>{account.label}</strong>
-          </a>
+          <strong>{account.label}</strong>
           <span>
             {kindText(account.kind)} · {account.index}
           </span>
         </p>
-        <ArrowIcon />
       </div>
       <p className="account-balance">{shown}</p>
       {more.length > 0 && (
@@ -275,6 +327,19 @@ function AccountItem({ account, reads }: { account: Account; reads: BalanceRead[
         <code>{shortText(account.address, 10, 6)}</code>
         <CopyButton text={account.address} label={`Copy the address of ${account.label}`} />
       </p>
+      <p className="quiet small">{receiveNote(account.kind)}</p>
+      {account.icp_account_id !== null && (
+        <p className="account-address">
+          <code>{shortText(account.icp_account_id, 10, 6)}</code>
+          <CopyButton
+            text={account.icp_account_id}
+            label={`Copy the ICP account identifier of ${account.label}, which exchanges ask for`}
+          />
+        </p>
+      )}
+      {account.icp_account_id !== null && (
+        <p className="quiet small">{receiveNote(account.kind, "identifier")}</p>
+      )}
     </li>
   )
 }
@@ -294,20 +359,8 @@ export function HeldAsset({ asset, read }: { asset: Chain; read: UseQueryResult<
   )
 }
 
-/** What an account receives, over its address. */
-export function receivesText(kind: AccountKind): string {
-  switch (kind.tag) {
-    case "InternetComputer":
-      return "Receives ICP and ICRC-1 tokens at"
-    case "Bitcoin":
-      return "Receives bitcoin at"
-    case "Evm":
-      return "Receives on each tracked EVM chain at"
-  }
-}
-
 /** An account by its kind, in plain text: networks are named, never drawn. */
-export function KindAvatar({ kind }: { kind: AccountKind }) {
+function KindAvatar({ kind }: { kind: AccountKind }) {
   const text = kind.tag === "InternetComputer" ? "ICP" : kind.tag === "Bitcoin" ? "BTC" : "EVM"
   return (
     <span className="avatar token" aria-hidden="true">
@@ -543,7 +596,7 @@ type Kind = AccountKind["tag"]
  * and the wallet refuses a name another account has (decision 0016); the
  * rename is in the activity log.
  */
-export function RenameAccount({
+function RenameAccount({
   wallet: id,
   account,
   onDone,

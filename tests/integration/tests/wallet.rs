@@ -1400,14 +1400,8 @@ fn an_audit_page_holds_at_most_a_hundred_entries() {
 // ---- Step 7: certified pages -------------------------------------------------
 
 const INDEX_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/index.html");
-const SEND_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/send.html");
-const APPROVALS_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/approvals.html");
-const RECEIVE_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/receive.html");
-const ACCOUNT_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/account.html");
 const MEMBERS_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/members.html");
 const SETTINGS_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/settings.html");
-const NOTIFICATIONS_HTML: &[u8] =
-    include_bytes!("../../../canisters/wallet/pages/notifications.html");
 const CLAIM_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/claim.html");
 const NOT_FOUND_HTML: &[u8] = include_bytes!("../../../canisters/wallet/pages/404.html");
 const APP_JS: &[u8] = include_bytes!("../../../canisters/wallet/pages/app.js");
@@ -1527,18 +1521,9 @@ fn check_every_page(pic: &PocketIc, id: Principal) {
         ("/", 200, INDEX_HTML, HTML),
         ("/index.html", 200, INDEX_HTML, HTML),
         ("/?from=link", 200, INDEX_HTML, HTML),
-        ("/send", 200, SEND_HTML, HTML),
-        ("/send.html", 200, SEND_HTML, HTML),
-        ("/receive", 200, RECEIVE_HTML, HTML),
-        ("/receive.html", 200, RECEIVE_HTML, HTML),
-        ("/account", 200, ACCOUNT_HTML, HTML),
-        ("/account.html", 200, ACCOUNT_HTML, HTML),
-        ("/approvals", 200, APPROVALS_HTML, HTML),
-        ("/approvals.html", 200, APPROVALS_HTML, HTML),
+        ("/approvals", 200, INDEX_HTML, HTML),
         ("/members", 200, MEMBERS_HTML, HTML),
         ("/members.html", 200, MEMBERS_HTML, HTML),
-        ("/notifications", 200, NOTIFICATIONS_HTML, HTML),
-        ("/notifications.html", 200, NOTIFICATIONS_HTML, HTML),
         ("/settings", 200, SETTINGS_HTML, HTML),
         ("/settings.html", 200, SETTINGS_HTML, HTML),
         ("/claim", 200, CLAIM_HTML, HTML),
@@ -1547,6 +1532,8 @@ fn check_every_page(pic: &PocketIc, id: Principal) {
         ("/app.css", 200, APP_CSS, "text/css; charset=utf-8"),
         ("/404.html", 200, NOT_FOUND_HTML, HTML),
         ("/claims", 404, NOT_FOUND_HTML, HTML),
+        ("/send", 404, NOT_FOUND_HTML, HTML),
+        ("/approvals.html", 404, NOT_FOUND_HTML, HTML),
         ("/assets/app.js", 404, NOT_FOUND_HTML, HTML),
     ];
     for &(url, status, body, content_type) in pages {

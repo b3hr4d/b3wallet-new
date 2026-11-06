@@ -582,7 +582,7 @@ test("an amount the token cannot hold is refused before anything is proposed", a
   client.dispose()
 })
 
-test("joining asks to be a proposer, and returns the code the Approvals page shows", async () => {
+test("joining asks to be a proposer, and returns the code the start page shows", async () => {
   const { client, agent, run, joins } = setUp()
   const me = agent.getPrincipal().toText()
   const before = JSON.parse(await run("wallet_whoami"))
@@ -776,7 +776,7 @@ test("a request's terms show what an owner said, and a transfer for it must fit 
   })
   const transfer = { request: 4, from: 1, to: FRIEND, amount: "1.5" }
   await assert.rejects(run("wallet_propose_transfer", { ...transfer, amount: "2" }), {
-    message: `this transfer is outside the terms an owner confirmed for request 4, “${CONFIRMED.text}”: the request allows 2 ICP, the terms say at most 1.5 ICP. The Approvals page would offer no Approve for it. Propose one within the terms, or ask the user`,
+    message: `this transfer is outside the terms an owner confirmed for request 4, “${CONFIRMED.text}”: the request allows 2 ICP, the terms say at most 1.5 ICP. The wallet's start page would offer no Approve for it. Propose one within the terms, or ask the user`,
   })
   await assert.rejects(run("wallet_propose_transfer", { ...transfer, to: OWNER }), {
     message: /the recipient is aaaaa-aa, the terms say 2vxsx-fae/,

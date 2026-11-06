@@ -195,7 +195,7 @@ export function Contacts({ wallet: id, me }: { wallet: Principal; me: Member }) 
       {proposed && (
         <p className="hint">
           Proposed as action {String(proposed.id)}. Approve and run it on the{" "}
-          <a href="/approvals">Approvals page</a>
+          <a href="/">start page</a>
           {proposed.executable_after_ns > proposed.proposed_at_ns
             ? `, from ${dateOf(proposed.executable_after_ns)}`
             : ""}

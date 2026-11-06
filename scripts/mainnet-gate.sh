@@ -331,7 +331,7 @@ check_running() {
 check_pages() {
   local path code page
   page=$(page_of "$wallet")
-  for path in / /index.html /claim /send /approvals /app.js /app.css; do
+  for path in / /index.html /claim /settings /approvals /app.js /app.css; do
     code=$(curl -s -o /dev/null -w '%{http_code}' "$page$path")
     if [ "$code" != 200 ]; then
       echo "$page$path answers $code." >&2
