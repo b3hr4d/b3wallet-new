@@ -18,6 +18,8 @@ const PLACEHOLDERS: [&str; 5] = [
     "[unused4]",
     "[unused5]",
 ];
+/// `tokenizer.NAME_PIECES` (round 11): the one piece for each use of an own account's label, and of a contact's name.
+const NAME_PIECES: [&str; 2] = ["[unused6]", "[unused7]"];
 
 /// `names.STAND_INS`: training labels, one vocabulary word each, for the first, second, ... name a request uses.
 const STAND_INS: [&str; 8] = [
@@ -142,6 +144,7 @@ pub struct Tokenizer {
     cls: u32,
     sep: u32,
     placeholders: [u32; 5],
+    name_pieces: [u32; 2],
 }
 
 /// `tokenizer.identifier_kind`: the placeholder (0 for [unused1] .. 4 for [unused5]) for a stripped,
@@ -210,7 +213,9 @@ impl Tokenizer {
         for (slot, p) in placeholders.iter_mut().zip(PLACEHOLDERS) {
             *slot = id(p)?;
         }
+        let name_pieces = [id(NAME_PIECES[0])?, id(NAME_PIECES[1])?];
         Ok(Tokenizer {
+            name_pieces,
             unk: id("[UNK]")?,
             cls: id("[CLS]")?,
             sep: id("[SEP]")?,
@@ -327,18 +332,32 @@ impl Tokenizer {
     }
 
     pub fn tokenize(&self, text: &[char]) -> Vec<Piece> {
-        let mut pieces = Vec::new();
-        let mut cursor = 0;
-        for (start, end, kind) in self.identifiers(text) {
-            for (word, src) in self.words(text, cursor, start) {
-                self.wordpiece(&word, &src, &mut pieces);
-            }
-            pieces.push(Piece {
+        self.tokenize_named(text, &[])
+    }
+
+    /// `tokenizer.tokenize(text, names)`: with `names` (round 11, `Tokenizer::name_pieces`), each of the wallet's
+    /// names the request uses is one piece covering exactly the name, as an identifier is. They never overlap an
+    /// identifier.
+    pub fn tokenize_named(&self, text: &[char], names: &[Piece]) -> Vec<Piece> {
+        let mut found: Vec<Piece> = self
+            .identifiers(text)
+            .into_iter()
+            .map(|(start, end, kind)| Piece {
                 id: self.placeholders[kind],
                 start,
                 end,
-            });
-            cursor = end;
+            })
+            .chain(names.iter().copied())
+            .collect();
+        found.sort_by_key(|p| (p.start, p.end));
+        let mut pieces = Vec::new();
+        let mut cursor = 0;
+        for piece in found {
+            for (word, src) in self.words(text, cursor, piece.start) {
+                self.wordpiece(&word, &src, &mut pieces);
+            }
+            pieces.push(piece);
+            cursor = piece.end;
         }
         for (word, src) in self.words(text, cursor, text.len()) {
             self.wordpiece(&word, &src, &mut pieces);
@@ -398,9 +417,14 @@ impl Tokenizer {
         Some(words)
     }
 
-    /// `names.rewrite`: `text` with each of the wallet's names it uses (whole words, case and accents folded,
-    /// longest first, then left to right) swapped for a training label the model reads well, and the map back.
-    pub fn swap_names(&self, text: &[char], names: &[String], symbols: &[String]) -> Swap {
+    /// `names.find`: (start, end, k) for each place `text` uses names[k]: whole words, case and accents folded,
+    /// longest names first (the first of equal ones, as the order of `names`), then left to right, never overlapping.
+    fn find_names(
+        &self,
+        text: &[char],
+        names: &[String],
+        symbols: &[String],
+    ) -> Vec<(usize, usize, usize)> {
         let mut wanted: Vec<(Vec<Vec<char>>, usize)> = names
             .iter()
             .enumerate()
@@ -424,6 +448,53 @@ impl Tokenizer {
                 None => i += 1,
             }
         }
+        found
+    }
+
+    /// The vocabulary ids of [unused6] (an own account's label) and [unused7] (a contact's name).
+    pub fn name_piece_ids(&self) -> [u32; 2] {
+        self.name_pieces
+    }
+
+    /// `names.pieces` (round 11): the name pieces of `text`, for `tokenize_named`. The own accounts' `labels` and the
+    /// `contacts`' names are found together by `names.find`'s rules (never an address, never an asset, chain or
+    /// token word); a label takes [unused6], a contact's name [unused7], and a contact's name that is also a label's
+    /// (the wallet refuses this when it is saved) [unused6].
+    pub fn name_pieces(
+        &self,
+        text: &[char],
+        labels: &[String],
+        contacts: &[String],
+        symbols: &[String],
+    ) -> Vec<Piece> {
+        let names: Vec<String> = labels.iter().chain(contacts).cloned().collect();
+        let key = |n: &String| {
+            self.swappable(n, &[]).map(|w| {
+                w.iter()
+                    .map(|x| x.iter().collect::<String>())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+        };
+        let label_keys: Vec<String> = labels.iter().filter_map(key).collect();
+        self.find_names(text, &names, symbols)
+            .into_iter()
+            .map(|(start, end, k)| {
+                let account =
+                    k < labels.len() || key(&names[k]).is_some_and(|w| label_keys.contains(&w));
+                Piece {
+                    id: self.name_pieces[usize::from(!account)],
+                    start,
+                    end,
+                }
+            })
+            .collect()
+    }
+
+    /// `names.rewrite`: `text` with each of the wallet's names it uses (whole words, case and accents folded,
+    /// longest first, then left to right) swapped for a training label the model reads well, and the map back.
+    pub fn swap_names(&self, text: &[char], names: &[String], symbols: &[String]) -> Swap {
+        let found = self.find_names(text, names, symbols);
         let mut order: Vec<usize> = Vec::new();
         let mut swap = Swap {
             text: Vec::new(),
@@ -456,7 +527,12 @@ impl Tokenizer {
     /// [CLS] pieces [SEP] and the pieces, or None when that is more than MAX_POSITIONS positions (the request is
     /// never cut: a cut could shorten an amount or an address). Token types are all 0.
     pub fn encode(&self, text: &[char]) -> Option<(Vec<u32>, Vec<Piece>)> {
-        let pieces = self.tokenize(text);
+        self.encode_named(text, &[])
+    }
+
+    /// `encode` with the wallet's name pieces (`tokenize_named`).
+    pub fn encode_named(&self, text: &[char], names: &[Piece]) -> Option<(Vec<u32>, Vec<Piece>)> {
+        let pieces = self.tokenize_named(text, names);
         if pieces.len() + 2 > MAX_POSITIONS {
             return None;
         }

@@ -4754,9 +4754,6 @@ fn the_guard_loads_only_its_pinned_file() {
     );
 }
 
-/// With the round-9 file (GUARD_BIN; 44 MB, not in the repository, so the test passes without checking anything
-/// when it is unset): the guard matches the transfer the owner asked for, flags one with another amount or a memo
-/// they never mentioned, and is loaded again after an upgrade.
 /// Uploads and loads the guard file as an owner.
 fn load_guard(pic: &PocketIc, id: Principal, owner: Principal, file: &[u8]) {
     for (k, chunk) in file.chunks(wallet::GUARD_MAX_CHUNK).enumerate() {
@@ -4769,10 +4766,13 @@ fn load_guard(pic: &PocketIc, id: Principal, owner: Principal, file: &[u8]) {
             .unwrap();
     assert_eq!(
         (loaded.loaded, loaded.release.as_deref()),
-        (true, Some("release-round9"))
+        (true, Some("release-round11"))
     );
 }
 
+/// With the round-11 file (GUARD_BIN; 44 MB, not in the repository, so the test passes without checking anything
+/// when it is unset): the guard matches the transfer the owner asked for, flags one with another amount or a memo
+/// they never mentioned, and is loaded again after an upgrade.
 #[test]
 fn the_guard_checks_a_proposed_transfer() {
     let Ok(path) = std::env::var("GUARD_BIN") else {
@@ -4787,7 +4787,7 @@ fn the_guard_checks_a_proposed_transfer() {
         audit(&pic, id, owner).last(),
         Some(&(
             Some(owner),
-            AuditEvent::GuardLoaded("release-round9".to_string())
+            AuditEvent::GuardLoaded("release-round11".to_string())
         ))
     );
 
@@ -4891,13 +4891,98 @@ fn the_guard_reads_the_wallets_own_account_names() {
         .map(|s| s.text.as_str())
         .collect();
     assert_eq!(to, ["BTC Savings"]);
-    let elsewhere = report(LedgerAccount::from(user(20)).to_string());
+    // Another of the wallet's own accounts: a stranger's address the wallet refuses outright under the default
+    // `proposer_recipients = Known` (decision 0015), before the guard is asked.
+    let rent = add_account(&pic, id, owner, AccountKind::InternetComputer, "Rent").unwrap();
+    let elsewhere = report(rent.address);
     assert_eq!(elsewhere.overall, wallet::GuardOverall::Differs);
     assert!(
         elsewhere
             .fields
             .iter()
             .any(|f| f.field == "to" && f.verdict == wallet::GuardVerdict::Differs)
+    );
+}
+
+/// Round 11 reads a saved contact's name as one piece (candid-profile SELECTION.md round 11): "Pay Uncle Femi"
+/// matches a transfer to Uncle Femi's address and flags one to anyone else, beside an account label holding a coin
+/// word. GUARD_BIN as above.
+#[test]
+fn the_guard_reads_the_owners_contacts() {
+    let Ok(path) = std::env::var("GUARD_BIN") else {
+        eprintln!("skipped: GUARD_BIN names the guard file");
+        return;
+    };
+    let pic = PocketIc::new();
+    let (id, owner) = claimed_wallet(&pic);
+    load_guard(&pic, id, owner, &std::fs::read(&path).unwrap());
+    let savings = add_account(
+        &pic,
+        id,
+        owner,
+        AccountKind::InternetComputer,
+        "BTC Savings",
+    )
+    .unwrap();
+    let femi = LedgerAccount::from(user(20));
+    add_contact(&pic, id, owner, "Uncle Femi", femi);
+    add_contact(&pic, id, owner, "Dana", LedgerAccount::from(user(21)));
+    let agent = user(30);
+    run_at_once(
+        &pic,
+        id,
+        owner,
+        add_member_action_labelled(agent, Role::Proposer, "Claude on my Mac"),
+    );
+    let report = |words: &str, to: String| {
+        let request = ask(&pic, id, owner, words).unwrap().unwrap();
+        let action = Action::Transfer(TransferRequest {
+            from: savings.id,
+            asset: None,
+            to,
+            amount: 300_000_000u64.into(),
+            fee: None,
+            memo: None,
+        });
+        let proposed = propose_for(&pic, id, agent, request.id, action).unwrap();
+        let report = guard_check(&pic, id, owner, proposed.id, false)
+            .unwrap()
+            .unwrap();
+        let verdict = |field: &str| {
+            report
+                .fields
+                .iter()
+                .find(|f| f.field == field)
+                .map(|f| f.verdict)
+        };
+        let span = |slot: &str| {
+            report
+                .spans
+                .iter()
+                .find(|s| s.slot == slot)
+                .map(|s| s.text.clone())
+        };
+        (report.overall, verdict("to"), span("to"), span("from"))
+    };
+    let words = "Pay Uncle Femi 3 ICP from my BTC Savings";
+    assert_eq!(
+        report(words, femi.to_string()),
+        (
+            wallet::GuardOverall::Matches,
+            Some(wallet::GuardVerdict::Same),
+            Some("Uncle Femi".to_string()),
+            Some("BTC Savings".to_string())
+        )
+    );
+    // The agent pays Dana, another contact, instead: flagged. (A stranger's address the wallet refuses outright,
+    // under the default `proposer_recipients = Known`.)
+    let (overall, to_verdict, ..) = report(words, LedgerAccount::from(user(21)).to_string());
+    assert_eq!(
+        (overall, to_verdict),
+        (
+            wallet::GuardOverall::Differs,
+            Some(wallet::GuardVerdict::Differs)
+        )
     );
 }
 

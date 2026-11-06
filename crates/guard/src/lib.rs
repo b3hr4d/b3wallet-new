@@ -1,8 +1,12 @@
 //! The B3Wallet guard: reads the person's own words ("send 80 ICP to Dana, she still owes me 90"), marks where the
 //! amount, asset, chain, from account, recipient, memo and fee are and what kind of request it is, and checks a
 //! proposed transfer against them field by field. The Rust port of candid-profile's shipped guard
-//! (`packages/profile-router/guard/`): stage 1 (the round-9 BERT-mini tagger, the comparator and the request rule)
-//! and stage 2 (the keyword list cut to the 1% false-flag bar, for texts an approver reads).
+//! (`packages/profile-router/guard/`): stage 1 (the BERT-mini tagger, the comparator and the request rule) and
+//! stage 2 (the keyword list cut to the 1% false-flag bar, for texts an approver reads).
+//!
+//! **Names.** How the model reads the wallet's names is the release's (`labels.names` in the file's header,
+//! `Reading`): round 9 has none, and its reading swaps the own accounts' labels for training labels; round 11 reads
+//! every use of an own account's label or a contact's name as one piece (`Tokenizer::name_pieces`).
 //!
 //! **The one rule.** The guard only adds flags for a person to read. It never approves, never removes a flag and
 //! never outputs a value: the model's answer is a class plus spans of the request, and every verdict is made by
@@ -94,8 +98,20 @@ fn strings(v: &Value, what: &str) -> Result<Vec<String>, String> {
         .collect()
 }
 
+/// How a release's model reads the wallet's names (candid-profile `guard/names.py` `reading`, from labels.json's
+/// `names`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reading {
+    /// No `names` (round 9): the own accounts' labels are swapped for training labels and the spans mapped back;
+    /// contacts' names are read as written.
+    Label,
+    /// `"pieces"` (round 11): each use of an own account's label or a contact's name is one piece.
+    Pieces,
+}
+
 pub struct Guard {
     pub model: Model,
+    pub reading: Reading,
     pub tokenizer: Tokenizer,
     pub classes: Vec<String>,
     pub tags: Vec<String>,
@@ -139,7 +155,13 @@ impl Guard {
             return Err("config.max_len is not 128".into());
         }
         let vocab = strings(&header["vocab"], "vocab")?;
+        let reading = match (&l["names"], l["names"].as_str()) {
+            (Value::Null, _) | (_, Some("label")) => Reading::Label,
+            (_, Some("pieces")) => Reading::Pieces,
+            _ => return Err("labels.names is neither label nor pieces".into()),
+        };
         Ok(Guard {
+            reading,
             model: Model::new(header, classes.len(), tags.len(), vocab.len(), data)?,
             tokenizer: Tokenizer::new(&vocab, tokenizer::Tables::from_json(&header["tables"])?)?,
             rule: RequestRule::new(&vocab),
@@ -199,7 +221,7 @@ impl Guard {
         self.answer_named(request, &[], &[])
     }
 
-    /// The answer with the wallet's names swapped before the model reads (`Tokenizer::swap_names`: each of `names`
+    /// Round 9's reading: the answer with the wallet's names swapped before the model reads (`Tokenizer::swap_names`: each of `names`
     /// the request uses becomes a training label, except names that are addresses, asset or chain words or one of
     /// `symbols`), its spans mapped back onto the request. The model reads "my BTC Savings" as a label, not as a
     /// second asset; what a name means is still the comparator's to resolve, from the request's own words.
@@ -215,21 +237,56 @@ impl Guard {
         let request: Vec<char> = request.chars().collect();
         let swap = self.tokenizer.swap_names(&request, names, symbols);
         let text = &swap.text;
-        let Some((ids, pieces)) = self.tokenizer.encode(text) else {
-            return Ok(Answer {
+        let mut answer = self.answer_encoded(text, self.tokenizer.encode(text));
+        for (_, span) in answer.spans.iter_mut() {
+            *span = swap.back(*span);
+        }
+        Ok(answer)
+    }
+
+    /// The answer with the wallet's names read as this release reads them (`reading`): `ctx`'s account labels,
+    /// contacts' names and token symbols. What the wallet calls.
+    pub fn answer_in(&self, request: &str, ctx: &Context) -> Result<Answer, String> {
+        let labels: Vec<String> = ctx.accounts.iter().map(|a| a.label.clone()).collect();
+        let symbols: Vec<String> = ctx.tokens.iter().map(|t| t.symbol.clone()).collect();
+        match self.reading {
+            Reading::Label => self.answer_named(request, &labels, &symbols),
+            Reading::Pieces => {
+                let contacts: Vec<String> = ctx.contacts.iter().map(|c| c.name.clone()).collect();
+                self.answer_pieces(request, &labels, &contacts, &symbols)
+            }
+        }
+    }
+
+    /// Round 11's reading (`Tokenizer::name_pieces`): the request as written, each use of one of `labels` or of
+    /// `contacts` one piece. Spans are the request's own, since nothing is swapped.
+    pub fn answer_pieces(
+        &self,
+        request: &str,
+        labels: &[String],
+        contacts: &[String],
+        symbols: &[String],
+    ) -> Result<Answer, String> {
+        if request.len() > MAX_REQUEST_BYTES {
+            return Err(format!("a request is at most {MAX_REQUEST_BYTES} bytes"));
+        }
+        let text: Vec<char> = request.chars().collect();
+        let names = self.tokenizer.name_pieces(&text, labels, contacts, symbols);
+        Ok(self.answer_encoded(&text, self.tokenizer.encode_named(&text, &names)))
+    }
+
+    fn answer_encoded(&self, text: &[char], encoded: Option<(Vec<u32>, Vec<Piece>)>) -> Answer {
+        let Some((ids, pieces)) = encoded else {
+            return Answer {
                 class: "not_transfer".into(),
                 spans: Vec::new(),
                 confidence: 0.0,
                 abstain: true,
                 positions: None,
-            });
+            };
         };
         let (class_logits, tag_logits) = self.model.forward(&ids, &vec![0; ids.len()]);
-        let mut answer = self.answer_from(text, &pieces, &class_logits, &tag_logits);
-        for (_, span) in answer.spans.iter_mut() {
-            *span = swap.back(*span);
-        }
-        Ok(answer)
+        self.answer_from(text, &pieces, &class_logits, &tag_logits)
     }
 
     /// The request rule's flags: says_not_to, repeats. `labels`: the wallet's own account labels.
