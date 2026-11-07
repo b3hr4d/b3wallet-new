@@ -1,6 +1,7 @@
 # 0018: Passkeys approve on the wallet's own page, and a frontend canister holds the rest
 
-Status: proposed, 2026-11-07. This record first proposed a thin approve
+Status: accepted, 2026-11-07, with every recommendation below taken: "go
+with your recommendations". This record first proposed a thin approve
 page signed in with Internet Identity. The direction was then chosen the
 same day: "a separate frontend canister with a special asset canister for
 each wallet which can also have disaster recovery to the wallet canister
@@ -9,7 +10,7 @@ transaction which will serve directly from the wallet backend canister".
 It builds on [decision 0017](0017-approve-only-ui.md) (pull request #45),
 which made the start page the one page where members approve.
 
-**Proposal: the wallet canister serves one page, where its members
+**Decision: the wallet canister serves one page, where its members
 approve, and nothing else. They sign there with passkeys of the wallet's
 own origin. The IC checks the passkey's own signature on every call, so
 each approval asks the person's authenticator, and there is no session key
@@ -213,40 +214,66 @@ One pull request per step.
 Steps 1 to 4 make the wallet approve-only, by passkey. Steps 5 and 6 move
 everything else out. Step 7 stands on its own.
 
-## What it does not fix
+## What owners still trust
 
-- The browser trusts the HTTP gateway to verify each page, in every
-  design ([decision 0001](0001-react-rendering.md)).
-- The authenticator shows nothing of what it signs. The owner reads the
-  wallet's words on the wallet's page, and a release that lies is what the
-  release signers are for.
-- A synced passkey follows the person's Apple or Google account, and
-  whoever takes that account takes the passkey. Large wallets want a
-  hardware security key, and a quorum of two with timelocks.
-- A hostile UI on the frontend reads what its member reads.
+This design is non-custodial toward every company: no developer, factory,
+frontend or agent can move or freeze the funds. It is not self-custody.
+On the IC the network holds the keys, and no design on the IC removes
+these:
 
-## Decisions this needs
+| Trust or risk | What could happen | What bounds it |
+| --- | --- | --- |
+| The nodes of the wallet's subnet, and of the subnet that holds the threshold keys: `key_1` is on the fiduciary subnet `pzp6e`, 34 nodes, with a backup subnet | A third or more of a subnet's nodes, colluding or broken into, could run the wallet's code wrongly or sign with its keys | The IC tolerates fewer than a third faulty, and node providers are independent. A larger subnet, or a SEV-SNP one, raises the bar |
+| NNS governance | It upgrades every replica and reshares the threshold keys. It recovers a stalled subnet from a state the proposal names, which its voters cannot inspect (a DFINITY R&D proposal on the forum: they "cannot verify that this proposal is done correctly") | Votes in the open. Every IC wallet trusts it: OISY's own security page says its signer and Internet Identity "are governed by the Network Nervous System (NNS)" |
+| The HTTP gateway | It serves the approve page. A gateway serving other code at the wallet's origin could ask the passkey to approve another action than the one it shows: the passkey proves the origin, and the gateway answers for the origin ([decision 0001](0001-react-rendering.md)) | An owner who runs their own gateway, or approves on a signer of their own that shows the wallet's ICRC-21 words. A quorum of two, and timelocks above the daily limit |
+| Apple or Google, for a synced passkey | Whoever takes the person's account takes the passkey | A hardware security key, for large wallets |
+| The release signers, with the owners' approval | Code the owners approved without reading it | Two of three signer keys; the timelock and its banner; builds anyone can reproduce |
+| Cycles | A wallet that runs out is uninstalled, and with it the only code that signs for its accounts (issue #21) | Top-ups. Nothing tops it up on its own yet |
 
-1. A member with several passkeys (recommended), or one passkey per
-   member.
-2. Who runs an approved action: the frontend's or the agent's member
-   (recommended), the approve page as well (more prompts), or the wallet's
-   own timer.
-3. A new Operator role (recommended), or a wider Proposer.
-4. The frontend:
-   - the certified-assets canister (recommended);
-   - the legacy asset canister, whose Prepare and Commit split would let
-     owners approve each upload;
-   - or a canister of our own.
-5. Sign-in on the frontend: Internet Identity (recommended, the easiest),
-   or a passkey of that origin with a session key.
-6. The wallet's rescuer: the separate controller of 0009 (recommended), or
-   the frontend.
-7. The words written by hand in Rust (recommended), or generated from a
-   Meant profile of `wallet.did`. And `meant-format` in the wallet.
-8. "From the transaction" in two prompts (recommended first), or in one.
-   One prompt needs a key in the link's fragment, which lets the page read
-   that one action's words unsigned.
+There is also no key to take elsewhere. The only way off the IC is a
+transfer out while the wallet runs.
+
+## Before it holds real funds
+
+These are gaps in this repository, not in the IC, and each one is fixable:
+
+1. **The default policy bounds one owner** (issue #20). Today every rule
+   has a quorum of 1 and no daily limit, and Transfer and AddMember have no
+   timelock. So one owner's approval can send every balance at once, and
+   add an attacker as an owner at once. Passkeys remove the stolen session,
+   but not a page or a gateway that asks for the wrong approval.
+2. **Join codes of at least 40 bits** (issue #22). Today's 8 digits are
+   about 27 bits, ground in minutes. This must be fixed before a passkey is
+   added by a join code (step 3).
+3. **Strangers' calls refused before they cost cycles** (issue #21), and
+   the wallet topping itself up from its own ICP.
+4. **A claim that checks first.** The claim page reads the IC's certified
+   state, and checks the wallet's module hash against the signed release
+   and its controllers, before it claims. Today nothing checks a new
+   wallet's module hash and controllers before the claim
+   ([design.md](../design.md), "A malicious or compromised factory").
+5. **Owners hear of what waits.** An upgrade in its timelock, or a
+   recovery operation in its delay, reaches the owners outside the wallet's
+   page. Today nothing tells them a recovery operation was proposed.
+6. **An external review** of the policy, the upgrade gate, the recovery
+   controller and the passkey path. None has had one yet.
+
+## Decisions
+
+Taken on 2026-11-07, each as recommended:
+
+1. A member has several passkeys, and an approval counts once per member.
+2. The frontend's or the agent's member runs an approved action. The
+   approve page only approves and rejects.
+3. A new Operator role, not a wider Proposer.
+4. The frontend is the certified-assets canister.
+5. Its users sign in there with Internet Identity.
+6. The recovery controller of 0009 rescues the wallet, not the frontend.
+7. The words are written by hand in Rust, with `meant-format` for
+   amounts. A Meant profile of `wallet.did` can replace them later.
+8. "From the transaction" takes two prompts at first. One prompt would
+   need a key in the link's fragment, which lets the page read that one
+   action's words unsigned.
 
 ## How it was measured
 
@@ -288,3 +315,10 @@ everything else out. Step 7 stands on its own.
   ICRC-21, -25, -27, -29 and -49.
 - [Decision 0009](0009-recovery-controller.md): Orbit's station and
   upgrader, read at `dfinity/orbit@c766e61`.
+- [Asset control, recovery and governance in OISY Wallet](https://docs.oisy.com/security/asset-control-recovery-and-governance-in-oisy-wallet):
+  who governs OISY's signer, Internet Identity and its own canisters.
+- [Chain-key cryptography](https://docs.internetcomputer.org/concepts/chain-key-cryptography/):
+  `key_1` on the 34-node fiduciary subnet `pzp6e`, a backup subnet, and
+  tolerance of up to a third faulty nodes.
+- [Verifiable subnet recovery with private state](https://forum.dfinity.org/t/long-term-r-d-verifiable-subnet-recovery-with-private-state-proposal/9743),
+  a DFINITY R&D proposal on the forum.
